@@ -24,28 +24,28 @@ Contracts first (0.6), then three builders in parallel on disjoint directories, 
 
 | Task | Agent | Status | Files | Notes |
 |---|---|---|---|---|
-| 1.1 Camera source, tracking worker, Pose lite, wrist crops, Hand Landmarker, main-thread fallback | B | doing | `src/tracking/camera/**` | Parallel group A |
-| 1.2 One Euro filter, least-squares velocity, fist classifier, pose kinematics | B | doing | `src/input/filters/**`, `src/input/kinematics/**`, `src/input/hands/**` | Parallel group A |
-| 1.3 Synthetic player (body model, script DSL), replayer, recorder | B | doing | `src/tracking/synthetic/**`, `src/tracking/replay/**` | Parallel group A |
-| 1.4 Renderer factory (WebGPU / WebGL switch), Field Day style kit basics, procedural athlete with two-bone IK | B | doing | `src/render/**` | Parallel group A |
-| 1.5 Debug page: camera feed, skeleton overlay, hand crops, fist state, HUD (inference ms, tracking Hz, render fps, latency), athlete mirroring the upper body, record / replay controls | B | todo | `src/debug/**` | After group A |
-| 1.6 Gate benchmark, first draft | B | todo | `src/core/gate/**` | With 1.5 |
-| 1.7 Playwright harness: fake camera pipeline check, synthetic source check, screenshots | B | todo | `e2e/**` | After 1.5 |
+| 1.1 Camera source, tracking worker, Pose lite, wrist crops, Hand Landmarker, main-thread fallback | B | done | `src/tracking/camera/**` | Parallel group A |
+| 1.2 One Euro filter, least-squares velocity, fist classifier, pose kinematics | B | done | `src/input/filters/**`, `src/input/kinematics/**`, `src/input/hands/**` | Parallel group A |
+| 1.3 Synthetic player (body model, script DSL), replayer, recorder | B | done | `src/tracking/synthetic/**`, `src/tracking/replay/**` | Parallel group A |
+| 1.4 Renderer factory (WebGPU / WebGL switch), Field Day style kit basics, procedural athlete with two-bone IK | B | done | `src/render/**` | Parallel group A |
+| 1.5 Debug page: camera feed, skeleton overlay, hand crops, fist state, HUD (inference ms, tracking Hz, render fps, latency), athlete mirroring the upper body, record / replay controls | B | done | `src/debug/**` | After group A |
+| 1.6 Gate benchmark, first draft | B | doing | `src/core/gate/**` | With 1.5 |
+| 1.7 Playwright harness: fake camera pipeline check, synthetic source check, screenshots | B | done | `e2e/**` | After 1.5 |
 | 1.8 Review of milestone 1 | R | todo | | |
 
 ## Milestone 2: foundation
 
 | Task | Agent | Status | Notes |
 |---|---|---|---|
-| 2.1 Contracts: `src/core/sport.ts`, event types | O | todo | |
-| 2.2 Recognizer library (fist, arm raised, knee-lift cadence, throw, swing, punch, lean, squat, jump) with synthetic-sequence tests | B | todo | |
-| 2.3 `TrackedInput` and `DebugInput` providers, event bus | B | todo | |
+| 2.1 Contracts: `src/core/sport.ts`, event types | O | done | |
+| 2.2 Recognizer library (fist, arm raised, knee-lift cadence, throw, swing, punch, lean, squat, jump) with synthetic-sequence tests | B | doing | |
+| 2.3 `TrackedInput` and `DebugInput` providers, event bus | B | doing | |
 | 2.4 Game loop (fixed 120 Hz step, render interpolation), sport loader, tunables registry and panel | B | todo | |
-| 2.5 Avatar clips (run cycle, follow-through, celebration, climbing sway), mitt curl, blob shadows, style kit completion | B | todo | |
-| 2.6 UI shell: title, sport menu, hand cursor with hold-to-select, HUD kit, mirror view, fonts, audio chimes | B | todo | |
-| 2.7 Onboarding and calibration, out-of-frame pause, camera permission flow, safety reminder | B | todo | |
+| 2.5 Avatar clips (run cycle, follow-through, celebration, climbing sway), mitt curl, blob shadows, style kit completion | B | doing | |
+| 2.6 UI shell: title, sport menu, hand cursor with hold-to-select, HUD kit, mirror view, fonts, audio chimes | B | doing | |
+| 2.7 Onboarding and calibration, out-of-frame pause, camera permission flow, safety reminder | B | doing | |
 | 2.8 Gate screen wired to the benchmark | B | todo | |
-| 2.9 Scores: `ScoreStore` interface, IndexedDB implementation | B | todo | |
+| 2.9 Scores: `ScoreStore` interface, IndexedDB implementation | B | done | |
 | 2.10 Service worker caching | B | todo | |
 | 2.11 Review of milestone 2 | R | todo | |
 
