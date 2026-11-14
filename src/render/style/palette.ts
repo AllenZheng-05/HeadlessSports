@@ -22,4 +22,6 @@ export const ACCENTS = {
   archery: 0xf6d55c,
   javelin: 0xe8785a,
   batting: 0xb8a6e6,
+  /** Pitching: a soft sea teal, distinct from the other five accents and from the sky. */
+  pitching: 0x5fc1b0,
 } as const;

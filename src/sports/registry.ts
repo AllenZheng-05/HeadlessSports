@@ -4,6 +4,7 @@ import { meta as battingMeta } from './batting/meta';
 import { meta as bowlingMeta } from './bowling/meta';
 import { meta as climbingMeta } from './climbing/meta';
 import { meta as javelinMeta } from './javelin/meta';
+import { meta as pitchingMeta } from './pitching/meta';
 import { meta as warmupMeta } from './warmup/meta';
 
 /** Menu order. Real sports are appended here by later tasks: one import of the sport's meta and one line. */
@@ -13,6 +14,7 @@ export const SPORTS: readonly SportEntry[] = [
   { meta: battingMeta, load: () => import('./batting/index') },
   { meta: archeryMeta, load: () => import('./archery/index') },
   { meta: javelinMeta, load: () => import('./javelin/index') },
+  { meta: pitchingMeta, load: () => import('./pitching/index') },
 ];
 
 /** Reachable only with ?sport=<id>; the menu shows it when SPORTS is empty. */

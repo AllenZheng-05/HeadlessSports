@@ -132,7 +132,7 @@ test.describe('game shell', () => {
     const ids = await page
       .locator('.sport-card')
       .evaluateAll((els) => els.map((e) => (e as HTMLElement).dataset.sport ?? ''));
-    expect(ids).toEqual(['climbing', 'bowling', 'batting', 'archery', 'javelin']);
+    expect(ids).toEqual(['climbing', 'bowling', 'batting', 'archery', 'javelin', 'pitching']);
     await page.keyboard.press('Enter'); // the first card holds focus
     await waitPhase(page, 'howto');
     await page.keyboard.press('Enter'); // Start holds focus
