@@ -283,7 +283,7 @@ export const createArchery: SportFactory = (ctx: SportContext): ArcherySport => 
     const dh = s.hands[drawHand];
     const dist = wristDistanceRawException(s.pose, s.aspect, s.shoulderWidth);
     const valid = s.hasPose && s.tracking && dist >= 0;
-    const bowUp = valid && bowArmUp(bowArm.wristX, bowArm.wristY, cfg);
+    const bowUp = valid && bowArmUp(bowArm.wristX, bowArm.wristY, cfg, machine.phase === 'drawing');
     if (bowUp) {
       frozenYaw = targetYaw(bowArm.wristX, bowHand, cfg);
       frozenPitch = targetPitch(bowArm.wristY, cfg);

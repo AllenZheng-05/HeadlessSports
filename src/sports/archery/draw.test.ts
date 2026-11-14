@@ -66,9 +66,9 @@ describe('nock', () => {
     expect(r.m.phase).toBe('ready');
 
     // Fist closes with the hands apart: no nock.
-    r.run(100, { closed: false, bowUp: true, dist: 1.6 });
+    r.run(100, { closed: false, bowUp: true, dist: 2.6 });
     r.m.noteClosed();
-    r.run(200, { closed: true, dist: 1.6 });
+    r.run(200, { closed: true, dist: 2.6 });
     expect(r.m.phase).toBe('ready');
 
     // Hands together, bow up, fist closes: nock.
@@ -80,15 +80,15 @@ describe('nock', () => {
 
   it('accepts a fist that closed just before the hands arrived, but not an old one', () => {
     const r = new Rig();
-    r.run(100, { closed: false, dist: 1.5 });
+    r.run(100, { closed: false, dist: 2.6 });
     r.m.noteClosed();
-    r.run(50, { closed: true, dist: 1.5 });
+    r.run(50, { closed: true, dist: 2.6 });
     expect(r.run(100, { dist: 0.7 })).toBe(StepEvent.Nock);
 
     const r2 = new Rig();
-    r2.run(100, { closed: false, dist: 1.5 });
+    r2.run(100, { closed: false, dist: 2.6 });
     r2.m.noteClosed();
-    r2.run(cfg.nockGraceMs + 300, { closed: true, dist: 1.5 });
+    r2.run(cfg.nockGraceMs + 300, { closed: true, dist: 2.6 });
     r2.run(100, { dist: 0.7 });
     expect(r2.m.phase).toBe('ready');
   });
@@ -105,6 +105,113 @@ describe('nock', () => {
     r.m.noteClosed();
     r.run(300, { known: false, closed: true });
     expect(r.m.phase).toBe('ready');
+  });
+});
+
+describe('forgiving nock (wide distance, hysteresis, no fist)', () => {
+  it('nocks with the hands up to the wider nock distance apart', () => {
+    expect(cfg.nockDistance).toBeGreaterThanOrEqual(1.8);
+    const r = new Rig();
+    r.run(100, { closed: false, dist: cfg.nockDistance - 0.1 });
+    r.m.noteClosed();
+    expect(r.run(50, { closed: true })).toBe(StepEvent.Nock);
+    // Just beyond it does not.
+    const r2 = new Rig();
+    r2.run(100, { closed: false, dist: cfg.nockDistance + 0.1 });
+    r2.m.noteClosed();
+    r2.run(200, { closed: true });
+    expect(r2.m.phase).toBe('ready');
+  });
+
+  it('does not nock with the hands at rest by the sides', () => {
+    const r = new Rig();
+    // Wrists hang about 1 sw apart, well below the bow-arm height: arm not up.
+    r.run(100, { bowUp: false, dist: 1.0, closed: false });
+    r.m.noteClosed();
+    r.run(1500, { bowUp: false, dist: 1.0, closed: true });
+    expect(r.m.phase).toBe('ready');
+    // Arms swinging apart and together at rest never pull-nock either.
+    for (let d = 1.0; d < 2.4; d += 2 * DT) r.run(DT * 1000, { bowUp: false, dist: d });
+    r.run(500, { bowUp: false, dist: 2.4 });
+    expect(r.m.phase).toBe('ready');
+  });
+
+  it('keeps "together" until the keep distance (hysteresis)', () => {
+    const r = new Rig();
+    r.run(100, { closed: false, dist: cfg.nockDistance - 0.1 });
+    // Drift past the nock distance but inside the keep distance, then the fist closes.
+    r.run(100, { closed: false, dist: cfg.nockDistance + 0.2 });
+    r.m.noteClosed();
+    expect(r.run(50, { closed: true })).toBe(StepEvent.Nock);
+    // Beyond the keep distance it is dropped.
+    const r2 = new Rig();
+    r2.run(100, { closed: false, dist: cfg.nockDistance - 0.1 });
+    r2.run(100, { closed: false, dist: cfg.nockKeepDistance + 0.1 });
+    r2.m.noteClosed();
+    r2.run(50, { closed: true });
+    expect(r2.m.phase).toBe('ready');
+  });
+
+  it('nocks with an open hand when the hands are together and the draw hand pulls back', () => {
+    const r = new Rig();
+    r.run(800, { closed: false, dist: 0.6 });
+    expect(r.m.phase).toBe('ready');
+    let ev: StepEventValue = StepEvent.None;
+    for (let d = 0.6; d < 1.8 && ev === StepEvent.None; d += 1.5 * DT) {
+      ev = r.run(DT * 1000, { closed: false, dist: d });
+    }
+    expect(ev).toBe(StepEvent.Nock);
+    expect(r.m.phase).toBe('drawing');
+    expect(r.m.autoNock).toBe(false);
+  });
+
+  it('a slow drift apart, or a raised arm, does not pull-nock', () => {
+    const r = new Rig();
+    r.run(800, { closed: false, dist: 0.6 });
+    for (let d = 0.6; d < 2.2; d += 0.3 * DT) r.run(DT * 1000, { closed: false, dist: d });
+    expect(r.m.phase).toBe('ready');
+    // The bow arm only just came up: not stable yet.
+    const r2 = new Rig();
+    r2.run(100, { bowUp: false, dist: 0.6 });
+    for (let d = 0.6; d < 1.8; d += 4 * DT) r2.run(DT * 1000, { bowUp: true, dist: d });
+    expect(r2.m.phase).toBe('ready');
+  });
+
+  it('shoots an open-hand nock with a quick return, and a draw starts from the nock distance', () => {
+    const r = new Rig();
+    r.run(800, { closed: false, dist: 0.6 });
+    for (let d = 0.6; d < 1.8; d += 1.5 * DT) r.run(DT * 1000, { closed: false, dist: d });
+    r.run(800, { closed: false, dist: 2.4 });
+    expect(r.m.draw).toBeGreaterThan(0.95);
+    let ev: StepEventValue = StepEvent.None;
+    let dist = 2.4;
+    for (let i = 0; i < 60 && ev === StepEvent.None; i++) {
+      dist -= 5 * DT;
+      ev = r.run(DT * 1000, { closed: false, dist });
+    }
+    expect(ev).toBe(StepEvent.Shot);
+  });
+
+  it('a wide nock still reaches a full draw once the hands come together first', () => {
+    const r = new Rig();
+    r.run(100, { closed: false, dist: 1.7 });
+    r.m.noteClosed();
+    r.run(50, { closed: true });
+    expect(r.m.phase).toBe('drawing');
+    r.run(300, { dist: 0.7 });
+    r.run(700, { dist: 0.7 + cfg.drawFull - cfg.drawStart + 0.05 });
+    expect(r.m.draw).toBeGreaterThan(0.95);
+  });
+
+  it('keeps the arrow nocked through a sagging bow arm and a long hand loss', () => {
+    const r = new Rig();
+    r.nock();
+    r.pull();
+    // bowUp is decided by the caller with the looser hold limits; the machine waits bowDropMs.
+    expect(cfg.bowHoldMinReach).toBeLessThan(cfg.bowMinReach);
+    expect(cfg.bowHoldMaxDrop).toBeGreaterThan(cfg.bowMaxDrop);
+    r.run(cfg.lostHandCancelMs - 300, { present: false });
+    expect(r.m.phase).toBe('drawing');
   });
 });
 
@@ -239,8 +346,11 @@ describe('fallback for a fist that is never seen', () => {
 
   it('restarts the wait when the hands come apart or the bow arm drops', () => {
     const r = new Rig();
-    r.run(cfg.fistFallbackMs - 500, blind);
-    r.run(100, { ...blind, dist: 1.5 });
+    r.run(1000, blind);
+    // The hands creep apart (slower than a deliberate pull, so no pull-nock) past the keep distance.
+    for (let d = 0.7; d <= cfg.nockKeepDistance + 0.2; d += 0.4 * DT) {
+      r.run(DT * 1000, { ...blind, dist: d });
+    }
     r.run(cfg.fistFallbackMs - 500, { ...blind, dist: 0.7 });
     expect(r.m.phase).toBe('ready');
     r.run(100, { bowUp: false });

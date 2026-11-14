@@ -87,9 +87,18 @@ export class DrawMachine {
   private autoMs = 0;
   private anchorDraw = 0;
   private anchorMs = 0;
+  /** Distance that is 0% draw for this nock: the closest the hands have been since nocking. */
+  private startDist: number;
+  /** Nocked by pulling apart with no fist seen yet; the fast return can release it. */
+  private pullNock = false;
+  private nearLatched = false;
+  private pullBase = 1e9;
+  private pullNearAt = -1e9;
+  private readyMs = 0;
 
   constructor(cfg: ArcheryConfig) {
     this.cfg = cfg;
+    this.startDist = cfg.drawStart;
   }
 
   /** The draw hand's fist closed (event time `t`, caller's clock). */
@@ -123,13 +132,28 @@ export class DrawMachine {
     this.lostMs = 0;
     this.autoMs = 0;
     this.closedEdgeAt = -1e9;
+    this.pullNock = false;
+    this.startDist = this.cfg.drawStart;
+    this.resetPull();
+  }
+
+  private resetPull(): void {
+    this.pullBase = 1e9;
+    this.pullNearAt = -1e9;
+    this.nearLatched = false;
   }
 
   step(dt: number, now: number, s: DrawSample): StepEventValue {
     const cfg = this.cfg;
     if (s.known) this.fistEverKnown = true;
     if (s.valid) {
-      this.rawDraw = drawFraction(s.dist, cfg);
+      if (this.phase === 'drawing') {
+        // 0% follows the hands coming closer (never below the floor), so a wide nock still draws.
+        if (s.dist < this.startDist) this.startDist = Math.max(cfg.drawStart, s.dist);
+        this.rawDraw = drawFraction(s.dist, cfg, this.startDist);
+      } else {
+        this.rawDraw = drawFraction(s.dist, cfg);
+      }
       this.lastDist = s.dist;
     }
     this.draw = this.filter.update(this.rawDraw, dt, cfg.drawSmoothS);
@@ -162,20 +186,50 @@ export class DrawMachine {
 
   private stepReady(now: number, s: DrawSample, ms: number): StepEventValue {
     const cfg = this.cfg;
-    const near = s.valid && s.bowUp && s.dist < cfg.nockDistance;
-    if (now >= this.furtherUntil) this.hint = s.valid && s.bowUp ? 'nock' : 'raise';
+    const ready = s.valid && s.bowUp;
+    // Hysteresis: enter at nockDistance, stay "together" until nockKeepDistance.
+    if (!ready) this.nearLatched = false;
+    else if (s.dist < cfg.nockDistance) this.nearLatched = true;
+    else if (s.dist >= cfg.nockKeepDistance) this.nearLatched = false;
+    const near = ready && this.nearLatched;
+    this.readyMs = ready ? this.readyMs + ms : 0;
+    if (now >= this.furtherUntil) this.hint = ready ? 'nock' : 'raise';
     else this.hint = 'further';
 
     if (near && s.known && s.closed && s.present && now - this.closedEdgeAt <= cfg.nockGraceMs) {
-      this.beginDraw(false);
+      this.beginDraw(false, s.dist);
+      this.pullNock = false;
       return StepEvent.Nock;
+    }
+
+    // No-fist nock: hands came together, then the draw hand pulls away. Works with an open hand.
+    if (ready && s.present && this.readyMs >= cfg.nockPullBowStableMs) {
+      if (s.dist < cfg.nockPullNear) {
+        if (s.dist < this.pullBase || now - this.pullNearAt > cfg.nockPullWindowMs) {
+          this.pullBase = s.dist;
+        }
+        this.pullNearAt = now;
+      } else if (now - this.pullNearAt > cfg.nockPullWindowMs) {
+        this.pullBase = 1e9;
+      }
+      if (
+        this.pullBase < 1e8 &&
+        s.dist - this.pullBase >= cfg.nockPullDelta &&
+        this.distRate(now) >= cfg.nockPullSpeed
+      ) {
+        this.beginDraw(false, this.pullBase);
+        this.pullNock = !(s.known && s.closed);
+        return StepEvent.Nock;
+      }
+    } else {
+      this.pullBase = 1e9;
     }
 
     // Fallback: a fist the tracker never sees. Hands held together long enough nock.
     if (!this.fistEverKnown && near) {
       this.autoMs += ms;
       if (this.autoMs >= cfg.fistFallbackMs) {
-        this.beginDraw(true);
+        this.beginDraw(true, s.dist);
         return StepEvent.AutoNock;
       }
     } else {
@@ -184,8 +238,12 @@ export class DrawMachine {
     return StepEvent.None;
   }
 
-  private beginDraw(auto: boolean): void {
+  private beginDraw(auto: boolean, nockDist: number): void {
     this.phase = 'drawing';
+    this.pullNock = false;
+    this.resetPull();
+    this.startDist = Math.max(this.cfg.drawStart, nockDist);
+    this.rawDraw = drawFraction(this.lastDist, this.cfg, this.startDist);
     this.autoNock = auto;
     this.holdFullS = 0;
     this.lostMs = 0;
@@ -230,6 +288,16 @@ export class DrawMachine {
 
     if (!this.autoNock) {
       if (openEdge) return this.release(now, openAt - cfg.releaseLookbackMs);
+      // Nocked without a fist: a quick return toward the bow hand from full draw also releases,
+      // until the fist is seen closing.
+      if (
+        this.pullNock &&
+        this.closedEdgeAt < -1e8 &&
+        this.rawDraw >= cfg.fallbackFullDraw &&
+        this.distRate(now) < -cfg.fallbackReleaseSpeed
+      ) {
+        return this.release(now, now - cfg.releaseLookbackMs);
+      }
       return StepEvent.None;
     }
 

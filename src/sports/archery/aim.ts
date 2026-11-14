@@ -17,9 +17,13 @@ export const saturate = (v: number): number => (v < 0 ? 0 : v > 1 ? 1 : v);
 export function bowArmUp(
   wristX: number,
   wristY: number,
-  cfg: Pick<ArcheryConfig, 'bowMinReach' | 'bowMaxDrop'>,
+  cfg: Pick<ArcheryConfig, 'bowMinReach' | 'bowMaxDrop' | 'bowHoldMinReach' | 'bowHoldMaxDrop'>,
+  holding = false,
 ): boolean {
-  return Math.hypot(wristX, wristY) >= cfg.bowMinReach && Math.abs(wristY) <= cfg.bowMaxDrop;
+  // Hysteresis: easy to enter, harder to lose once the arrow is nocked.
+  const minReach = holding ? cfg.bowHoldMinReach : cfg.bowMinReach;
+  const maxDrop = holding ? cfg.bowHoldMaxDrop : cfg.bowMaxDrop;
+  return Math.hypot(wristX, wristY) >= minReach && Math.abs(wristY) <= maxDrop;
 }
 
 /** How far the bow wrist is out from its shoulder, sw, outward positive for either side. */
@@ -115,10 +119,14 @@ export function wristDistanceRawException(
   return Math.hypot(dx, dy) / shoulderWidth;
 }
 
-/** 0..1 draw from the wrist distance. */
+/**
+ * 0..1 draw from the wrist distance. `start` is the distance that counts as 0% (default
+ * `drawStart`); the pull needed for 100% is always `drawFull - drawStart`.
+ */
 export function drawFraction(
   dist: number,
   cfg: Pick<ArcheryConfig, 'drawStart' | 'drawFull'>,
+  start: number = cfg.drawStart,
 ): number {
-  return saturate((dist - cfg.drawStart) / Math.max(1e-6, cfg.drawFull - cfg.drawStart));
+  return saturate((dist - start) / Math.max(1e-6, cfg.drawFull - cfg.drawStart));
 }

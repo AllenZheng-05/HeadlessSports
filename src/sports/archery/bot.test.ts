@@ -156,12 +156,12 @@ for (const drawHand of ['right', 'left'] as const) {
 }
 
 describe('moves.drawBow', () => {
-  it('does not satisfy the nock rule, so the bot builds its own steps', () => {
-    // drawBow starts the hands 0.9 sw apart (the nock distance) with a 1.3 sw bow arm: the nock
-    // never registers, so the archery bot uses nockSteps / pullSteps instead.
+  it('nocks and shoots now that the nock distance is wide', () => {
+    // drawBow starts the hands 0.9 sw apart with a 1.3 sw bow arm. That used to miss the old 0.9 sw
+    // nock distance (so the bot built its own steps); it is inside the wider one.
     const o = play(drawBow('right', { draw: 1, holdMs: 600 }), 'right');
     expect(o.everBowUp).toBe(true);
     expect(o.fistOpened).toBe(true);
-    expect(o.events).toEqual([]);
+    expect(o.events).toEqual([StepEvent.Nock, StepEvent.Shot]);
   });
 });

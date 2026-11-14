@@ -22,8 +22,15 @@ describe('bow arm up', () => {
     expect(bowArmUp(-1.2, 0.1, cfg)).toBe(true);
     expect(bowArmUp(0.2, -1.4, cfg)).toBe(false); // hanging
     expect(bowArmUp(0.3, 0.3, cfg)).toBe(false); // too close to the shoulder
-    expect(bowArmUp(0.5, 0.95, cfg)).toBe(false); // too high
-    expect(bowArmUp(1.2, -0.95, cfg)).toBe(false); // too low
+    expect(bowArmUp(0.5, 1.2, cfg)).toBe(false); // too high
+    expect(bowArmUp(1.2, -1.2, cfg)).toBe(false); // too low
+    // Hysteresis: a sagging, short arm still holds a nocked arrow but does not start one.
+    expect(bowArmUp(0.3, 0.4, cfg)).toBe(false);
+    expect(bowArmUp(0.3, 0.4, cfg, true)).toBe(true);
+    expect(bowArmUp(0.8, -1.25, cfg)).toBe(false);
+    expect(bowArmUp(0.8, -1.25, cfg, true)).toBe(true);
+    // Hands at rest by the sides are never "up".
+    expect(bowArmUp(0.2, -1.5, cfg, true)).toBe(false);
   });
 
   it('uses the thresholds from the config', () => {

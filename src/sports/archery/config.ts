@@ -12,11 +12,14 @@ export const archeryConfig = {
 
   // Bow arm
   /** Bow wrist must be at least this far from its shoulder, sw. */
-  bowMinReach: 0.75,
+  bowMinReach: 0.55,
   /** ... and no further than this above or below shoulder height, sw. */
-  bowMaxDrop: 0.9,
+  bowMaxDrop: 1.15,
+  /** Same two limits once the arrow is nocked (looser, so a sagging arm does not drop it), sw. */
+  bowHoldMinReach: 0.4,
+  bowHoldMaxDrop: 1.35,
   /** Lowering the bow arm this long while drawing puts the arrow back, ms. */
-  bowDropMs: 600,
+  bowDropMs: 900,
 
   // Aim
   /** Bow wrist x relative to its shoulder (outward positive), sw, that aims straight. */
@@ -35,19 +38,33 @@ export const archeryConfig = {
 
   // Nock, draw, release
   /** Max distance between the wrists to nock, sw. */
-  nockDistance: 0.9,
+  nockDistance: 1.9,
+  /** Once the hands have been that close, they stay "together" until this far apart, sw. */
+  nockKeepDistance: 2.3,
   /** A fist that closed this recently still nocks when the hands arrive, ms. */
-  nockGraceMs: 500,
-  /** Wrist distance (sw) that is 0% and 100% draw. */
+  nockGraceMs: 1200,
+  /** No-fist nock: hands that were within this of each other (sw) ... */
+  nockPullNear: 1.4,
+  /** ... and then pull apart by this much (sw) at this speed (sw/s) nock without a fist. */
+  nockPullDelta: 0.45,
+  nockPullSpeed: 0.6,
+  /** ... within this long of being near, ms. */
+  nockPullWindowMs: 1500,
+  /** The bow arm must have been up this long first, so raising it does not count as a pull, ms. */
+  nockPullBowStableMs: 400,
+  /**
+   * Wrist distance (sw) that is 0% draw at the floor, and 100% draw. The pull from 0% to 100% is
+   * `drawFull - drawStart`; 0% itself follows the closest the hands came since the nock.
+   */
   drawStart: 0.5,
-  drawFull: 2.1,
+  drawFull: 1.85,
   drawSmoothS: 0.08,
   /** Below this draw the arrow is put back instead of shot. */
-  minDraw: 0.25,
+  minDraw: 0.2,
   /** The shot uses draw and aim from this long before the open event, ms. */
   releaseLookbackMs: 120,
   /** Hand lost this long while drawing puts the arrow back, ms. */
-  lostHandCancelMs: 2500,
+  lostHandCancelMs: 3500,
   /** How long the "pull back further" hint stays, ms. */
   furtherHintMs: 1500,
 
@@ -109,7 +126,18 @@ export const archeryRanges: Record<string, TunableRange> = {
   aimSmoothS: { min: 0.02, max: 0.5, step: 0.01 },
   maxSwayRad: { min: 0, max: 0.05, step: 0.001 },
   swayRampS: { min: 0.5, max: 12, step: 0.5 },
-  nockDistance: { min: 0.3, max: 2, step: 0.05 },
+  bowHoldMinReach: { min: 0.2, max: 1.4, step: 0.05 },
+  bowHoldMaxDrop: { min: 0.3, max: 1.8, step: 0.05 },
+  bowDropMs: { min: 200, max: 3000, step: 100 },
+  nockDistance: { min: 0.3, max: 3, step: 0.05 },
+  nockKeepDistance: { min: 0.3, max: 3.5, step: 0.05 },
+  nockGraceMs: { min: 100, max: 3000, step: 100 },
+  nockPullNear: { min: 0.3, max: 2.5, step: 0.05 },
+  nockPullDelta: { min: 0.1, max: 1.5, step: 0.05 },
+  nockPullSpeed: { min: 0.1, max: 3, step: 0.1 },
+  nockPullWindowMs: { min: 200, max: 4000, step: 100 },
+  nockPullBowStableMs: { min: 0, max: 2000, step: 50 },
+  lostHandCancelMs: { min: 500, max: 8000, step: 250 },
   drawStart: { min: 0.2, max: 1.5, step: 0.05 },
   drawFull: { min: 1, max: 3.2, step: 0.05 },
   minDraw: { min: 0.05, max: 0.8, step: 0.05 },
