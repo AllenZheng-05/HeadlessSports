@@ -28,9 +28,14 @@ const meta: SportMeta = {
 
 const RESULT: RoundResult = { score: 3, headline: '3' };
 
-function fakeUi(): Ui {
+function fakeUi(): Ui & { howTo: (open: boolean) => void } {
   const noop = vi.fn();
+  let howTo: (open: boolean) => void = () => undefined;
   return {
+    howTo: (open: boolean) => howTo(open),
+    onHowToPlay: (handler: (open: boolean) => void) => {
+      howTo = handler;
+    },
     hud: { setBanner: vi.fn(), clear: vi.fn() },
     audio: { play: noop, setMuted: noop },
     tunables: { register: () => noop },
@@ -42,7 +47,7 @@ function fakeUi(): Ui {
     onQuit: noop,
     onCameraOff: noop,
     setCameraActive: noop,
-  } as unknown as Ui;
+  } as unknown as Ui & { howTo: (open: boolean) => void };
 }
 
 function fakeRenderer(): RendererHandle {
@@ -422,5 +427,57 @@ describe('SportHost', () => {
     host.begin(0, 0);
     host.begin(5000, 0);
     expect(host.phase).toBe('playing');
+  });
+
+  it('pauses while the how-to overlay is open and resumes when it closes', async () => {
+    const { host, ui, loop, entry, getCtx } = setup();
+    void host.play(entry, null);
+    await started(host);
+    ui.howTo(true);
+    expect(host.phase).toBe('paused');
+    expect(loop.paused).toBe(true);
+    expect(getCtx().paused).toBe(true);
+    host.begin(1000, 0);
+    host.begin(5000, 0);
+    expect(host.phase).toBe('paused');
+    ui.howTo(false);
+    expect(host.phase).toBe('playing');
+    expect(loop.paused).toBe(false);
+    expect(getCtx().paused).toBe(false);
+  });
+
+  it('keeps a camera pause going when the overlay closes during a camera problem', async () => {
+    const source = { kind: 'camera' } as unknown as LandmarkSource;
+    const { host, ui, input, entry } = setup({ source });
+    void host.play(entry, null);
+    await started(host);
+    input.state.problem = 'lost';
+    host.begin(1000, 0);
+    host.begin(1000 + PAUSE_AFTER_MS + 1, 0);
+    expect(host.phase).toBe('paused');
+    ui.howTo(true);
+    input.state.problem = 'none';
+    host.begin(3000, 0);
+    host.begin(3000 + RESUME_AFTER_MS, 0);
+    expect(host.phase).toBe('paused');
+    ui.howTo(false);
+    host.begin(4000, 0);
+    host.begin(4000 + RESUME_AFTER_MS, 0);
+    expect(host.phase).toBe('playing');
+  });
+
+  it('ignores the overlay when no round is playing and clears it on quit', async () => {
+    const { host, ui, loop, entry } = setup();
+    ui.howTo(true);
+    expect(host.phase).toBe('idle');
+    expect(loop.paused).toBe(false);
+    void host.play(entry, null);
+    await started(host);
+    ui.howTo(true);
+    host.quit();
+    expect(host.phase).toBe('idle');
+    expect(loop.paused).toBe(false);
+    ui.howTo(false);
+    expect(host.phase).toBe('idle');
   });
 });

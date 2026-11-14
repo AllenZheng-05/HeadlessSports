@@ -1,18 +1,79 @@
 import type { RoundResult, SportMeta } from '../../core/sport';
 import type { FrameProblem } from '../../input/types';
 import { h, selectButton, svgEl } from '../dom';
-import { formatScore } from '../format';
+import { formatScore, hexColor } from '../format';
 import type { ResultsOutcome } from '../types';
 import type { ScreenSpec } from './shared';
 import { screenShell } from './shared';
+import { howToBody } from './menu';
 
-/** The little "Quit" control shown while playing. */
-export function buildPlaying(onQuit: () => void): ScreenSpec {
+export interface PlayingControls {
+  onQuit: () => void;
+  /** The "How to play" control was used (click, button, or the H key). */
+  onHowTo: () => void;
+  /** True while the how-to overlay is open: Escape then closes it instead of quitting. */
+  isOverlayOpen: () => boolean;
+  closeOverlay: () => void;
+}
+
+/** The little "How to play" and "Quit" controls shown while playing. */
+export function buildPlaying(controls: PlayingControls): ScreenSpec {
   const el = h('div', 'screen screen-playing');
+  const bar = h('div', 'play-controls');
+  const howTo = selectButton('How to play (H)', 'btn btn-small btn-secondary howto-open');
+  howTo.addEventListener('click', controls.onHowTo);
   const quit = selectButton('Quit', 'btn btn-small btn-secondary quit');
-  quit.addEventListener('click', onQuit);
-  el.append(quit);
-  return { el, camera: true, noCursor: true, onEscape: onQuit };
+  quit.addEventListener('click', controls.onQuit);
+  bar.append(howTo, quit);
+  el.append(bar);
+  return {
+    el,
+    camera: true,
+    // The hand cursor only reaches the How to play control, and only shows near it.
+    cursorButtons: [howTo],
+    revealNear: true,
+    onEscape: () => {
+      if (controls.isOverlayOpen()) controls.closeOverlay();
+      else controls.onQuit();
+    },
+    onKey: (e) => {
+      if (e.key !== 'h' && e.key !== 'H') return false;
+      if (e.repeat || e.ctrlKey || e.metaKey || e.altKey) return false;
+      if (controls.isOverlayOpen()) controls.closeOverlay();
+      else controls.onHowTo();
+      return true;
+    },
+  };
+}
+
+export interface HowToOverlay {
+  readonly el: HTMLElement;
+  readonly resume: HTMLElement;
+}
+
+/** The sport's how-to content over the paused round, with a Resume button. */
+export function buildHowToOverlay(
+  meta: SportMeta,
+  debugInput: boolean,
+  onResume: () => void,
+): HowToOverlay {
+  const el = h('div', 'howto-overlay');
+  el.setAttribute('role', 'dialog');
+  el.setAttribute('aria-label', `How to play ${meta.title}`);
+  const card = h('div', 'card card-howto card-howto-play');
+  card.style.setProperty('--accent', hexColor(meta.accent));
+  const head = h('div', 'howto-head');
+  const swatch = h('span', 'howto-swatch');
+  swatch.setAttribute('aria-hidden', 'true');
+  head.append(swatch, h('h1', 'heading', meta.title));
+  const body = howToBody(meta, debugInput);
+  const actions = h('div', 'actions');
+  const resume = selectButton('Resume', 'btn btn-big');
+  resume.addEventListener('click', onResume);
+  actions.append(resume);
+  card.append(head, body, actions);
+  el.append(card);
+  return { el, resume };
 }
 
 const PAUSE_TEXT: Record<Exclude<FrameProblem, 'none'>, string> = {

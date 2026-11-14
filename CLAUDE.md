@@ -19,12 +19,12 @@ pnpm test:e2e         # Playwright, fake camera, against `pnpm preview` (run pnp
 
 `pnpm typecheck`, `pnpm lint` and `pnpm test` must pass before any commit. A milestone is done only when those plus `pnpm build` and `pnpm test:e2e` pass. Never weaken or delete a test to get there.
 
-Query flags: `?input=debug` (keyboard and mouse instead of camera), `?source=synthetic&script=<name>` / `?source=replay&clip=<name>` (landmark source), `?renderer=webgl`, `?pose=full`, `?skipGate=1`, `?timeScale=<n>` (synthetic and replay only), `?debug=1` (tunables panel), `?hand=left|right` (default throwing hand for keyboard and mouse play).
+Query flags: `?input=debug` (keyboard and mouse instead of camera), `?source=synthetic&script=<name>` / `?source=replay&clip=<name>` (landmark source), `?renderer=webgl`, `?pose=full`, `?skipGate=1`, `?timeScale=<n>` (synthetic and replay only), `?debug=1` (tunables panel), `?hand=left|right` (default dominant hand for keyboard and mouse play).
 
 ## Hard constraints
 
 - Browser only, static site, no game server. Camera video never leaves the device. No runtime CDN: WASM, models and fonts are self-hosted.
-- Desktop and laptop only. No mobile layouts, touch controls or low-power fallbacks. One fixed quality configuration; weak devices get the gate screen, not degraded quality.
+- Desktop and laptop only. No mobile layouts, touch controls or low-power fallbacks. One fixed quality configuration; weak devices get a warning and may continue, not degraded quality.
 - Adding a sport means adding a module under `src/sports/<name>/` that reuses shared tracking, recognizers, avatar and UI. Sports never read raw landmarks for gesture logic; they consume `InputProvider` state and events.
 - Stack is fixed (see `docs/ARCHITECTURE.md`): TypeScript strict, Vite, pnpm, Vitest, three.js from `three/webgpu`, `@mediapipe/tasks-vision`, Rapier for bowling pins only, plain DOM UI. All versions pinned exactly.
 

@@ -2,7 +2,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createUi } from './createUi';
 import { NOTICE_MS } from './screens/menu';
-import { FAKE_BESTS, FAKE_GATE_REPORT, FAKE_RESULT, FAKE_SPORTS } from './harness/fakeData';
+import {
+  FAKE_BESTS,
+  FAKE_BLOCKED_REPORT,
+  FAKE_GATE_REPORT,
+  FAKE_RESULT,
+  FAKE_SPORTS,
+} from './harness/fakeData';
 import { createFakeInput } from './harness/fakeInput';
 import { detectBrowser } from './format';
 import type { Ui } from './types';
@@ -87,7 +93,8 @@ describe('screens resolve on click', () => {
     const p = ui.showHowTo(bowling, true);
     const text = root.textContent ?? '';
     expect(text).toContain('Clear a 2 by 2 metre space around you.');
-    expect(text).toContain('Raise a fist to start');
+    // keyboard and mouse players have no fist to raise
+    expect(text).not.toContain('Raise a fist to start');
     expect(text).toContain(bowling.debugKeys[0]);
     expect(root.querySelectorAll('.steps li').length).toBe(bowling.howTo.length);
     click('.screen-howto .btn-big');
@@ -163,6 +170,66 @@ describe('screens resolve from the keyboard', () => {
   });
 });
 
+describe('how to play while playing', () => {
+  it('opens on click and on H, pauses through the handler, and closes on Resume, H and Escape', () => {
+    const quit = vi.fn();
+    const paused = vi.fn();
+    ui.onQuit(quit);
+    ui.onHowToPlay(paused);
+    ui.showPlaying(bowling);
+    expect(root.querySelector('.howto-overlay')).toBeNull();
+
+    click('.howto-open');
+    expect(root.querySelector('.howto-overlay')).not.toBeNull();
+    expect(root.querySelector('.howto-overlay')?.textContent).toContain(bowling.howTo[0]);
+    expect(paused).toHaveBeenLastCalledWith(true);
+    click('.howto-overlay .btn-big');
+    expect(root.querySelector('.howto-overlay')).toBeNull();
+    expect(paused).toHaveBeenLastCalledWith(false);
+
+    key('h');
+    expect(root.querySelector('.howto-overlay')).not.toBeNull();
+    key('Escape');
+    expect(root.querySelector('.howto-overlay')).toBeNull();
+    expect(quit).not.toHaveBeenCalled();
+    key('H');
+    key('h');
+    expect(root.querySelector('.howto-overlay')).toBeNull();
+    expect(paused).toHaveBeenCalledTimes(6);
+
+    key('Escape');
+    expect(quit).toHaveBeenCalledTimes(1);
+  });
+
+  it('the overlay goes away, and resumes the round, when the screen changes', () => {
+    const paused = vi.fn();
+    ui.onHowToPlay(paused);
+    ui.showPlaying(bowling);
+    click('.howto-open');
+    void ui.showResults(bowling, FAKE_RESULT, { isBest: false, best: 1 });
+    expect(root.querySelector('.howto-overlay')).toBeNull();
+    expect(paused).toHaveBeenLastCalledWith(false);
+  });
+
+  it('shows the keyboard and mouse keys only for debug input', () => {
+    ui.showPlaying(bowling);
+    click('.howto-open');
+    expect(root.querySelector('.howto-overlay .debug-keys')).toBeNull();
+    key('Escape');
+    ui.setInput(createFakeInput('pose', 'debug'));
+    click('.howto-open');
+    expect(root.querySelector('.howto-overlay .debug-keys')).not.toBeNull();
+  });
+
+  it('the how-to card says nothing about raising a fist for keyboard and mouse players', () => {
+    ui.setInput(createFakeInput('pose', 'debug'));
+    void ui.showHowTo(bowling, true);
+    expect(root.querySelector('.fist-hint')).toBeNull();
+    void ui.showHowTo(bowling, false);
+    expect(root.querySelector('.fist-hint')).not.toBeNull();
+  });
+});
+
 describe('screen management', () => {
   it('showing a screen removes the previous one', () => {
     void ui.showTitle();
@@ -195,15 +262,36 @@ describe('screen management', () => {
     expect((root.querySelector('.progress-fill') as HTMLElement).style.width).toBe('90%');
   });
 
-  it('gate fail shows plain reasons and a details toggle', () => {
-    ui.showGateFail(FAKE_GATE_REPORT);
+  it('gate fail is terminal and says what is missing', () => {
+    ui.showGateFail(FAKE_BLOCKED_REPORT);
+    expect(root.textContent).toContain('This browser cannot run the game');
+    expect(root.textContent).toContain('WebGL 2');
+    expect(root.querySelector('.screen-gatefail .btn-big')).toBeNull();
     const details = root.querySelector<HTMLElement>('.details');
     expect(details?.hidden).toBe(true);
-    expect(root.textContent).toContain('This game needs a more powerful computer');
-    expect(root.textContent).toContain('too slow to follow your movements');
     click('.screen-gatefail .btn');
     expect(details?.hidden).toBe(false);
+  });
+
+  it('gate warning explains, hides the numbers, and resolves on Play anyway', async () => {
+    const p = ui.showGateWarning(FAKE_GATE_REPORT);
+    const details = root.querySelector<HTMLElement>('.details');
+    expect(details?.hidden).toBe(true);
+    expect(root.textContent).toContain('This device may struggle');
+    expect(root.textContent).toContain('You are welcome to try');
+    expect(root.textContent).toContain('too slow to follow your movements');
+    click('.screen-gatewarn .btn:not(.btn-big)');
+    expect(details?.hidden).toBe(false);
     expect(details?.textContent).toContain('14.2');
+    click('.screen-gatewarn .btn-big');
+    await expect(p).resolves.toBeUndefined();
+  });
+
+  it('Enter with nothing focused plays anyway', async () => {
+    const p = ui.showGateWarning(FAKE_GATE_REPORT);
+    (document.activeElement as HTMLElement | null)?.blur();
+    key('Enter');
+    await expect(p).resolves.toBeUndefined();
   });
 
   it('playing hides screens and shows the hud; pause shows and hides', () => {
@@ -259,6 +347,53 @@ describe('screen management', () => {
     expect(root.querySelector('.screen-calibration')).toBeNull();
   });
 });
+
+describe('calibration outline matches the pose being asked for', () => {
+  const base = {
+    message: 'm',
+    hint: null,
+    progress: 0,
+    ok: false,
+    problem: 'none' as const,
+    handedness: null,
+  };
+  const arms = (): string[] =>
+    Array.from(root.querySelectorAll<SVGElement>('.guide-arm')).map((a) => a.style.transform);
+
+  it('shows the pose for each step: relaxed, raised hand, T-pose', () => {
+    const cal = ui.showCalibration(bowlingFull());
+    cal.set({ ...base, step: 'position' });
+    expect(arms()).toEqual(['rotate(14deg)', 'rotate(-14deg)']);
+    cal.set({ ...base, step: 'lighting' });
+    expect(arms()).toEqual(['rotate(14deg)', 'rotate(-14deg)']);
+    cal.set({ ...base, step: 'handedness' });
+    expect(arms()).toEqual(['rotate(14deg)', 'rotate(-165deg)']);
+    cal.set({ ...base, step: 'handedness', handedness: 'left' });
+    expect(arms()).toEqual(['rotate(165deg)', 'rotate(-14deg)']);
+    cal.set({ ...base, step: 'hold-still', handedness: 'left' });
+    expect(arms()).toEqual(['rotate(90deg)', 'rotate(-90deg)']);
+    cal.close();
+  });
+
+  it('keeps the pose when the seated toggle swaps the outline', () => {
+    const cal = ui.showCalibration({ ...bowlingFull(), seatedOk: true });
+    cal.set({ ...base, step: 'hold-still' });
+    click('.cal-seat');
+    expect(arms()).toEqual(['rotate(90deg)', 'rotate(-90deg)']);
+    cal.close();
+  });
+
+  it('hands-only stances draw no arms', () => {
+    const cal = ui.showCalibration(FAKE_SPORTS[0]!);
+    cal.set({ ...base, step: 'hold-still' });
+    expect(arms()).toEqual([]);
+    cal.close();
+  });
+});
+
+function bowlingFull() {
+  return { ...FAKE_SPORTS[1]!, stance: 'full-body' as const };
+}
 
 function indicatorVisible(): boolean {
   return root.querySelector<HTMLElement>('.camera-indicator')?.hidden === false;
@@ -379,7 +514,7 @@ describe('loading screen Back', () => {
   });
 });
 
-describe('throwing hand toggle', () => {
+describe('dominant hand toggle', () => {
   it('shows only when options are given, and reports the choice', () => {
     void ui.showHowTo(bowling, true);
     expect(root.querySelector('.hand-toggle')).toBeNull();
@@ -388,7 +523,7 @@ describe('throwing hand toggle', () => {
       handedness: 'right',
       onHandedness: (side) => chosen.push(side),
     });
-    expect(root.querySelector('.hand-title')?.textContent).toBe('Throwing hand');
+    expect(root.querySelector('.hand-title')?.textContent).toBe('Dominant hand');
     const right = root.querySelector<HTMLElement>('.hand-opt[data-hand="right"]')!;
     const left = root.querySelector<HTMLElement>('.hand-opt[data-hand="left"]')!;
     expect(right.getAttribute('aria-pressed')).toBe('true');
@@ -473,7 +608,16 @@ describe('hand cursor and the input source', () => {
     expect(cursorHidden('synthetic')).toBe(true);
     expect(cursorHidden('replay')).toBe(true);
     expect(cursorHidden('camera')).toBe(false);
-    expect(cursorHidden(null)).toBe(false);
+  });
+
+  it('follows the real pointer for keyboard and mouse input, with no input state involved', () => {
+    expect(cursorHidden(null)).toBe(true); // nothing until the pointer has moved
+    window.dispatchEvent(new MouseEvent('pointermove', { clientX: 321, clientY: 123 }));
+    ui.update(0.016, 32);
+    const el = root.querySelector('.hand-cursor') as HTMLElement;
+    expect(el.hidden).toBe(false);
+    expect(el.style.left).toBe('321px');
+    expect(el.style.top).toBe('123px');
   });
 });
 

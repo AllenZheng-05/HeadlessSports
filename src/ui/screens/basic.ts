@@ -1,3 +1,4 @@
+import { BLOCKING_FAILURES } from '../../core/gate/evaluate';
 import type { GateFailure, GateReport } from '../../core/gate/types';
 import type { TrackingErrorCode } from '../../tracking/types';
 import { h, selectButton } from '../dom';
@@ -56,32 +57,53 @@ export function buildLoading(
 const FAILURE_TEXT: Record<GateFailure, string> = {
   mobile: 'Headless Sports is made for laptops and desktop computers, not phones or tablets.',
   'small-viewport': 'This window is too small. Make the browser window bigger, or go full screen.',
-  'no-webgl2': 'This browser cannot draw the 3D graphics the game needs.',
+  'no-webgl2': 'This browser cannot draw the 3D graphics (WebGL 2) the game needs.',
   'no-camera-api':
-    'This browser cannot use a camera. Try a recent Chrome, Edge, Firefox or Safari.',
-  'no-workers': 'This browser cannot run the background tracking the game needs.',
+    'This browser cannot use a camera. You can still play with the keyboard and mouse.',
+  'no-workers': 'This browser cannot run background workers, which the game needs.',
   'slow-tracking': 'This computer is too slow to follow your movements smoothly.',
   'slow-rendering': 'This computer is too slow to draw the game smoothly while the camera is on.',
   'benchmark-error': 'We could not finish checking how fast this computer is.',
 };
 
-export function gateMessages(report: GateReport): string[] {
+export function gateMessages(report: GateReport, blockedOnly = false): string[] {
   const out: string[] = [];
   for (const f of report.failures) {
+    if (blockedOnly && !BLOCKING_FAILURES.includes(f)) continue;
     const t = FAILURE_TEXT[f];
     if (t && !out.includes(t)) out.push(t);
     if (out.length === 2) break;
   }
-  if (out.length === 0) out.push('We could not check this computer, so we cannot start the game.');
+  if (out.length === 0 && blockedOnly) out.push('We could not start the game in this browser.');
   return out;
 }
 
+/** Terminal: only reached when the browser lacks something the game cannot start without. */
 export function buildGateFail(report: GateReport): ScreenSpec {
   const { el, card } = screenShell('gatefail', 'card-gate');
-  const head = h('h1', 'heading', 'This game needs a more powerful computer');
-  card.append(head);
-  for (const m of gateMessages(report)) card.append(h('p', 'body', m));
+  card.append(h('h1', 'heading', 'This browser cannot run the game'));
+  for (const m of gateMessages(report, true)) card.append(h('p', 'body', m));
+  return gateCard(el, card, report);
+}
 
+/** A warning the player can dismiss: the game may struggle here, but they are welcome to try. */
+export function buildGateWarning(report: GateReport, resolve: () => void): ScreenSpec {
+  const { el, card } = screenShell('gatewarn', 'card-gate');
+  card.append(h('h1', 'heading', 'This device may struggle'));
+  card.append(h('p', 'body', 'The game may not run smoothly here. You are welcome to try.'));
+  for (const m of gateMessages(report, false)) card.append(h('p', 'body body-soft', m));
+  const play = selectButton('Play anyway', 'btn btn-big');
+  play.addEventListener('click', () => resolve());
+  card.append(play);
+  return gateCard(el, card, report, play);
+}
+
+function gateCard(
+  el: HTMLElement,
+  card: HTMLElement,
+  report: GateReport,
+  primary?: HTMLElement,
+): ScreenSpec {
   const toggle = selectButton('Details', 'btn btn-secondary');
   toggle.setAttribute('aria-expanded', 'false');
   const details = h('div', 'details');
@@ -130,7 +152,7 @@ export function buildGateFail(report: GateReport): ScreenSpec {
     toggle.textContent = open ? 'Hide details' : 'Details';
   });
   card.append(toggle, details);
-  return { el, primary: toggle };
+  return { el, primary: primary ?? toggle };
 }
 
 export function buildTitle(resolve: () => void): ScreenSpec {

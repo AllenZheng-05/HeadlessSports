@@ -18,12 +18,14 @@ import {
   buildCameraError,
   buildCameraIntro,
   buildGateFail,
+  buildGateWarning,
   buildLoading,
   buildTitle,
 } from './screens/basic';
 import { buildCalibration } from './screens/calibration';
 import { buildHowTo, buildMenu } from './screens/menu';
-import { buildPlaying, buildResults, createPause } from './screens/playing';
+import { buildHowToOverlay, buildPlaying, buildResults, createPause } from './screens/playing';
+import type { HowToOverlay } from './screens/playing';
 import type { ScreenHost, ScreenSpec } from './screens/shared';
 import { createTunables } from './tunablesPanel';
 import type { CalibrationScreen, HowToOptions, ResultsOutcome, Ui } from './types';
@@ -58,6 +60,9 @@ export function createUi(root: HTMLElement, options: UiOptions = {}): Ui {
   container.append(mirror.el);
   let offHandler: (() => void) | null = null;
   let quitHandler: (() => void) | null = null;
+  let howToPlayHandler: ((open: boolean) => void) | null = null;
+  let overlay: HowToOverlay | null = null;
+  let playButtons: HTMLElement[] = [];
   const camera = new CameraIndicator(() => offHandler?.());
   container.append(camera.el);
   const pause = createPause(container);
@@ -88,7 +93,31 @@ export function createUi(root: HTMLElement, options: UiOptions = {}): Ui {
     },
   };
 
+  function closeOverlay(): void {
+    const o = overlay;
+    if (!o) return;
+    overlay = null;
+    o.el.remove();
+    cursor.setRevealNear(current?.revealNear === true);
+    cursor.setButtons(playButtons);
+    current?.cursorButtons?.[0]?.focus({ preventScroll: true });
+    howToPlayHandler?.(false);
+  }
+
+  function openOverlay(meta: SportMeta): void {
+    if (overlay) return;
+    const o = buildHowToOverlay(meta, input?.source === null, closeOverlay);
+    overlay = o;
+    container.append(o.el);
+    playButtons = current?.cursorButtons ?? [];
+    cursor.setRevealNear(false);
+    cursor.setButtons([o.resume]);
+    o.resume.focus({ preventScroll: true });
+    howToPlayHandler?.(true);
+  }
+
   function unmount(): void {
+    closeOverlay();
     if (refreshTimer !== null) {
       clearTimeout(refreshTimer);
       refreshTimer = null;
@@ -133,7 +162,8 @@ export function createUi(root: HTMLElement, options: UiOptions = {}): Ui {
     // to switch the camera off by dwelling on it.
     buttons = Array.from(spec.el.querySelectorAll<HTMLElement>('[data-select]'));
     syncCamera();
-    cursor.setButtons(spec.noCursor ? [] : buttons);
+    cursor.setRevealNear(spec.revealNear === true);
+    cursor.setButtons(spec.noCursor ? [] : (spec.cursorButtons ?? buttons));
     refreshTimer = setTimeout(() => cursor.refresh(), REFRESH_AFTER_ENTRANCE_MS);
     const focus = spec.primary ?? buttons[0];
     focus?.focus({ preventScroll: true });
@@ -164,6 +194,16 @@ export function createUi(root: HTMLElement, options: UiOptions = {}): Ui {
     if (!current) return;
     const t = e.target as HTMLElement | null;
     if (t && (/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || t.closest?.('.tunables'))) return;
+    if (current.onKey?.(e) === true) {
+      e.preventDefault();
+      return;
+    }
+    if (overlay && (e.key === 'ArrowRight' || e.key === 'ArrowLeft' || e.key === 'Enter')) {
+      e.preventDefault();
+      overlay.resume.focus({ preventScroll: true });
+      if (e.key === 'Enter') overlay.resume.click();
+      return;
+    }
     if (e.key === 'Escape') {
       if (current.onEscape) {
         e.preventDefault();
@@ -198,6 +238,10 @@ export function createUi(root: HTMLElement, options: UiOptions = {}): Ui {
 
     update(dt: number, nowMs: number): void {
       // Bots and recordings do not navigate menus; mouse and keyboard still work.
+      // Keyboard and mouse: the cursor is the real pointer, not a mapped hand.
+      const pointer = input !== null && input.source === null;
+      cursor.setPointerMode(pointer);
+      hud.setPointerMode(pointer);
       const kind = input?.source?.kind;
       const botLike = kind === 'synthetic' || kind === 'replay';
       cursor.update(
@@ -228,6 +272,10 @@ export function createUi(root: HTMLElement, options: UiOptions = {}): Ui {
 
     showGateFail(report: GateReport): void {
       mount(buildGateFail(report));
+    },
+
+    showGateWarning(report: GateReport): Promise<void> {
+      return prompt<void>((resolve) => buildGateWarning(report, resolve));
     },
 
     showTitle(): Promise<void> {
@@ -271,8 +319,13 @@ export function createUi(root: HTMLElement, options: UiOptions = {}): Ui {
       return build.screen;
     },
 
-    showPlaying(_meta: SportMeta): void {
-      const spec = buildPlaying(() => quitHandler?.());
+    showPlaying(meta: SportMeta): void {
+      const spec = buildPlaying({
+        onQuit: () => quitHandler?.(),
+        onHowTo: () => openOverlay(meta),
+        isOverlayOpen: () => overlay !== null,
+        closeOverlay,
+      });
       spec.onMount = () => {
         hud.setVisible(true);
         mirror.setMode('corner');
@@ -298,6 +351,10 @@ export function createUi(root: HTMLElement, options: UiOptions = {}): Ui {
 
     onQuit(handler: () => void): void {
       quitHandler = handler;
+    },
+
+    onHowToPlay(handler: (open: boolean) => void): void {
+      howToPlayHandler = handler;
     },
 
     setCameraActive(active: boolean): void {

@@ -98,6 +98,37 @@ describe('hud setters', () => {
     expect(hud.el.querySelector('.hud-cursor')).toBeNull();
   });
 
+  it('in pointer mode cursors sit exactly on the real pointer, whatever the sport passes', () => {
+    hud.setPointerMode(true);
+    hud.setCursor('a', 0.25, 0.5, false);
+    const c = hud.el.querySelector<HTMLElement>('.hud-cursor');
+    expect(c?.hidden).toBe(true); // nothing until the pointer has moved
+    window.dispatchEvent(new MouseEvent('pointermove', { clientX: 412, clientY: 233 }));
+    hud.setCursor('a', 0.25, 0.5, true);
+    expect(c?.hidden).toBe(false);
+    expect(c?.style.left).toBe('412px');
+    expect(c?.style.top).toBe('233px');
+    expect(c?.classList.contains('closed')).toBe(true);
+    window.dispatchEvent(new MouseEvent('pointermove', { clientX: 5, clientY: 700 }));
+    hud.setCursor('a', 0.9, 0.9, false);
+    expect(c?.style.left).toBe('5px');
+    expect(c?.style.top).toBe('700px');
+    hud.setCursor('a', null, 0);
+    expect(hud.el.querySelector('.hud-cursor')).toBeNull();
+  });
+
+  it('leaving pointer mode goes back to the sport position', () => {
+    hud.setCursor('a', 0.25, 0.5, false);
+    hud.setPointerMode(true);
+    window.dispatchEvent(new MouseEvent('pointermove', { clientX: 10, clientY: 10 }));
+    hud.setCursor('a', 0.25, 0.5, false);
+    hud.setPointerMode(false);
+    hud.setCursor('a', 0.25, 0.5, false);
+    const c = hud.el.querySelector<HTMLElement>('.hud-cursor');
+    expect(c?.style.left).toBe('25%');
+    expect(c?.style.top).toBe('50%');
+  });
+
   it('flash sets its kind', () => {
     hud.flash('great');
     expect(hud.el.querySelector<HTMLElement>('.hud-flash')?.dataset.kind).toBe('great');

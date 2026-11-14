@@ -15,6 +15,8 @@ export const SWITCH_HOLD_MS = 300;
 export const SCREEN_GUARD_MS = 1200;
 /** Extra hit area around each button, px. */
 export const FORGIVENESS_PX = 12;
+/** In reveal-near mode the mitt only shows when the hand is this close to a button, px. */
+export const REVEAL_PX = 140;
 const SMOOTH_TIME_S = 0.08;
 const VISIBILITY_MIN = 0.5;
 
@@ -222,6 +224,24 @@ export class HandCursor {
   private readonly target: Point2 = { x: 0.5, y: 0.5 };
   private readonly smooth = new SmoothPoint();
   private readonly resize = (): void => this.refresh();
+  /** Keyboard and mouse input: the mitt sits exactly on the pointer and nothing is held to select. */
+  private pointerMode = false;
+  private hasPointer = false;
+  private pointerX = 0;
+  private pointerY = 0;
+  private pointerDown = false;
+  private lastPx = -1;
+  private lastPy = -1;
+  /** Only show the mitt while the hand is near a button (play screen). */
+  private revealNear = false;
+  /** The smoothed position has been seeded since the hand last went away. */
+  private tracking = false;
+  private readonly onPointerMove = (e: PointerEvent): void => {
+    this.pointerX = e.clientX;
+    this.pointerY = e.clientY;
+    this.pointerDown = e.buttons !== 0;
+    this.hasPointer = true;
+  };
 
   constructor(parent: HTMLElement) {
     this.el = h('div', 'hand-cursor');
@@ -281,6 +301,40 @@ export class HandCursor {
     }
   }
 
+  /**
+   * Keyboard and mouse input: follow the real pointer (clientX/clientY) with no smoothing, mapping
+   * or hold-to-select. Clicks do the pressing.
+   */
+  setPointerMode(on: boolean): void {
+    if (on === this.pointerMode) return;
+    this.pointerMode = on;
+    if (on) {
+      window.addEventListener('pointermove', this.onPointerMove, true);
+      window.addEventListener('pointerdown', this.onPointerMove, true);
+      window.addEventListener('pointerup', this.onPointerMove, true);
+    } else {
+      window.removeEventListener('pointermove', this.onPointerMove, true);
+      window.removeEventListener('pointerdown', this.onPointerMove, true);
+      window.removeEventListener('pointerup', this.onPointerMove, true);
+    }
+    this.hasPointer = false;
+    this.hide();
+  }
+
+  /** Show the mitt only while the hand is within REVEAL_PX of a button. */
+  setRevealNear(on: boolean): void {
+    if (on === this.revealNear) return;
+    this.revealNear = on;
+    this.dwell.reset();
+    this.screenSince = -1;
+    this.seenOutside = false;
+  }
+
+  /** The pointer position used in pointer mode, or null before the pointer has moved. For tests. */
+  get pointerPosition(): Point2 | null {
+    return this.hasPointer ? { x: this.pointerX, y: this.pointerY } : null;
+  }
+
   setEnabled(enabled: boolean): void {
     this.enabled = enabled;
     if (!enabled) this.hide();
@@ -293,6 +347,11 @@ export class HandCursor {
   }
 
   private hide(): void {
+    this.tracking = false;
+    this.lastPx = -1;
+    this.lastPy = -1;
+    this.lastX = -1;
+    this.lastY = -1;
     if (this.shown) {
       this.shown = false;
       this.el.hidden = true;
@@ -312,6 +371,10 @@ export class HandCursor {
 
   /** Once per frame. Allocation free. */
   update(state: InputState | null, dt: number, nowMs: number): void {
+    if (this.pointerMode) {
+      this.updatePointer();
+      return;
+    }
     if (!this.enabled || !state || this.count === 0) {
       this.hide();
       return;
@@ -378,15 +441,37 @@ export class HandCursor {
     }
     mapReach(this.target, usePose, state.aspect, state.shoulderWidth, smx, smy, hx, hy);
 
-    if (!this.shown) {
-      this.shown = true;
-      this.el.hidden = false;
+    if (!this.tracking) {
+      this.tracking = true;
       this.smooth.snap(this.target.x, this.target.y);
     } else {
       this.smooth.step(this.target.x, this.target.y, dt > 0 ? dt : 1 / 60);
     }
     const sx = this.smooth.x;
     const sy = this.smooth.y;
+    if (this.revealNear) {
+      const near = hitTest(
+        this.rects,
+        this.count,
+        sx * window.innerWidth,
+        sy * window.innerHeight,
+        REVEAL_PX * uiScale(),
+      );
+      if (near < 0) {
+        if (this.shown) {
+          this.shown = false;
+          this.el.hidden = true;
+        }
+        this.clearHover();
+        this.dwell.reset();
+        this.setRing(0);
+        return;
+      }
+    }
+    if (!this.shown) {
+      this.shown = true;
+      this.el.hidden = false;
+    }
     const qx = Math.round(sx * 1000);
     const qy = Math.round(sy * 1000);
     if (qx !== this.lastX) {
@@ -428,7 +513,34 @@ export class HandCursor {
     }
   }
 
+  /** Pointer mode, once per frame. Allocation free except when the pointer has moved. */
+  private updatePointer(): void {
+    if (!this.enabled || this.count === 0 || !this.hasPointer || this.revealNear) {
+      if (this.shown) this.hide();
+      return;
+    }
+    if (!this.shown) {
+      this.shown = true;
+      this.el.hidden = false;
+    }
+    const x = Math.round(this.pointerX);
+    const y = Math.round(this.pointerY);
+    if (x !== this.lastPx) {
+      this.lastPx = x;
+      this.el.style.left = `${x}px`;
+    }
+    if (y !== this.lastPy) {
+      this.lastPy = y;
+      this.el.style.top = `${y}px`;
+    }
+    if (this.pointerDown !== this.closed) {
+      this.closed = this.pointerDown;
+      this.el.classList.toggle('closed', this.closed);
+    }
+  }
+
   dispose(): void {
+    this.setPointerMode(false);
     window.removeEventListener('resize', this.resize);
     this.el.remove();
   }

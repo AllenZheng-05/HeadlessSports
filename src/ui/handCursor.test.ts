@@ -258,3 +258,119 @@ describe('HandCursor', () => {
     host.remove();
   });
 });
+
+describe('HandCursor pointer mode (keyboard and mouse)', () => {
+  function move(x: number, y: number, buttons = 0): void {
+    window.dispatchEvent(new MouseEvent('pointermove', { clientX: x, clientY: y, buttons }));
+  }
+
+  function setup() {
+    const host = document.createElement('div');
+    document.body.append(host);
+    const button = document.createElement('button');
+    host.append(button);
+    button.getBoundingClientRect = () =>
+      ({ left: 100, top: 100, width: 200, height: 80 }) as DOMRect;
+    const cursor = new HandCursor(host);
+    cursor.setButtons([button]);
+    cursor.setPointerMode(true);
+    const click = vi.fn();
+    button.addEventListener('click', click);
+    const input = createFakeInput('pose', 'debug');
+    return { host, button, cursor, click, input };
+  }
+
+  it('is hidden until the pointer moves, then sits exactly on clientX/clientY', () => {
+    const { host, cursor, input } = setup();
+    cursor.update(input.state, 0.016, 0);
+    expect(cursor.el.hidden).toBe(true);
+    for (const [x, y] of [
+      [333, 271],
+      [1020, 90],
+      [0, 719],
+    ] as const) {
+      move(x, y);
+      cursor.update(input.state, 0.016, 16);
+      expect(cursor.el.hidden).toBe(false);
+      expect(cursor.el.style.left).toBe(`${x}px`);
+      expect(cursor.el.style.top).toBe(`${y}px`);
+    }
+    cursor.dispose();
+    host.remove();
+  });
+
+  it('ignores the tracked hand entirely', () => {
+    const { host, cursor, input } = setup();
+    input.setMouse(0.9, 0.9, true);
+    move(50, 60);
+    cursor.update(input.state, 0.016, 0);
+    expect(cursor.el.style.left).toBe('50px');
+    expect(cursor.el.style.top).toBe('60px');
+    cursor.dispose();
+    host.remove();
+  });
+
+  it('never selects by hovering, however long', () => {
+    const { host, button, cursor, click, input } = setup();
+    move(10, 10);
+    for (let t = 0; t < 1000; t += 16) cursor.update(input.state, 0.016, t);
+    move(200, 140);
+    for (let t = 1000; t < 8000; t += 16) cursor.update(input.state, 0.016, t);
+    expect(click).not.toHaveBeenCalled();
+    expect(button.classList.contains('hovered')).toBe(false);
+    cursor.dispose();
+    host.remove();
+  });
+
+  it('closes the mitt while a button is held down', () => {
+    const { host, cursor, input } = setup();
+    move(10, 10, 1);
+    cursor.update(input.state, 0.016, 0);
+    expect(cursor.el.classList.contains('closed')).toBe(true);
+    move(10, 10, 0);
+    cursor.update(input.state, 0.016, 16);
+    expect(cursor.el.classList.contains('closed')).toBe(false);
+    cursor.dispose();
+    host.remove();
+  });
+
+  it('switching back to hand mode stops listening to the pointer', () => {
+    const { host, cursor, input } = setup();
+    cursor.setPointerMode(false);
+    move(300, 300);
+    cursor.update(input.state, 0.016, 0);
+    expect(cursor.el.style.left).not.toBe('300px');
+    expect(cursor.el.style.top).not.toBe('300px');
+    cursor.dispose();
+    host.remove();
+  });
+});
+
+describe('HandCursor reveal-near mode', () => {
+  it('shows the mitt only while the hand is near a button', () => {
+    const host = document.createElement('div');
+    document.body.append(host);
+    const button = document.createElement('button');
+    host.append(button);
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+    button.getBoundingClientRect = () =>
+      ({ left: w / 2 - 100, top: h / 2 - 40, width: 200, height: 80 }) as DOMRect;
+    const cursor = new HandCursor(host);
+    cursor.setRevealNear(true);
+    cursor.setButtons([button]);
+    const input = createFakeInput('hands');
+    input.setMouse(0.05, 0.05, false);
+    let t = 0;
+    for (; t < 400; t += 16) cursor.update(input.state, 0.016, t);
+    expect(cursor.el.hidden).toBe(true);
+    input.setMouse(0.5, 0.5, false);
+    for (; t < 800; t += 16) cursor.update(input.state, 0.016, t);
+    expect(cursor.el.hidden).toBe(false);
+    input.setMouse(0.05, 0.05, false);
+    for (; t < 1200; t += 16) cursor.update(input.state, 0.016, t);
+    expect(cursor.el.hidden).toBe(true);
+    cursor.dispose();
+    host.remove();
+  });
+});

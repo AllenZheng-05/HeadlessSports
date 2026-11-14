@@ -15,8 +15,14 @@ export interface ScreenSpec {
   primary?: HTMLElement | null;
   /** Called right after the screen is attached to the page. */
   onMount?: () => void;
-  /** The hand cursor stays off on this screen (play). */
+  /** The hand cursor stays off on this screen. */
   noCursor?: boolean;
+  /** The buttons the hand cursor may select, instead of every `[data-select]` on the screen. */
+  cursorButtons?: HTMLElement[];
+  /** The hand cursor shows only while the hand is near one of its buttons (play). */
+  revealNear?: boolean;
+  /** Extra key handling for this screen. Return true when the key was used. */
+  onKey?: (e: KeyboardEvent) => boolean;
   /** The screen lays out the camera indicator itself (calibration, play): show it even when off. */
   camera?: boolean;
   /**

@@ -69,12 +69,12 @@ export function buildMenu(
   };
 }
 
-/** "Throwing hand: Right / Left" for keyboard and mouse play. Text and a check mark, not colour alone. */
+/** "Dominant hand: Right / Left" for keyboard and mouse play. Text and a check mark, not colour alone. */
 function handednessToggle(options: HowToOptions): HTMLElement {
   const wrap = h('div', 'hand-toggle');
   wrap.setAttribute('role', 'group');
-  wrap.setAttribute('aria-label', 'Throwing hand');
-  wrap.append(h('p', 'hand-title', 'Throwing hand'));
+  wrap.setAttribute('aria-label', 'Dominant hand');
+  wrap.append(h('p', 'hand-title', 'Dominant hand'));
   const row = h('div', 'hand-row');
   const buttons = new Map<Side, HTMLButtonElement>();
   const refresh = (current: Side): void => {
@@ -100,6 +100,37 @@ function handednessToggle(options: HowToOptions): HTMLElement {
   return wrap;
 }
 
+/** The steps, notes and (for keyboard and mouse play) key hints. Shared by the card and the in-play overlay. */
+export function howToBody(
+  meta: SportMeta,
+  debugInput: boolean,
+  options?: HowToOptions,
+): HTMLElement {
+  const body = h('div', 'howto-body');
+  const cols = h('div', 'howto-cols');
+  const steps = h('ol', 'steps');
+  for (const line of meta.howTo) steps.append(h('li', '', line));
+  cols.append(steps);
+
+  const side = h('div', 'howto-side');
+  if (options) side.append(handednessToggle(options));
+  if (meta.needsSpace) {
+    side.append(h('p', 'note note-space', 'Clear a 2 by 2 metre space around you.'));
+  }
+  if (meta.seatedOk) side.append(h('p', 'note note-seat', 'You can play this one sitting down.'));
+  if (side.childElementCount > 0) cols.append(side);
+  body.prepend(cols);
+  if (debugInput && meta.debugKeys.length > 0) {
+    const keys = h('div', 'debug-keys');
+    keys.append(h('p', 'debug-title', 'Keyboard and mouse'));
+    const list = h('ul');
+    for (const k of meta.debugKeys) list.append(h('li', '', k));
+    keys.append(list);
+    body.append(keys);
+  }
+  return body;
+}
+
 export function buildHowTo(
   meta: SportMeta,
   debugInput: boolean,
@@ -115,27 +146,7 @@ export function buildHowTo(
   head.append(swatch, h('h1', 'heading', meta.title));
   card.append(head);
 
-  const cols = h('div', 'howto-cols');
-  const steps = h('ol', 'steps');
-  for (const line of meta.howTo) steps.append(h('li', '', line));
-  cols.append(steps);
-
-  const side = h('div', 'howto-side');
-  if (options) side.append(handednessToggle(options));
-  if (meta.needsSpace) {
-    side.append(h('p', 'note note-space', 'Clear a 2 by 2 metre space around you.'));
-  }
-  if (meta.seatedOk) side.append(h('p', 'note note-seat', 'You can play this one sitting down.'));
-  if (debugInput && meta.debugKeys.length > 0) {
-    const keys = h('div', 'debug-keys');
-    keys.append(h('p', 'debug-title', 'Keyboard and mouse'));
-    const list = h('ul');
-    for (const k of meta.debugKeys) list.append(h('li', '', k));
-    keys.append(list);
-    side.append(keys);
-  }
-  if (side.childElementCount > 0) cols.append(side);
-  card.append(cols);
+  card.append(howToBody(meta, debugInput, options));
 
   const actions = h('div', 'actions');
   const start = selectButton('Start', 'btn btn-big');
@@ -143,7 +154,9 @@ export function buildHowTo(
   start.addEventListener('click', () => resolve('start'));
   back.addEventListener('click', () => resolve('back'));
   actions.append(start, back);
-  card.append(actions, h('p', 'fist-hint', 'Raise a fist to start'));
+  card.append(actions);
+  // Keyboard and mouse players have no fist to raise.
+  if (!debugInput) card.append(h('p', 'fist-hint', 'Raise a fist to start'));
 
   const stopWatching = host.watchInput((input) => {
     if (!input) return undefined;

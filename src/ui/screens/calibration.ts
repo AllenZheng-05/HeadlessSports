@@ -1,4 +1,5 @@
 import type { SportMeta, Stance } from '../../core/sport';
+import type { Side } from '../../input/types';
 import { h, selectButton, svgEl } from '../dom';
 import { PCT_INT } from '../format';
 import type { CalibrationScreen, CalibrationStep, CalibrationView } from '../types';
@@ -33,38 +34,106 @@ function handShapes(cx: number): Shape[] {
   return out;
 }
 
-function stanceShapes(stance: Stance): Shape[] {
+export type GuidePose = 'relaxed' | 'raise-left' | 'raise-right' | 't-pose';
+
+/** Arm angles in degrees, clockwise from hanging down. Left is the arm on the left of the screen. */
+const ARM_ANGLES: Record<GuidePose, readonly [number, number]> = {
+  relaxed: [14, -14],
+  'raise-left': [165, -14],
+  'raise-right': [14, -165],
+  't-pose': [90, -90],
+};
+
+/** The pose the outline should show, so it always demonstrates what the message asks. */
+export function poseForStep(step: CalibrationStep, handedness: Side | null): GuidePose {
+  if (step === 'handedness') return handedness === 'left' ? 'raise-left' : 'raise-right';
+  if (step === 'hold-still') return 't-pose';
+  return 'relaxed';
+}
+
+interface ArmSpec {
+  /** Shoulder pivot. */
+  x: number;
+  y: number;
+  /** Which of the two arms: 0 left of screen, 1 right of screen. */
+  side: 0 | 1;
+  shape: Shape;
+}
+
+function bodyShapes(stance: Stance): Shape[] {
   switch (stance) {
     case 'full-body':
-      return [
-        rect(67, 22, 26, 34, 12),
-        rect(53, 24, 9, 30, 4.5, 14),
-        rect(98, 24, 9, 30, 4.5, -14),
-        rect(68, 56, 11, 31, 5.5),
-        rect(81, 56, 11, 31, 5.5),
-      ];
+      return [rect(67, 22, 26, 34, 12), rect(68, 56, 11, 31, 5.5), rect(81, 56, 11, 31, 5.5)];
     case 'upper-body':
-      return [rect(50, 22, 60, 66, 24), rect(26, 28, 18, 52, 9, 10), rect(116, 28, 18, 52, 9, -10)];
+      return [rect(50, 22, 60, 66, 24)];
     case 'hands-close':
       return [...handShapes(52), ...handShapes(108)];
   }
 }
 
+function armSpecs(stance: Stance): ArmSpec[] {
+  // Each arm hangs from its shoulder pivot (0, 0 in local space) and is rotated about it.
+  switch (stance) {
+    case 'full-body':
+      return [
+        { x: 68, y: 26, side: 0, shape: rect(-4.5, -2, 9, 30, 4.5) },
+        { x: 92, y: 26, side: 1, shape: rect(-4.5, -2, 9, 30, 4.5) },
+      ];
+    case 'upper-body':
+      return [
+        { x: 52, y: 32, side: 0, shape: rect(-9, -4, 18, 46, 9) },
+        { x: 108, y: 32, side: 1, shape: rect(-9, -4, 18, 46, 9) },
+      ];
+    case 'hands-close':
+      return [];
+  }
+}
+
+export interface Guide {
+  readonly svg: SVGSVGElement;
+  /** Move the arms to a pose with a short eased transition. Cheap when the pose is unchanged. */
+  setPose(pose: GuidePose): void;
+}
+
 /** The silhouette guide drawn over the mirror view. */
-export function createGuide(stance: Stance): SVGSVGElement {
+export function createGuide(stance: Stance, pose: GuidePose = 'relaxed'): Guide {
   const svg = svgEl('svg', {
-    viewBox: '0 0 160 90',
+    viewBox: '0 -14 160 104',
     preserveAspectRatio: 'xMidYMid meet',
     class: 'guide',
     'aria-hidden': 'true',
   });
-  for (const s of stanceShapes(stance)) {
+  for (const s of bodyShapes(stance)) {
     svg.append(
       svgEl(s.tag, { ...s.attrs, class: 'guide-halo' }),
       svgEl(s.tag, { ...s.attrs, class: 'guide-line' }),
     );
   }
-  return svg;
+  const arms: SVGGElement[] = [];
+  const sides: number[] = [];
+  for (const a of armSpecs(stance)) {
+    const outer = svgEl('g', { transform: `translate(${a.x} ${a.y})` });
+    const inner = svgEl('g', { class: 'guide-arm' });
+    inner.append(
+      svgEl(a.shape.tag, { ...a.shape.attrs, class: 'guide-halo' }),
+      svgEl(a.shape.tag, { ...a.shape.attrs, class: 'guide-line' }),
+    );
+    outer.append(inner);
+    svg.append(outer);
+    arms.push(inner);
+    sides.push(a.side);
+  }
+  let current: GuidePose | null = null;
+  const setPose = (next: GuidePose): void => {
+    if (next === current) return;
+    current = next;
+    const angles = ARM_ANGLES[next];
+    for (let i = 0; i < arms.length; i++) {
+      (arms[i] as SVGGElement).style.transform = `rotate(${angles[sides[i] as number]}deg)`;
+    }
+  };
+  setPose(pose);
+  return { svg, setPose };
 }
 
 export interface CalibrationBuild {
@@ -132,9 +201,12 @@ export function buildCalibration(
     seat.textContent = sitting ? 'Sitting: on' : 'Sitting: off';
     seat.setAttribute('aria-pressed', String(sitting));
     // A seated player is not asked to fit a full-body outline.
-    guide = createGuide(sitting && meta.stance === 'full-body' ? 'upper-body' : meta.stance);
-    guide.classList.toggle('ok', lastOk === true);
-    host.mirror.setGuide(guide);
+    guide = createGuide(
+      sitting && meta.stance === 'full-body' ? 'upper-body' : meta.stance,
+      poseForStep(lastStep ?? 'position', lastHandedness),
+    );
+    guide.svg.classList.toggle('ok', lastOk === true);
+    host.mirror.setGuide(guide.svg);
     seatedHandler?.(sitting);
   });
   if (meta.seatedOk) side.append(seat);
@@ -160,6 +232,7 @@ export function buildCalibration(
   let lastRing = -1;
   let lastOk: boolean | null = null;
   let lastStep: CalibrationStep | null = null;
+  let lastHandedness: Side | null = null;
 
   const set = (view: CalibrationView): void => {
     if (view.message !== lastMessage) {
@@ -179,10 +252,14 @@ export function buildCalibration(
     }
     if (view.ok !== lastOk) {
       lastOk = view.ok;
-      guide.classList.toggle('ok', view.ok);
+      guide.svg.classList.toggle('ok', view.ok);
       ringWrap.classList.toggle('ok', view.ok);
       status.textContent = view.ok ? 'Looking good' : 'Not quite yet';
       status.classList.toggle('ok', view.ok);
+    }
+    if (view.step !== lastStep || view.handedness !== lastHandedness) {
+      lastHandedness = view.handedness;
+      guide.setPose(poseForStep(view.step, view.handedness));
     }
     if (view.step !== lastStep) {
       lastStep = view.step;
@@ -216,7 +293,7 @@ export function buildCalibration(
       mirrorSlot.append(host.mirror.el);
       host.camera.el.classList.add('inline');
       side.append(host.camera.el);
-      host.mirror.setGuide(guide);
+      host.mirror.setGuide(guide.svg);
       host.mirror.setMode('large');
     },
     dispose(): void {

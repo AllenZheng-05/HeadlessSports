@@ -14,6 +14,27 @@ Kept current through the unattended run that started 2026-11-14. Read this first
 
 **The single most important thing to check first** is the tracking debug page with your real camera (checklist below). Everything else is built on the assumption that it works.
 
+## Playtest round 1 (2026-11-14, branch `playtest-1`)
+
+Allen played every sport, mostly with keyboard and mouse, and sent notes. All of them were addressed on `playtest-1`. Checks on the branch: typecheck and lint clean, 1048 unit tests, build, default end-to-end 51 of 51, UI 72, gate 4. Soak and deploy suites were not rerun. Still nothing verified by the builders with a real camera.
+
+| Area | What changed | Retest |
+|---|---|---|
+| How-to card | Capped to the viewport, tighter layout, keys in two columns | Every sport at your screen size, `?input=debug` |
+| Cursor | In keyboard-and-mouse mode the menu cursor and climbing's in-play circle sit exactly on the pointer; no dwell-select for the mouse | Menus and a climbing round |
+| How to play in a round | Button next to Quit, or `H`; pauses the round; Resume, `H` or Escape closes | Any sport |
+| Handedness wording | "Dominant hand" replaces "Throwing hand" | How-to card |
+| Calibration outline | Relaxed, then one hand raised (handedness step), then T-pose (hold-still step) | Camera calibration |
+| Device gate | Measures inference capacity, discards warm-up; fails only below 15 Hz tracking or 27 fps; a fail is now a warning with "Play anyway" (once per browser session). Only missing WebGL2 or Web Workers blocks | Your laptop, without `?skipGate=1` |
+| Climbing | Mouse only: click a hold to grab and keep it, the mouse switches to the other hand; a click off a hold does nothing | `?input=debug` |
+| Bowling | Scorecard grid fixed; strike or spare called the instant the last pin is down, other rolls 0.7 to 1.2 s after contact, 2.5 s cap; live aim arrows; aim sensitivity cut to about a quarter (`aimGain` 0.09 to 0.025, `maxAngle` 0.1 to 0.045) | Does aim now feel sluggish? |
+| Batting | Right-hander on screen left of the plate, left-hander on the right; side-on stance with an animated swing (not a mirror of your arms); about 3.9 s between result and next release with a visible set and wind-up | Both hands. No called balls yet |
+| Archery | Nock distance 0.9 to 1.9 sw with hysteresis; nock without a fist by bringing hands together and pulling back; full draw sooner | Camera |
+| Javelin | No fist anywhere; run starts after a "Get ready" beat; one big overarm motion throws; run speed is about 36% of the variable release speed; click or `T` throws with the keyboard and mouse | Camera: does arm pumping while running trigger a throw? Tunables `minThrowSpeed`, `pumpMargin` |
+| Pitching | Catcher calls pitch and spot in a speech bubble; 2.6 s read window, no clock on choosing; +3 for the called pitch in the zone, half points for the wrong type; live aim ring; zone and catcher about 45% larger | Pitch choice still uses fist (fastball) or open hand (curve) held 0.9 s. If fist detection misreads, say so and it will be changed |
+
+Known loose ends: the UI test "the calibration outline changes pose with the step" failed once in a full run straight after a laptop restart and passed three times in isolation; the gate suite failed once in the same run and passed on rerun. Watch for repeats. The gate's `marginal` flag has no UI. A background tab during the gate check still reads as slow rendering.
+
 ## How to run
 
 ```

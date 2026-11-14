@@ -16,8 +16,8 @@ import {
 } from '../calibration/CalibrationSession';
 import { parseFlags } from '../flags';
 import type { Flags } from '../flags';
+import { gateVerdict } from '../gate/evaluate';
 import { runGate } from '../gate/runGate';
-import type { GateReport } from '../gate/types';
 import { GameLoop } from '../loop';
 import { createScoreStore } from '../scores';
 import type { ScoreStore } from '../scores';
@@ -44,11 +44,22 @@ function calibrationNeeds(stance: Stance): TrackerNeeds {
   return stance === 'hands-close' ? HANDS_ONLY : POSE_ONLY;
 }
 
-/** A gate report whose only failure is a missing camera API is fine when no camera is wanted. */
-function gateAcceptable(report: GateReport, flags: Flags): boolean {
-  if (report.passed) return true;
-  const noCamera = flags.input === 'debug' || flags.source !== 'camera';
-  return noCamera && report.failures.length === 1 && report.failures[0] === 'no-camera-api';
+const GATE_WARNED_KEY = 'hs-gate-warned';
+
+function gateWarned(): boolean {
+  try {
+    return sessionStorage.getItem(GATE_WARNED_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function rememberGateWarned(): void {
+  try {
+    sessionStorage.setItem(GATE_WARNED_KEY, '1');
+  } catch {
+    // Private mode: the warning may show again after a reload.
+  }
 }
 
 /** The whole session: boot, gate, title, camera, menu, how-to, calibration, play, results. */
@@ -65,7 +76,7 @@ class Shell {
   private epoch = 0;
   /** One-shot message for the next menu (a round broke). */
   private notice: string | null = null;
-  /** Throwing hand for keyboard and mouse play; remembered for the session. */
+  /** Dominant hand for keyboard and mouse play; remembered for the session. */
   private hand: Side;
 
   constructor(private readonly flags: Flags) {
@@ -95,14 +106,23 @@ class Shell {
       mainThread: flags.mainThread,
       onProgress: (fraction, label) => this.ui.showLoading(label, fraction),
     });
-    if (!gateAcceptable(report, flags)) {
-      hook.phase = 'gate-fail';
+    const verdict = gateVerdict(report, flags.input !== 'debug' && flags.source === 'camera');
+    if (verdict !== 'ok') {
       // Wipe the benchmark's last frame (cones and props) behind the card.
       const clean = createFieldDayScene();
       renderer.render(clean.scene, clean.camera);
       clean.dispose();
-      this.ui.showGateFail(report);
-      return;
+      if (verdict === 'blocked') {
+        hook.phase = 'gate-fail';
+        this.ui.showGateFail(report);
+        return;
+      }
+      // A weak device may still try. Once is enough for the page session.
+      if (!gateWarned()) {
+        hook.phase = 'gate-warning';
+        await this.ui.showGateWarning(report);
+        rememberGateWarned();
+      }
     }
 
     // The loop starts after the gate: the benchmark measures frame rate and must have the GPU to itself.

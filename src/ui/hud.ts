@@ -18,6 +18,9 @@ interface CursorItem {
   x: number;
   y: number;
   closed: boolean;
+  /** Last pixel position written in pointer mode. */
+  px: number;
+  py: number;
 }
 
 const TONE_ICON: Record<MeterTone, string> = {
@@ -30,6 +33,11 @@ const TONE_ICON: Record<MeterTone, string> = {
 export interface UiHud extends Hud {
   readonly el: HTMLElement;
   setVisible(visible: boolean): void;
+  /**
+   * Keyboard and mouse input: hand cursors drawn through `setCursor` sit exactly on the real
+   * pointer (clientX/clientY), whatever position the sport passes. Camera mode is unchanged.
+   */
+  setPointerMode(on: boolean): void;
 }
 
 /**
@@ -262,6 +270,30 @@ export function createHud(parent: HTMLElement): UiHud {
     flashEl.classList.add('go');
   }
 
+  let pointerMode = false;
+  let hasPointer = false;
+  let pointerX = 0;
+  let pointerY = 0;
+  const onPointer = (e: PointerEvent): void => {
+    pointerX = e.clientX;
+    pointerY = e.clientY;
+    hasPointer = true;
+  };
+
+  function setPointerMode(on: boolean): void {
+    if (on === pointerMode) return;
+    pointerMode = on;
+    if (on) window.addEventListener('pointermove', onPointer, true);
+    else window.removeEventListener('pointermove', onPointer, true);
+    // Force every cursor to be repositioned in the new coordinate system.
+    for (const c of cursors.values()) {
+      c.x = -1;
+      c.y = -1;
+      c.px = -1;
+      c.py = -1;
+    }
+  }
+
   function setCursor(id: string, x: number | null, y: number, closed = false): void {
     let c = cursors.get(id);
     if (x === null) {
@@ -275,9 +307,28 @@ export function createHud(parent: HTMLElement): UiHud {
       const node = h('div', 'hud-cursor');
       node.setAttribute('aria-hidden', 'true');
       cursorLayer.append(node);
-      c = { el: node, x: -1, y: -1, closed: false };
+      c = { el: node, x: -1, y: -1, closed: false, px: -1, py: -1 };
       cursors.set(id, c);
     }
+    if (pointerMode) {
+      c.el.hidden = !hasPointer;
+      const qx = Math.round(pointerX);
+      const qy = Math.round(pointerY);
+      if (c.px !== qx) {
+        c.px = qx;
+        c.el.style.left = `${qx}px`;
+      }
+      if (c.py !== qy) {
+        c.py = qy;
+        c.el.style.top = `${qy}px`;
+      }
+      if (c.closed !== closed) {
+        c.closed = closed;
+        c.el.classList.toggle('closed', closed);
+      }
+      return;
+    }
+    c.el.hidden = false;
     if (c.x !== x) {
       c.x = x;
       c.el.style.left = pctTenth(x);
@@ -303,6 +354,7 @@ export function createHud(parent: HTMLElement): UiHud {
     removeTable();
     for (const c of cursors.values()) c.el.remove();
     cursors.clear();
+    setPointerMode(false);
     flashEl.classList.remove('go');
   }
 
@@ -319,6 +371,7 @@ export function createHud(parent: HTMLElement): UiHud {
     setTable,
     flash,
     setCursor,
+    setPointerMode,
     clear,
   };
 }

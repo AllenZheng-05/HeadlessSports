@@ -7,6 +7,7 @@ import type {
   InputProvider,
   InputState,
 } from '../../input/types';
+import type { LandmarkSource } from '../../tracking/types';
 
 /**
  * A tiny stand-in input provider for the harness: the right hand follows the mouse, the mouse
@@ -28,7 +29,14 @@ function arm(): ArmState {
   return { vx: 0, vy: 0, speed: 0, elbowAngle: 3, elbowRate: 0, wristX: 0, wristY: 0 };
 }
 
-export function createFakeInput(mode: 'pose' | 'hands'): FakeInput {
+/**
+ * `kind` 'camera' gives the input a camera-like source (hand cursor with hold-to-select); 'debug'
+ * has no source, like keyboard and mouse input (the cursor follows the real pointer).
+ */
+export function createFakeInput(
+  mode: 'pose' | 'hands',
+  kind: 'camera' | 'debug' = 'camera',
+): FakeInput {
   const pose = new Float32Array(33 * 4);
   const smx = 0.5;
   const smy = 0.36;
@@ -74,7 +82,8 @@ export function createFakeInput(mode: 'pose' | 'hands'): FakeInput {
 
   return {
     state,
-    source: null,
+    source:
+      kind === 'camera' ? ({ kind: 'camera', video: null } as unknown as LandmarkSource) : null,
     start: () => Promise.resolve(),
     setNeeds: () => Promise.resolve(),
     setCalibration: () => undefined,

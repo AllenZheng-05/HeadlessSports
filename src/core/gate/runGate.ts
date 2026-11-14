@@ -1,7 +1,12 @@
 import type { RendererHandle } from '../../render/renderer';
 import { benchmarkTracker } from '../../tracking/camera/benchmark';
 import { detectCapabilities } from './capabilities';
-import { capabilityFailures, measurementFailures } from './evaluate';
+import {
+  capabilityFailures,
+  isMarginal,
+  measurementFailures,
+  trackingCapacityHz,
+} from './evaluate';
 import { createRenderBenchmark } from './renderBenchmark';
 import { gateThresholds } from './thresholds';
 import type {
@@ -21,7 +26,7 @@ export interface RunGateOptions {
   onProgress?: (fraction: number, label: string) => void;
 }
 
-/** The camera delivers 30 fps, so a tracker that manages 25 back-to-back inferences sustains 25 Hz. */
+/** Camera rate cap for the capacity figure. */
 const CAMERA_HZ = 30;
 
 function makeReport(
@@ -85,7 +90,7 @@ export async function runGate(options: RunGateOptions): Promise<GateReport> {
       onWarmupStart: () => progress(0.4, 'Warming up'),
       onMeasureStart: () => {
         // Both measurements cover the same window.
-        rb.markMeasureStart();
+        rb.markMeasureStart(thresholds.discardRenderFrames ?? 0);
         measureStartedAt = performance.now();
         progress(0.5, 'Measuring');
         ticker = window.setInterval(() => {
@@ -98,7 +103,7 @@ export async function runGate(options: RunGateOptions): Promise<GateReport> {
     const renderFps = rendered.frames > 0 && rendered.frameMs > 0 ? 1000 / rendered.frameMs : 0;
     const measurements: GateMeasurements = {
       inferenceMs: tracker.inferenceMs,
-      trackingHz: Math.min(CAMERA_HZ, tracker.hz),
+      trackingHz: trackingCapacityHz(tracker.inferenceMs, CAMERA_HZ),
       renderFrameMs: rendered.frameMs,
       renderFps,
       rendererBackend: options.renderer.backend,
@@ -107,7 +112,13 @@ export async function runGate(options: RunGateOptions): Promise<GateReport> {
     };
     const failures: GateFailure[] = measurementFailures(measurements, thresholds);
     progress(1, 'Done');
-    return makeReport(caps, thresholds, { passed: failures.length === 0, failures, measurements });
+    const passed = failures.length === 0;
+    return makeReport(caps, thresholds, {
+      passed,
+      marginal: passed && isMarginal(measurements, thresholds),
+      failures,
+      measurements,
+    });
   } catch (err) {
     return makeReport(caps, thresholds, { failures: ['benchmark-error'], error: errText(err) });
   } finally {

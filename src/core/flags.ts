@@ -27,7 +27,7 @@ export interface Flags {
   seed: number;
   /** `?short=1`: sports play a shortened round (for headless checks and quick tries). */
   short: boolean;
-  /** `?hand=left|right`: default throwing hand for keyboard and mouse play. Null when absent. */
+  /** `?hand=left|right`: default dominant hand for keyboard and mouse play. Null when absent. */
   hand: 'left' | 'right' | null;
 }
 

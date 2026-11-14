@@ -1,35 +1,70 @@
 import '../styles/base.css';
 import './harness.css';
 import { createUi } from './createUi';
-import { FAKE_BESTS, FAKE_GATE_REPORT, FAKE_RESULT, FAKE_SPORTS } from './harness/fakeData';
+import {
+  FAKE_BESTS,
+  FAKE_BLOCKED_REPORT,
+  FAKE_GATE_REPORT,
+  FAKE_RESULT,
+  FAKE_SPORTS,
+} from './harness/fakeData';
 import { createFakeInput } from './harness/fakeInput';
+import { meta as archeryMeta } from '../sports/archery/meta';
+import { meta as battingMeta } from '../sports/batting/meta';
+import { meta as bowlingMeta } from '../sports/bowling/meta';
+import { meta as climbingMeta } from '../sports/climbing/meta';
+import { meta as javelinMeta } from '../sports/javelin/meta';
+import { meta as pitchingMeta } from '../sports/pitching/meta';
+import { meta as warmupMeta } from '../sports/warmup/meta';
 import type { TrackingErrorCode } from '../tracking/types';
 import type { FrameProblem } from '../input/types';
 import type { CalibrationView, Ui } from './types';
 
 declare global {
   interface Window {
-    __ui: { ui: Ui; resolved: string | null };
+    __ui: { ui: Ui; resolved: string | null; paused: boolean };
   }
 }
+
+/** The real sport metas, for checking their copy against the layout. */
+const REAL_METAS = [
+  climbingMeta,
+  bowlingMeta,
+  battingMeta,
+  archeryMeta,
+  javelinMeta,
+  pitchingMeta,
+  warmupMeta,
+];
 
 const params = new URLSearchParams(location.search);
 const screen = params.get('screen') ?? 'title';
 const count = Math.max(1, Math.min(8, Number(params.get('n') ?? 5)));
-const sports = FAKE_SPORTS.slice(0, count);
+const sports = params.has('real') ? REAL_METAS : FAKE_SPORTS.slice(0, count);
 const root = document.getElementById('ui') as HTMLElement;
 
 const ui = createUi(root, {
   debug: params.has('debug'),
   reducedMotion: params.get('rm') === '1' ? true : undefined,
 });
-const hub: Window['__ui'] = { ui, resolved: null };
+const hub: Window['__ui'] = { ui, resolved: null, paused: false };
+ui.onHowToPlay((open) => {
+  hub.paused = open;
+});
 window.__ui = hub;
 
 const handParam = params.get('hand');
+// ?input=debug: no landmark source, like keyboard and mouse play.
+const debugInput = params.get('input') === 'debug';
 const wantsInput =
-  handParam !== null || screen === 'playing' || screen === 'pause' || screen === 'calibration';
-const fake = wantsInput ? createFakeInput(handParam === '1' ? 'hands' : 'pose') : null;
+  handParam !== null ||
+  debugInput ||
+  screen === 'playing' ||
+  screen === 'pause' ||
+  screen === 'calibration';
+const fake = wantsInput
+  ? createFakeInput(handParam === '1' ? 'hands' : 'pose', debugInput ? 'debug' : 'camera')
+  : null;
 if (fake) {
   ui.setInput(fake);
   const move = (e: MouseEvent): void =>
@@ -61,8 +96,13 @@ function track(p: Promise<unknown>): void {
   });
 }
 
-const sportIndex = Number(params.get('sport') ?? 1);
-const meta = FAKE_SPORTS[sportIndex] ?? FAKE_SPORTS[1]!;
+// ?sport=<n> picks a stand-in sport; ?sport=<id> (for example bowling) picks the real one.
+const sportParam = params.get('sport') ?? '1';
+const sportIndex = Number(sportParam);
+const meta =
+  (Number.isNaN(sportIndex) ? REAL_METAS.find((m) => m.id === sportParam) : undefined) ??
+  FAKE_SPORTS[sportIndex] ??
+  FAKE_SPORTS[1]!;
 
 // ?cam=1 turns the camera indicator on, as it is while the camera runs behind a menu.
 if (params.has('cam')) ui.setCameraActive(true);
@@ -78,7 +118,10 @@ switch (screen) {
     }
     break;
   case 'gatefail':
-    ui.showGateFail(FAKE_GATE_REPORT);
+    ui.showGateFail(FAKE_BLOCKED_REPORT);
+    break;
+  case 'gatewarn':
+    track(ui.showGateWarning(FAKE_GATE_REPORT));
     break;
   case 'title':
     track(ui.showTitle());
@@ -102,8 +145,8 @@ switch (screen) {
     track(
       ui.showHowTo(
         meta,
-        params.has('debugkeys'),
-        params.has('toggle')
+        params.has('debugkeys') || debugInput,
+        params.has('toggle') || debugInput
           ? {
               handedness: params.get('toggle') === 'left' ? 'left' : 'right',
               onHandedness: (side) => {
@@ -124,13 +167,13 @@ switch (screen) {
       hub.resolved = 'skipped';
     });
     const view: CalibrationView = {
-      step: 'position',
+      step: (params.get('step') ?? 'position') as CalibrationView['step'],
       message: 'Step back until your whole body is inside the outline',
       hint: 'It is a bit dark. Turn on a light or face a window.',
       progress: 0.6,
       ok: params.get('ok') === '1',
       problem: 'none',
-      handedness: null,
+      handedness: params.get('handed') === 'left' ? 'left' : null,
     };
     cal.set(view);
     break;

@@ -64,6 +64,8 @@ export class SportHost {
   private problemSinceMs = -1;
   private clearSinceMs = -1;
   private inputErrorLogged = false;
+  /** The how-to overlay is open: the round stays paused whatever the camera says. */
+  private manualPause = false;
   private readonly onResize = (): void => this.resize();
 
   constructor(deps: SportHostDeps) {
@@ -76,6 +78,7 @@ export class SportHost {
     window.addEventListener('resize', this.onResize);
     this.resize();
     this.ui.onQuit(() => this.quit());
+    this.ui.onHowToPlay((open) => this.setManualPause(open));
   }
 
   /** Swap the input provider between rounds (camera switched off, camera error fallback). */
@@ -180,11 +183,27 @@ export class SportHost {
     }
   }
 
+  /**
+   * Pause the round while the player reads the how-to overlay, and resume when it closes (unless
+   * the camera still reports a problem). Only applies while a round is playing or paused.
+   */
+  private setManualPause(open: boolean): void {
+    if (open && this.phase !== 'playing' && this.phase !== 'paused') return;
+    this.manualPause = open;
+    if (open) {
+      if (this.phase !== 'playing') return;
+      this.phase = 'paused';
+      this.loop.paused = true;
+      return;
+    }
+    if (this.phase === 'paused' && this.problemSinceMs < 0) this.resume();
+  }
+
   private checkPause(nowMs: number): void {
     const state = this.input.state;
     if (this.input.source?.kind !== 'camera' || state.problem === 'none') {
       this.problemSinceMs = -1;
-      if (this.phase === 'paused') {
+      if (this.phase === 'paused' && !this.manualPause) {
         if (this.clearSinceMs < 0) this.clearSinceMs = nowMs;
         if (nowMs - this.clearSinceMs >= RESUME_AFTER_MS) this.resume();
       }
@@ -354,6 +373,7 @@ export class SportHost {
     this.stage = null;
     this.loop.paused = false;
     this.phase = 'idle';
+    this.manualPause = false;
     this.problemSinceMs = -1;
     this.clearSinceMs = -1;
     if (round !== null) this.settle(round, null);

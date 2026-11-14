@@ -74,8 +74,17 @@ export interface Ui {
    */
   showLoading(text: string, progress?: number, onCancel?: () => void): void;
 
-  /** Terminal screen: this device cannot run the game. Measured numbers sit behind "details". */
+  /**
+   * Terminal screen: a capability the game cannot start without is missing (WebGL 2, workers).
+   * Measured numbers sit behind "details".
+   */
   showGateFail(report: GateReport): void;
+
+  /**
+   * "This device may struggle": the gate failed for a performance or comfort reason. Resolves
+   * when the player chooses "Play anyway". Measured numbers sit behind "details".
+   */
+  showGateWarning(report: GateReport): Promise<void>;
 
   /** Title screen with the wordmark and a Start button. Resolves when Start is chosen. */
   showTitle(): Promise<void>;
@@ -98,7 +107,7 @@ export interface Ui {
 
   /**
    * How-to card for a sport, with the safety reminder when `meta.needsSpace`. With `options`
-   * (non-camera input) the card shows a "Throwing hand: Right / Left" toggle.
+   * (non-camera input) the card shows a "Dominant hand: Right / Left" toggle.
    */
   showHowTo(
     meta: SportMeta,
@@ -125,6 +134,11 @@ export interface Ui {
   onCameraOff(handler: () => void): void;
   /** The player asked to quit the current round (Escape or the on-screen control). */
   onQuit(handler: () => void): void;
+  /**
+   * The "How to play" overlay opened (true) or closed (false) during a round. The shell pauses
+   * the round while it is open. Also called with false when the overlay goes away with its screen.
+   */
+  onHowToPlay(handler: (open: boolean) => void): void;
 
   /** Camera-on indicator state. */
   setCameraActive(active: boolean): void;

@@ -6,6 +6,22 @@ Status values: `todo`, `doing`, `done`, `parked` (failed three real attempts; se
 
 Agents: **B** builder (sonnet), **H** helper (haiku), **R** reviewer (opus), **O** orchestrator (main session).
 
+## Current: playtest round 1 (branch `playtest-1`)
+
+Fixes from Allen's first playtest, 2026-11-14. Details and retest list in the morning report.
+
+| Task | Agent | Status | Notes |
+|---|---|---|---|
+| UI and shell: how-to fit, pointer cursor, in-round how to play, "Dominant hand", calibration outline poses | B | done | |
+| Device gate: measurement fixes, lower thresholds, warning with "Play anyway" | B | done | Needs a run on Allen's laptop |
+| Climbing mouse-only play | B | done | |
+| Bowling scorecard, early verdict, aim arrows | B | done | Aim sensitivity lowered; confirm feel |
+| Batting side, side-on stance, pitch rhythm | B | done | No called balls |
+| Archery forgiving draw | B | done | |
+| Javelin without fist, cadence-rewarding run | B | done | Throw guard needs camera tuning |
+| Pitching catcher call, rhythm, aim ring | B | done | Pitch choice still uses fist or open hand |
+| Merge `playtest-1` into `main` | O | todo | After Allen retests |
+
 ## Milestone 0: repo setup
 
 | Task | Agent | Status | Notes |

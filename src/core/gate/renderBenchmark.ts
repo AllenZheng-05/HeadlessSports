@@ -12,13 +12,15 @@ export interface RenderBenchmark {
   start(): void;
   /** Stop and return the median frame time (ms) over frames rendered since markMeasureStart(). */
   stop(): { frameMs: number; frames: number };
-  markMeasureStart(): void;
+  /** Begin recording; the first `discardFrames` frames are dropped (shader compile, first present). */
+  markMeasureStart(discardFrames?: number): void;
   dispose(): void;
 }
 
 const PROP_COUNT = 60;
 const BALL_COUNT = 3;
 const FRAME_RING = 4096;
+const DISCARD_WINDOW_MS = 500;
 
 /**
  * A representative load: Field Day scene, the athlete with moving arms, about 60 instanced toon
@@ -65,6 +67,8 @@ export function createRenderBenchmark(handle: RendererHandle): RenderBenchmark {
   const frameTimes = new Float64Array(FRAME_RING);
   let frameCount = 0;
   let measuring = false;
+  let toDiscard = 0;
+  let discardUntil = 0;
   let running = false;
   let rafId = 0;
   let lastStamp = -1;
@@ -98,7 +102,13 @@ export function createRenderBenchmark(handle: RendererHandle): RenderBenchmark {
     }
     handle.render(scene, camera);
 
-    if (measuring && dt > 0 && frameCount < FRAME_RING) frameTimes[frameCount++] = dt;
+    if (measuring && dt > 0) {
+      // Discard warm-up frames, but only within the first DISCARD_WINDOW_MS so a slow machine
+      // keeps enough samples to be measured at all.
+      if (discardUntil < 0) discardUntil = stamp + DISCARD_WINDOW_MS;
+      if (toDiscard > 0 && stamp < discardUntil) toDiscard--;
+      else if (frameCount < FRAME_RING) frameTimes[frameCount++] = dt;
+    }
   };
 
   return {
@@ -108,8 +118,10 @@ export function createRenderBenchmark(handle: RendererHandle): RenderBenchmark {
       lastStamp = -1;
       rafId = requestAnimationFrame(tick);
     },
-    markMeasureStart() {
+    markMeasureStart(discardFrames = 0) {
       frameCount = 0;
+      toDiscard = discardFrames;
+      discardUntil = -1;
       measuring = true;
     },
     stop() {

@@ -4,6 +4,7 @@ import type { Page } from '@playwright/test';
 const SCREENS: { name: string; query: string }[] = [
   { name: 'loading', query: 'screen=loading' },
   { name: 'gatefail', query: 'screen=gatefail' },
+  { name: 'gatewarn', query: 'screen=gatewarn' },
   { name: 'title', query: 'screen=title' },
   { name: 'camintro', query: 'screen=camintro' },
   { name: 'camerror', query: 'screen=camerror' },
@@ -123,14 +124,33 @@ test('the raised-fist event starts the how-to screen', async ({ page }) => {
   await expect.poll(() => resolved(page)).toBe('start');
 });
 
-test('gate fail Details toggle reveals the numbers', async ({ page }) => {
-  await page.goto('/ui-harness.html?screen=gatefail');
+test('gate warning: Details reveals the numbers and Play anyway continues', async ({ page }) => {
+  await page.goto('/ui-harness.html?screen=gatewarn');
+  await expect(page.getByRole('heading', { name: 'This device may struggle' })).toBeVisible();
   const details = page.locator('#gate-details');
   await expect(details).toBeHidden();
   await page.getByRole('button', { name: 'Details' }).click();
   await expect(details).toBeVisible();
   await expect(details).toContainText('14.2');
   await expect(details).toContainText('at least 24');
+  expect(await resolved(page)).toBeNull();
+  await page.getByRole('button', { name: 'Play anyway' }).click();
+  await expect.poll(() => resolved(page)).toBe('resolved');
+});
+
+test('gate warning: Enter plays anyway', async ({ page }) => {
+  await page.goto('/ui-harness.html?screen=gatewarn');
+  await page.keyboard.press('Enter');
+  await expect.poll(() => resolved(page)).toBe('resolved');
+});
+
+test('terminal gate screen has no way forward and says what is missing', async ({ page }) => {
+  await page.goto('/ui-harness.html?screen=gatefail');
+  await expect(
+    page.getByRole('heading', { name: 'This browser cannot run the game' }),
+  ).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Play anyway' })).toHaveCount(0);
+  await expect(page.locator('.screen-gatefail')).toContainText('WebGL 2');
 });
 
 test('long banner stays clear of the score block and the table', async ({ page }) => {
@@ -228,7 +248,7 @@ test('loading Back button and Escape cancel', async ({ page }) => {
   await expect.poll(() => resolved(page)).toBe('cancelled');
 });
 
-test('the throwing hand toggle works from the keyboard', async ({ page }) => {
+test('the dominant hand toggle works from the keyboard', async ({ page }) => {
   await page.goto('/ui-harness.html?screen=howto&debugkeys=1&toggle=right');
   const left = page.getByRole('button', { name: 'Left' });
   await left.focus();
@@ -249,4 +269,191 @@ test('the seated toggle on calibration reports its state', async ({ page }) => {
   await expect(seat).toHaveText('Sitting: on');
   await expect.poll(() => resolved(page)).toBe('seated:true');
   expect(problems).toEqual([]);
+});
+
+// ---- how-to card fit, pointer cursor and the in-play how-to overlay ----
+
+const REAL_SPORT_IDS = [
+  'climbing',
+  'bowling',
+  'batting',
+  'archery',
+  'javelin',
+  'pitching',
+  'warmup',
+];
+const VIEWPORTS = [
+  { width: 1280, height: 720 },
+  { width: 1366, height: 768 },
+];
+
+for (const viewport of VIEWPORTS) {
+  for (const mode of ['debug', 'camera'] as const) {
+    for (const id of REAL_SPORT_IDS) {
+      test(`how-to card fits ${viewport.width}x${viewport.height}: ${id}, ${mode} input`, async ({
+        page,
+      }) => {
+        await page.setViewportSize(viewport);
+        const input = mode === 'debug' ? '&input=debug' : '&cam=1';
+        await page.goto(`/ui-harness.html?screen=howto&sport=${id}${input}`);
+        await page.waitForTimeout(700);
+        if (id === 'bowling') {
+          await page.screenshot({
+            path: `e2e-ui/screenshots/howto-fit-${mode}-${viewport.width}.png`,
+          });
+        }
+        for (const selector of ['.card-howto', '.card-howto .actions .btn-big']) {
+          const box = (await page.locator(selector).first().boundingBox()) as Box;
+          expect(box).not.toBeNull();
+          expect(box.x).toBeGreaterThanOrEqual(0);
+          expect(box.y).toBeGreaterThanOrEqual(0);
+          expect(box.x + box.width).toBeLessThanOrEqual(viewport.width);
+          expect(box.y + box.height).toBeLessThanOrEqual(viewport.height);
+        }
+        // Nothing is hidden behind a scrollbar: the whole body is on show.
+        const clipped = await page
+          .locator('.howto-body')
+          .evaluate((el) => el.scrollHeight - el.clientHeight);
+        expect(clipped).toBeLessThanOrEqual(1);
+        const back = (await page.getByRole('button', { name: 'Back' }).boundingBox()) as Box;
+        expect(back.y + back.height).toBeLessThanOrEqual(viewport.height);
+      });
+    }
+  }
+}
+
+async function cursorCentre(page: Page): Promise<{ x: number; y: number } | null> {
+  const box = await page.locator('.hand-cursor').boundingBox();
+  if (box === null) return null;
+  return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+}
+
+test('keyboard and mouse: the cursor sits exactly on the pointer on every screen', async ({
+  page,
+}) => {
+  const points = [
+    { x: 333, y: 271 },
+    { x: 1020, y: 90 },
+    { x: 17, y: 700 },
+  ];
+  for (const screen of ['menu', 'howto&sport=bowling', 'results&sport=4']) {
+    await page.goto(`/ui-harness.html?screen=${screen}&input=debug`);
+    await page.waitForTimeout(600);
+    for (const p of points) {
+      await page.mouse.move(p.x, p.y);
+      await page.waitForTimeout(150);
+      const c = await cursorCentre(page);
+      expect(c).not.toBeNull();
+      expect(Math.abs((c?.x ?? 0) - p.x)).toBeLessThanOrEqual(1);
+      expect(Math.abs((c?.y ?? 0) - p.y)).toBeLessThanOrEqual(1);
+    }
+  }
+});
+
+test('keyboard and mouse: hovering never selects, clicking does', async ({ page }) => {
+  await page.goto('/ui-harness.html?screen=menu&input=debug');
+  const card = page.locator('.sport-card[data-sport="archery"]');
+  const box = (await card.boundingBox()) as Box;
+  const cx = box.x + box.width / 2;
+  const cy = box.y + box.height / 2;
+  await page.mouse.move(6, 6);
+  await page.waitForTimeout(1500);
+  await page.mouse.move(cx, cy);
+  await page.waitForTimeout(2500);
+  expect(await resolved(page)).toBeNull();
+  await page.mouse.click(cx, cy);
+  await expect.poll(() => resolved(page)).toBe('archery');
+});
+
+async function isPaused(page: Page): Promise<boolean> {
+  return page.evaluate(() => (window as unknown as { __ui: { paused: boolean } }).__ui.paused);
+}
+
+test('the how-to overlay opens, pauses and resumes during play', async ({ page }) => {
+  const problems = watchErrors(page);
+  await page.goto('/ui-harness.html?screen=playing&sport=bowling&input=debug');
+  await page.waitForTimeout(600);
+  const overlay = page.locator('.howto-overlay');
+  await expect(overlay).toBeHidden();
+  await expect(page.locator('.quit')).toBeVisible();
+
+  // mouse: open, read, Resume
+  await page.getByRole('button', { name: /How to play/ }).click();
+  await expect(overlay).toBeVisible();
+  expect(await isPaused(page)).toBe(true);
+  await expect(overlay).toContainText('Bowling');
+  await expect(overlay).toContainText('Close your fist');
+  await page.screenshot({ path: 'e2e-ui/screenshots/howto-overlay.png' });
+  const box = (await page.locator('.howto-overlay .card').boundingBox()) as Box;
+  expect(box.y).toBeGreaterThanOrEqual(0);
+  expect(box.y + box.height).toBeLessThanOrEqual(720);
+  await page.getByRole('button', { name: 'Resume' }).click();
+  await expect(overlay).toBeHidden();
+  expect(await isPaused(page)).toBe(false);
+
+  // keyboard: H opens, Escape closes (and does not quit)
+  await page.keyboard.press('h');
+  await expect(overlay).toBeVisible();
+  expect(await isPaused(page)).toBe(true);
+  await page.keyboard.press('Escape');
+  await expect(overlay).toBeHidden();
+  expect(await isPaused(page)).toBe(false);
+  expect(await resolved(page)).toBeNull();
+
+  // H again closes it as well
+  await page.keyboard.press('H');
+  await expect(overlay).toBeVisible();
+  await page.keyboard.press('h');
+  await expect(overlay).toBeHidden();
+
+  // Escape with no overlay still quits, and so does the Quit button
+  await page.keyboard.press('Escape');
+  await expect.poll(() => resolved(page)).toBe('quit');
+  expect(problems).toEqual([]);
+});
+
+test('the Quit button still works while the overlay is closed', async ({ page }) => {
+  await page.goto('/ui-harness.html?screen=playing&sport=bowling&input=debug');
+  await page.getByRole('button', { name: 'Quit' }).click();
+  await expect.poll(() => resolved(page)).toBe('quit');
+});
+
+test('the hand cursor reaches How to play by holding over it', async ({ page }) => {
+  await page.goto('/ui-harness.html?screen=playing&sport=bowling&hand=1');
+  await page.waitForTimeout(300);
+  const control = page.getByRole('button', { name: /How to play/ });
+  const box = (await control.boundingBox()) as Box;
+  const cx = box.x + box.width / 2;
+  const cy = box.y + box.height / 2;
+  // away from the control the mitt stays hidden during play
+  await page.mouse.move(400, 400);
+  await page.waitForTimeout(1500);
+  await expect(page.locator('.hand-cursor')).toBeHidden();
+  await page.mouse.move(cx, cy);
+  await page.waitForTimeout(500);
+  await expect(page.locator('.hand-cursor')).toBeVisible();
+  expect(await isPaused(page)).toBe(false);
+  await page.waitForTimeout(1200);
+  await expect(page.locator('.howto-overlay')).toBeVisible();
+  expect(await isPaused(page)).toBe(true);
+  // and the mitt can hold over Resume to close it
+  const resume = (await page.getByRole('button', { name: 'Resume' }).boundingBox()) as Box;
+  await page.mouse.move(6, 6);
+  await page.waitForTimeout(1500);
+  await page.mouse.move(resume.x + resume.width / 2, resume.y + resume.height / 2);
+  await expect.poll(() => isPaused(page), { timeout: 4000 }).toBe(false);
+});
+
+test('the calibration outline changes pose with the step', async ({ page }) => {
+  const arms = async (query: string): Promise<string[]> => {
+    await page.goto(`/ui-harness.html?screen=calibration&sport=1${query}`);
+    await page.waitForTimeout(900);
+    return page
+      .locator('.guide-arm')
+      .evaluateAll((els) => els.map((e) => (e as SVGElement).style.transform));
+  };
+  expect(await arms('&step=position')).toEqual(['rotate(14deg)', 'rotate(-14deg)']);
+  expect(await arms('&step=handedness')).toEqual(['rotate(14deg)', 'rotate(-165deg)']);
+  expect(await arms('&step=hold-still')).toEqual(['rotate(90deg)', 'rotate(-90deg)']);
+  await page.screenshot({ path: 'e2e-ui/screenshots/calibration-tpose.png' });
 });

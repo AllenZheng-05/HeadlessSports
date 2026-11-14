@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { capabilityFailures, measurementFailures, median } from './evaluate';
+import {
+  capabilityFailures,
+  gateVerdict,
+  isMarginal,
+  measurementFailures,
+  median,
+  trackingCapacityHz,
+} from './evaluate';
 import { gateThresholds as t } from './thresholds';
-import type { GateCapabilities, GateMeasurements } from './types';
+import type { GateCapabilities, GateFailure, GateMeasurements, GateReport } from './types';
 
 const goodCaps: GateCapabilities = {
   webgl2: true,
@@ -75,5 +82,112 @@ describe('median', () => {
     const v = new Float64Array([9, 1, 5, 100, 100]);
     expect(median(v, 3)).toBe(5);
     expect(Array.from(v)).toEqual([9, 1, 5, 100, 100]);
+  });
+});
+
+function profile(inferenceMs: number, renderFps: number): GateMeasurements {
+  return {
+    ...goodMeasurements,
+    inferenceMs,
+    trackingHz: trackingCapacityHz(inferenceMs, 30),
+    renderFrameMs: 1000 / renderFps,
+    renderFps,
+  };
+}
+
+describe('robust statistics', () => {
+  it('median ignores outliers such as a warm-up spike or a hitch', () => {
+    const frames = [16.7, 16.6, 16.7, 400, 16.8, 16.7, 16.6, 250, 16.7];
+    expect(median(frames, frames.length)).toBeCloseTo(16.7, 1);
+  });
+  it('a 60 Hz display with dips still reads about 60 fps and passes', () => {
+    const frames = new Float64Array(180).fill(16.67);
+    for (let i = 0; i < 180; i += 10) frames[i] = 33.3; // one dropped frame in ten
+    const fps = 1000 / median(frames, frames.length);
+    expect(fps).toBeGreaterThan(59);
+    expect(measurementFailures(profile(30, fps), t)).toEqual([]);
+    expect(isMarginal(profile(30, fps), t)).toBe(false);
+  });
+  it('a 30 Hz capped display passes (marginal)', () => {
+    const m = profile(30, 1000 / 33.4);
+    expect(measurementFailures(m, t)).toEqual([]);
+    expect(isMarginal(m, t)).toBe(true);
+  });
+  it('tracking capacity comes from inference time, so a slow camera does not cap it', () => {
+    // A 15 fps camera would deliver 15 frames/s, but 25 ms per inference is 40 Hz of capacity.
+    expect(trackingCapacityHz(25, 30)).toBe(30);
+    expect(trackingCapacityHz(50, 30)).toBeCloseTo(20, 5);
+    expect(trackingCapacityHz(0, 30)).toBe(0);
+    expect(measurementFailures(profile(25, 60), t)).toEqual([]);
+  });
+});
+
+describe('new thresholds', () => {
+  it('are permissive', () => {
+    expect(t.minTrackingHz).toBeLessThanOrEqual(15);
+    expect(t.minRenderFps).toBeLessThanOrEqual(30);
+  });
+  it('integrated-GPU laptop profiles pass', () => {
+    for (const [ms, fps] of [
+      [25, 60],
+      [35, 52],
+      [45, 45],
+    ] as const) {
+      expect(measurementFailures(profile(ms, fps), t)).toEqual([]);
+    }
+    expect(isMarginal(profile(25, 60), t)).toBe(false);
+    expect(isMarginal(profile(35, 52), t)).toBe(false);
+  });
+  it('software rendering fails', () => {
+    const m = profile(180, 6);
+    expect(measurementFailures(m, t)).toEqual(['slow-tracking', 'slow-rendering']);
+    expect(measurementFailures(profile(150, 40), t)).toEqual(['slow-tracking']);
+  });
+  it('marginal band: passes but flagged', () => {
+    const slowTrack = profile(60, 60); // about 16.7 Hz
+    expect(measurementFailures(slowTrack, t)).toEqual([]);
+    expect(isMarginal(slowTrack, t)).toBe(true);
+    expect(isMarginal(profile(25, 35), t)).toBe(true);
+    expect(isMarginal(profile(25, 60), t)).toBe(false);
+    expect(isMarginal(profile(60, 60), { ...t, marginalTrackingHz: undefined })).toBe(false);
+  });
+});
+
+describe('gateVerdict', () => {
+  const report = (failures: GateFailure[]): GateReport => ({
+    passed: failures.length === 0,
+    skipped: false,
+    failures,
+    capabilities: goodCaps,
+    measurements: null,
+    thresholds: t,
+    error: null,
+  });
+
+  it('passes silently, including a marginal pass', () => {
+    expect(gateVerdict(report([]), true)).toBe('ok');
+    expect(gateVerdict({ ...report([]), marginal: true }, true)).toBe('ok');
+  });
+  it('slow, small, touch and benchmark errors are warnings, not blocks', () => {
+    for (const f of [
+      'slow-tracking',
+      'slow-rendering',
+      'small-viewport',
+      'mobile',
+      'benchmark-error',
+    ] as const) {
+      expect(gateVerdict(report([f]), true)).toBe('warn');
+    }
+    expect(gateVerdict(report(['slow-tracking', 'slow-rendering']), true)).toBe('warn');
+  });
+  it('only a missing WebGL 2 or worker support blocks', () => {
+    expect(gateVerdict(report(['no-webgl2']), true)).toBe('blocked');
+    expect(gateVerdict(report(['no-workers']), true)).toBe('blocked');
+    expect(gateVerdict(report(['slow-tracking', 'no-workers']), true)).toBe('blocked');
+  });
+  it('a missing camera API warns when a camera is wanted and is ignored when not', () => {
+    expect(gateVerdict(report(['no-camera-api']), true)).toBe('warn');
+    expect(gateVerdict(report(['no-camera-api']), false)).toBe('ok');
+    expect(gateVerdict(report(['no-camera-api', 'slow-rendering']), false)).toBe('warn');
   });
 });

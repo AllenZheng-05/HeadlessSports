@@ -12,7 +12,7 @@ The look is Wii Sports-like: very simple low-poly 3D, soft colours, simple recre
 
 - **Browser only, static site.** No game server. All computer vision runs on the player's device; camera video never leaves the browser.
 - **Desktop and laptop only.** Do not build mobile layouts, touch controls, or low-power fallbacks.
-- **A hard gate, not graceful degradation.** If a device is mobile or too slow, show a clear "this game needs a more powerful computer" screen. Do not lower quality to accommodate weak devices. There is one fixed quality configuration for every machine that passes the gate. (The research suggested adaptive quality tiers, a 15 Hz low-end mode and mobile support; Allen has rejected all three.)
+- **A warning gate, not graceful degradation.** If a device is mobile, small or too slow, show a friendly "this device may struggle" warning and let the player continue with "Play anyway". Do not lower quality to accommodate weak devices. There is one fixed quality configuration for every machine. Only a missing capability the game cannot start without (WebGL 2, Web Workers) is a terminal screen. (The research suggested adaptive quality tiers, a 15 Hz low-end mode and mobile support; Allen has rejected all three.)
 - **Smoothness matters a lot.** A game doing real-time vision and 3D at once is heavy for a browser, so treat the performance requirements below as requirements, not polish.
 - **Easy to add sports.** Allen expects to add many more sports over time. A new sport should be a new module that reuses shared tracking, gesture recognition, avatar and UI code.
 
@@ -101,10 +101,10 @@ Runs once at load, before the menu:
 
 1. Reject touch-first or small-viewport devices (phones, tablets) immediately.
 2. Check capabilities: WebGL2, camera access via `getUserMedia`, Web Workers, and enough camera resolution.
-3. Run a roughly two-second benchmark: warm-up inferences on a synthetic frame while rendering a representative scene, measuring median inference time and render frame time **together**, since they contend for the GPU.
-4. Pass, then one fixed configuration. Fail, then a friendly full-screen message explaining the game needs a more powerful desktop or laptop, with the measured numbers available behind a "details" toggle.
+3. Run a roughly two-second benchmark: warm-up inferences on a synthetic frame while rendering a representative scene, measuring median inference time and median render frame time **together**, since they contend for the GPU.
+4. Pass, then one fixed configuration. Fail, then a warning screen ("This device may struggle", "Play anyway") with the measured numbers behind a "details" toggle; the player may continue and boot proceeds as on a pass. The warning is shown once per page session (`sessionStorage`), never for a merely `marginal` pass, and a missing camera API is a warning that leads into the camera-error / keyboard-and-mouse path. Only a missing WebGL 2 or Web Worker support stops the game with a terminal screen that says what is missing. The decision is `gateVerdict` in `src/core/gate/evaluate.ts`.
 
-Provisional pass thresholds, to be tuned from Allen's measurements: tracking sustains at least 25 Hz and rendering holds at least 50 fps concurrently. Provide a `?skipGate=1` query flag for development and for the headless checks, where software rendering would otherwise fail the gate.
+Pass thresholds are deliberately permissive, since the gate only warns about machines that struggle to play (software rendering, single-digit tracking). Tracking is judged by capacity, the median inference time (at most 66 ms, so 15 Hz or better), not by achieved rate, because many webcams deliver only 15 to 30 fps. Rendering is judged by the median frame time, at least 27 fps, so a vsync-capped or 30 Hz battery-saver display passes. The benchmark discards 10 warm-up inferences and the first 15 render frames, then samples for 3 s. A device below 20 Hz tracking or 40 fps rendering still passes, but `GateReport.marginal` is set. Thresholds live in `src/core/gate/thresholds.ts`. Provide a `?skipGate=1` query flag for development and for the headless checks, where software rendering would otherwise fail the gate.
 
 ## Scores
 

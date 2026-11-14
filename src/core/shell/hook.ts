@@ -5,6 +5,7 @@ import type { RoundResult } from '../sport';
 export type GamePhase =
   | 'boot'
   | 'gate'
+  | 'gate-warning'
   | 'gate-fail'
   | 'title'
   | 'camera'

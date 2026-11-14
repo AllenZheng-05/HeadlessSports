@@ -106,3 +106,11 @@ export const FAKE_GATE_REPORT: GateReport = {
   },
   error: null,
 };
+
+/** A device that cannot start the game at all: no WebGL 2. */
+export const FAKE_BLOCKED_REPORT: GateReport = {
+  ...FAKE_GATE_REPORT,
+  failures: ['no-webgl2'],
+  capabilities: { ...FAKE_GATE_REPORT.capabilities, webgl2: false },
+  measurements: null,
+};
