@@ -9,6 +9,7 @@ export default defineConfig({
         main: fileURLToPath(new URL('./index.html', import.meta.url)),
         debug: fileURLToPath(new URL('./debug.html', import.meta.url)),
         trackingHarness: fileURLToPath(new URL('./tracking-harness.html', import.meta.url)),
+        uiHarness: fileURLToPath(new URL('./ui-harness.html', import.meta.url)),
       },
     },
   },
