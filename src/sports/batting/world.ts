@@ -112,20 +112,24 @@ export function buildWorld(scene: Scene, cfg: BattingConfig, batterX: number): W
   shape.closePath();
   parts.push(paintGeometry(flat(new ShapeGeometry(shape), 0, 0.03, plateZ + 0.22), PALETTE.chalk));
 
-  // The batter's box, drawn as one chalk rectangle around the plate and the batter's feet.
-  const bx0 = batterX - 0.6;
-  const bx1 = batterX + 0.6;
-  const bz0 = plateZ - 0.45;
-  const bz1 = 0.95;
+  // The batter's boxes, one each side of the plate: 1.2 m wide and 1.8 m long, centred on the plate,
+  // the batter's own side being the one the batter stands in.
+  const boxZ = plateZ + 0.22;
+  const bz0 = boxZ - 0.9;
+  const bz1 = boxZ + 0.9;
   const lw = 0.06;
-  const bw = bx1 - bx0;
   const bd = bz1 - bz0;
-  const cx = (bx0 + bx1) / 2;
   const cz = (bz0 + bz1) / 2;
-  parts.push(box(bw, 0.02, lw, cx, CHALK_Y, bz0, 0, PALETTE.chalk));
-  parts.push(box(bw, 0.02, lw, cx, CHALK_Y, bz1, 0, PALETTE.chalk));
-  parts.push(box(lw, 0.02, bd, bx0, CHALK_Y, cz, 0, PALETTE.chalk));
-  parts.push(box(lw, 0.02, bd, bx1, CHALK_Y, cz, 0, PALETTE.chalk));
+  for (const bxc of [batterX, -batterX]) {
+    const bx0 = bxc - 0.6;
+    const bx1 = bxc + 0.6;
+    const bw = bx1 - bx0;
+    const cx = (bx0 + bx1) / 2;
+    parts.push(box(bw, 0.02, lw, cx, CHALK_Y, bz0, 0, PALETTE.chalk));
+    parts.push(box(bw, 0.02, lw, cx, CHALK_Y, bz1, 0, PALETTE.chalk));
+    parts.push(box(lw, 0.02, bd, bx0, CHALK_Y, cz, 0, PALETTE.chalk));
+    parts.push(box(lw, 0.02, bd, bx1, CHALK_Y, cz, 0, PALETTE.chalk));
+  }
 
   // Mound with the pitcher's rubber.
   const moundGeo = new CylinderGeometry(1.5, 2.4, 0.2, 28);

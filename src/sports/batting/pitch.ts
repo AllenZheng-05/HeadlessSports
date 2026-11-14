@@ -9,6 +9,8 @@ export interface Pitch {
   difficulty: Difficulty;
   /** 0 low, 1 middle, 2 high. */
   band: number;
+  /** The pitcher comes set (hands together, holding still). */
+  setStartMs: number;
   windupStartMs: number;
   releaseMs: number;
   /** When the ball crosses the front of the plate. Known from the moment the pitch is planned. */
@@ -54,13 +56,15 @@ export function bandHeight(band: number, cfg: BattingConfig): number {
 /**
  * Plan a pitch whose wind-up starts at `windupStartMs`. The release and arrival times follow
  * immediately, so the arrival is known before the ball leaves the pitcher's hand.
- * Uses two draws from `random`: the height band and the lateral wobble.
+ * `setStartMs` (default: the wind-up start) is when the pitcher comes set. Uses two draws from
+ * `random`: the height band and the lateral wobble.
  */
 export function planPitch(
   index: number,
   windupStartMs: number,
   random: () => number,
   cfg: BattingConfig,
+  setStartMs: number = windupStartMs,
 ): Pitch {
   const difficulty = difficultyFor(index, cfg);
   const flightMs = flightMsFor(difficulty, cfg);
@@ -71,6 +75,7 @@ export function planPitch(
     index,
     difficulty,
     band,
+    setStartMs,
     windupStartMs,
     releaseMs,
     arrivalMs: releaseMs + flightMs,

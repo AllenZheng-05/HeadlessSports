@@ -41,6 +41,11 @@ export interface RoundSummary {
 
 /** Callbacks into the sport. All optional, all fired from `update` or the swing handlers. */
 export interface RoundHooks {
+  /** The reset begins: the result has had its beat, the batter settles, "Get ready". `index` is the coming pitch (1-based). */
+  reset?(index: number, total: number): void;
+  /** The pitcher comes set for this pitch (the pitch is planned; its arrival is already known). */
+  set?(pitch: Pitch): void;
+  /** The wind-up begins. */
   windup?(pitch: Pitch): void;
   release?(pitch: Pitch): void;
   /** A swing was accepted for the current pitch (before it is judged). */
@@ -61,6 +66,8 @@ export interface RoundHooks {
 }
 
 export type RoundPhase = 'idle' | 'pitch' | 'ending' | 'done';
+/** Where the round is in the pitch cycle. */
+export type RoundStage = 'result' | 'reset' | 'set' | 'windup' | 'flight' | 'ending' | 'done';
 
 const FOUL_EXIT = 24;
 const FOUL_LAUNCH = 38;
@@ -110,7 +117,13 @@ export class BattingRound {
   private readonly hand: () => Side;
   private readonly hooks: RoundHooks;
   private readonly realtime: boolean;
+  /** Game ms the pitcher comes set for the next pitch (valid while idle). */
   private nextPitchAtMs: number;
+  /** Game ms the reset (batter settles, "Get ready") begins. */
+  private resetAtMs: number;
+  private resetFired = false;
+  private windupFired = false;
+  private readonly gapScale: number;
   private lastClock = -1;
   // Swing handling.
   private swing: SwingInput | null = null;
@@ -139,12 +152,26 @@ export class BattingRound {
     this.hand = options.handedness;
     this.hooks = options.hooks ?? {};
     this.realtime = options.realtime ?? false;
-    this.nextPitchAtMs = options.startMs + options.cfg.firstPitchDelayMs;
+    this.gapScale = options.short ? options.cfg.shortGapScale : 1;
+    this.resetAtMs = options.startMs;
+    this.nextPitchAtMs = options.startMs + options.cfg.firstPitchDelayMs * this.gapScale;
   }
 
-  /** Game ms the next wind-up starts (valid while idle). */
+  /** Game ms the pitcher comes set for the next pitch (valid while idle). */
   get nextWindupMs(): number {
     return this.nextPitchAtMs;
+  }
+
+  /** The part of the pitch cycle at game time `clock`. */
+  stage(clock: number): RoundStage {
+    if (this.phase === 'idle') return clock >= this.resetAtMs ? 'reset' : 'result';
+    if (this.phase === 'pitch') {
+      const p = this.pitch!;
+      if (clock < p.windupStartMs) return 'set';
+      if (clock < p.releaseMs) return 'windup';
+      return this.resolved ? 'result' : 'flight';
+    }
+    return this.phase;
   }
 
   /** Advance to game time `clock`. Allocation-free except when an event fires. */
@@ -155,11 +182,19 @@ export class BattingRound {
     this.lastClock = clock;
     const cfg = this.cfg;
     if (this.phase === 'idle') {
+      if (!this.resetFired && clock >= this.resetAtMs) {
+        this.resetFired = true;
+        this.hooks.reset?.(this.started + 1, this.total);
+      }
       if (clock >= this.nextPitchAtMs) this.startPitch();
       else return;
     }
     if (this.phase === 'pitch') {
       const p = this.pitch!;
+      if (!this.windupFired && clock >= p.windupStartMs) {
+        this.windupFired = true;
+        this.hooks.windup?.(p);
+      }
       if (!this.released && clock >= p.releaseMs) {
         this.released = true;
         this.hooks.release?.(p);
@@ -215,8 +250,19 @@ export class BattingRound {
 
   private startPitch(): void {
     this.started++;
-    const p = planPitch(this.started, this.nextPitchAtMs, this.random, this.cfg);
+    const cfg = this.cfg;
+    // The set is held a little longer or shorter each time, so the pitcher is not a metronome.
+    const jitter = (this.random() * 2 - 1) * cfg.setJitterMs;
+    const setMs = Math.max(100, (cfg.setMs + jitter) * this.gapScale);
+    const p = planPitch(
+      this.started,
+      this.nextPitchAtMs + setMs,
+      this.random,
+      cfg,
+      this.nextPitchAtMs,
+    );
     this.pitch = p;
+    this.windupFired = false;
     this.phase = 'pitch';
     this.released = false;
     this.resolved = false;
@@ -226,7 +272,7 @@ export class BattingRound {
     this.swingT = -1;
     this.swingPending = false;
     this.pendingResult = null;
-    this.hooks.windup?.(p);
+    this.hooks.set?.(p);
   }
 
   private judgeNow(peakSpeed: number | null, clock: number): void {
@@ -286,7 +332,8 @@ export class BattingRound {
     this.resolved = true;
     this.result = result;
     s.pitches++;
-    let pause = cfg.betweenPitchesMs;
+    const scale = this.gapScale;
+    let pause = cfg.resultBeatMs * scale;
     if (result.kind === 'hit') {
       s.hits++;
       s.score += result.distance;
@@ -296,31 +343,35 @@ export class BattingRound {
         s.score += cfg.homerBonus;
       }
       const air = result.trajectory === null ? 0 : result.trajectory.airS * 1000;
-      pause = Math.max(pause, air + 400);
+      pause = Math.max(pause, (air + 400) * scale);
     } else if (result.kind === 'foul') {
       s.fouls++;
     } else {
       s.misses++;
     }
-    pause = Math.min(pause, cfg.maxBetweenPitchesMs);
+    pause = Math.min(pause, cfg.maxResultBeatMs * scale);
     this.hooks.resolved?.(result, s);
     if (this.started >= this.total) {
       this.phase = 'ending';
       this.endAtMs = clock + cfg.endPauseMs;
     } else {
       this.phase = 'idle';
-      this.nextPitchAtMs = clock + pause;
+      this.resetAtMs = clock + pause;
+      this.resetFired = false;
+      this.nextPitchAtMs = this.resetAtMs + cfg.resetMs * scale;
     }
   }
 
   /** The game clock jumped (camera problem pause): move the whole timeline with it. */
   private shift(by: number): void {
     this.nextPitchAtMs += by;
+    this.resetAtMs += by;
     this.swingArrivedClock += by;
     this.applyAtMs += by;
     this.endAtMs += by;
     const p = this.pitch;
     if (p !== null && !this.resolved) {
+      p.setStartMs += by;
       p.windupStartMs += by;
       p.releaseMs += by;
       p.arrivalMs += by;

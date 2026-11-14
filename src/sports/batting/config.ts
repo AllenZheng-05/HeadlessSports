@@ -9,12 +9,23 @@ export const battingConfig = {
   pitches: 10,
   /** Pitches in a ?short=1 round. */
   shortPitches: 3,
-  /** Delay before the first wind-up begins. */
-  firstPitchDelayMs: 1500,
-  /** Pause after a pitch resolves before the next wind-up begins. */
-  betweenPitchesMs: 1600,
-  /** Longest pause after a long fly (the player gets to watch it land). */
-  maxBetweenPitchesMs: 3500,
+  // Pitch rhythm. After a result: the outcome beat, then the reset (batter settles, "Get ready"),
+  // then the pitcher comes set and holds, then the wind-up and the release. About 3.8 s from a
+  // result to the next release (a long fly stretches the beat), a little longer before the first.
+  /** From the start of the round to the pitcher coming set for the first pitch ("Get ready" shows). */
+  firstPitchDelayMs: 3000,
+  /** The result stays on screen this long before the reset begins. */
+  resultBeatMs: 1400,
+  /** Longest result beat after a long fly (the player gets to watch it land). */
+  maxResultBeatMs: 3000,
+  /** The batter settles into the stance and the "Get ready" cue shows. */
+  resetMs: 900,
+  /** The pitcher stands set, hands together, before the wind-up. */
+  setMs: 600,
+  /** The set is held a seeded random +- this much longer or shorter, so it is not metronomic. */
+  setJitterMs: 250,
+  /** ?short=1 rounds multiply the first delay, result beat, reset and set by this. */
+  shortGapScale: 0.4,
   /** Pause after the last pitch resolves, before the celebrate or slump clip. */
   endPauseMs: 1200,
   /** The clip plays this long before ctx.finish is called. */
@@ -23,6 +34,7 @@ export const battingConfig = {
   pauseGapMs: 250,
 
   // ---- pitching ----
+  /** From the end of the set to the release. */
   windupMs: 900,
   /** Ball flight time, release to plate. */
   flightEasyMs: 900,
@@ -106,14 +118,31 @@ export const battingConfig = {
   homerBonus: 20,
 
   // ---- camera ----
-  /** The batter stands beside the plate, on the side of the hands, so the ball is not hidden behind the body. */
-  batterOffset: 0.5,
+  /**
+   * The batter stands side-on in the box beside the plate: a right-handed batter on the screen-left
+   * side (the camera is behind the batter), a left-handed batter on the screen-right side. Distance
+   * from the plate's centre line to the batter's chest, so the bat's sweet spot reaches the plate.
+   */
+  batterOffset: 0.9,
   cameraBack: 3.0,
   cameraHeight: 1.75,
+  /** The camera sits this far toward the plate side of the batter (opposite to the batter). */
   cameraSide: 0.3,
   /** Hit balls that travel further than this are tracked by the camera. */
   cameraFollowFrom: 30,
   cameraFollowWeight: 0.8,
+
+  // ---- batter's stance and swing (visual only) ----
+  /** The swing pose starts this long before contact and the bat is back in the stance this long after. */
+  swingLeadMs: 230,
+  swingFollowMs: 600,
+  swingReturnMs: 300,
+  /** How fast the hands and bat follow the keyed pose (1/s). */
+  poseRate: 28,
+  /** Stance waggle of the bat while the pitcher is set, radians-ish. */
+  waggle: 0.07,
+  /** Time to turn to face the camera for the end-of-round clip (1/s). */
+  turnRate: 7,
 
   // ---- bot ----
   /** Measured: SwingStarted.t minus the start of the twoHandSwing steps (ms). */
@@ -139,6 +168,13 @@ export const battingRanges: Record<string, TunableRange> = {
   foulMs: { min: 60, max: 450, step: 5 },
   lateWindowMs: { min: 0, max: 500, step: 10 },
   windupMs: { min: 300, max: 2000, step: 50 },
+  firstPitchDelayMs: { min: 500, max: 6000, step: 100 },
+  resultBeatMs: { min: 400, max: 4000, step: 100 },
+  maxResultBeatMs: { min: 800, max: 6000, step: 100 },
+  resetMs: { min: 0, max: 3000, step: 100 },
+  setMs: { min: 200, max: 2000, step: 50 },
+  setJitterMs: { min: 0, max: 600, step: 25 },
+  batterOffset: { min: 0.5, max: 1.3, step: 0.05 },
   flightEasyMs: { min: 400, max: 1500, step: 20 },
   flightMediumMs: { min: 400, max: 1500, step: 20 },
   flightHardMs: { min: 400, max: 1500, step: 20 },

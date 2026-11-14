@@ -1,4 +1,3 @@
-import { mirrorUpperBody } from '../../core/avatarDrive';
 import type { Sport, SportBot, SportContext, SportFactory } from '../../core/sport';
 import type { Side } from '../../input/types';
 import { AvatarAnimator } from '../../render/avatar/AvatarAnimator';
@@ -18,11 +17,13 @@ import {
 import { createBattingBot } from './bot';
 import { battingConfig, battingRanges } from './config';
 import { hitWorldPosition } from './flight';
+import { batHeightM } from './judge';
 import type { Judgement, SwingInput } from './judge';
 import { ballPosition } from './pitch';
 import type { Pitch, Vec3 } from './pitch';
 import { BattingRound } from './round';
 import type { PitchResult, RoundSummary } from './round';
+import { BatterPose, batterX, batterYaw, batterZ } from './stance';
 import { buildWorld } from './world';
 
 /** The pitcher's shirt: a teal from the sky and turf family, clearly not the batter's coral. */
@@ -34,9 +35,6 @@ const BALL_COLOR = 0xfff0a8;
 const THROW_CLIP_MS = 550;
 const THROW_RELEASE_AT = 0.78;
 const THROW_LEAD_MS = THROW_CLIP_MS * THROW_RELEASE_AT;
-/** The swing clip is 500 ms long and the hands pass the middle of the body at about 65%. */
-const SWING_CLIP_S = 0.5;
-const SWING_CONTACT_AT = 0.65;
 const MAX_QUEUED = 8;
 const UP = new Vector3(0, 1, 0);
 
@@ -57,6 +55,10 @@ export interface BattingProbe {
   readonly ball: { visible: boolean; x: number; y: number; z: number };
   readonly pitchIndex: number;
   readonly phase: string;
+  /** Where in the pitch cycle: result, reset, set, windup, flight (or ending, done, waiting). */
+  readonly stage: string;
+  /** Batter placement: world x and z of the feet, and the stance yaw of the rig (rad). */
+  readonly batter: { x: number; z: number; yaw: number };
   /** Pitches resolved so far, in order. */
   readonly results: readonly {
     index: number;
@@ -80,8 +82,16 @@ export const createBatting: SportFactory = (ctx: SportContext): Sport & BattingP
   const animator = new AvatarAnimator(ctx.avatar);
 
   // ---- props ----
-  ctx.avatar.root.position.x = sg * cfg.batterOffset;
-  const world = buildWorld(scene, cfg, sg * cfg.batterOffset);
+  // Side-on in the box: a right-hander on the screen-left of the plate, chest toward it.
+  const hand = handedness();
+  const standX = batterX(hand, cfg);
+  const stanceYaw = batterYaw(hand);
+  ctx.avatar.root.position.set(standX, 0, batterZ(cfg));
+  ctx.avatar.root.rotation.y = stanceYaw;
+  ctx.avatar.setMittCurl('left', 1);
+  ctx.avatar.setMittCurl('right', 1);
+  const pose = new BatterPose(cfg, hand);
+  const world = buildWorld(scene, cfg, standX);
   ctx.stage.ground.visible = false;
 
   const ballGeo = new SphereGeometry(cfg.ballRadius, 16, 12);
@@ -129,7 +139,7 @@ export const createBatting: SportFactory = (ctx: SportContext): Sport & BattingP
   scene.add(pitcherShadow.mesh);
 
   // ---- camera ----
-  const camBase = new Vector3(-cfg.cameraSide * sg, cfg.cameraHeight, cfg.cameraBack);
+  const camBase = new Vector3(cfg.cameraSide * sg, cfg.cameraHeight, cfg.cameraBack);
   const lookBase = new Vector3(0, 0, -6);
   const lookNow = new Vector3();
   camera.position.copy(camBase);
@@ -142,6 +152,9 @@ export const createBatting: SportFactory = (ctx: SportContext): Sport & BattingP
   let clock = 0;
   let pitcherClipPlayed = false;
   let batContactMs = -1e9;
+  let batHeight = 1;
+  let over = false;
+  let waggle = 0;
   let celebrateAtMs = -1;
   let shownScore = -1;
   const results: BattingProbe['results'][number][] = [];
@@ -154,7 +167,6 @@ export const createBatting: SportFactory = (ctx: SportContext): Sport & BattingP
   };
   const tmp: Vec3 = { x: 0, y: 0, z: 0 };
   const vA = new Vector3();
-  const vB = new Vector3();
   const dir = new Vector3();
 
   // ---- input: queue the events, apply them in fixedUpdate with the game clock ----
@@ -182,11 +194,22 @@ export const createBatting: SportFactory = (ctx: SportContext): Sport & BattingP
     return `${abs} ms ${j.timingError < 0 ? 'early' : 'late'}`;
   };
 
-  const onWindup = (p: Pitch): void => {
-    pitcherClipPlayed = false;
-    ctx.audio.play('tick');
-    ctx.hud.setHint(`Pitch ${p.index} of ${round?.total ?? cfg.pitches}`);
+  const onReset = (index: number, total: number): void => {
     ctx.hud.setBanner(null);
+    ctx.hud.setHint(
+      index === 1
+        ? 'Get ready. Hold both hands together like a bat.'
+        : `Get ready. Pitch ${index} of ${total}`,
+    );
+  };
+
+  const onSet = (p: Pitch): void => {
+    pitcherClipPlayed = false;
+    ctx.hud.setHint(`Pitch ${p.index} of ${round?.total ?? cfg.pitches}`);
+  };
+
+  const onWindup = (_p: Pitch): void => {
+    ctx.audio.play('tick');
   };
 
   const onRelease = (p: Pitch): void => {
@@ -201,23 +224,17 @@ export const createBatting: SportFactory = (ctx: SportContext): Sport & BattingP
     }
   };
 
-  const onSwing = (_p: Pitch, _swing: SwingInput): void => {
+  const onSwing = (_p: Pitch, swing: SwingInput): void => {
     ctx.audio.play('whoosh');
+    // The batter starts the swing now: the contact time and bat height are known from the event.
+    batContactMs = swing.t + cfg.batTravelMs;
+    batHeight = batHeightM(swing.height, cfg);
   };
 
   const onJudged = (_p: Pitch, j: Judgement): void => {
     batContactMs = j.contactMs;
+    batHeight = j.batHeight;
     ctx.hud.setSubScore(timingText(j));
-    // The avatar completes a clean swing even though the tracker saw only its start. The clip is
-    // started already part way through, so the hands cross the middle at the moment of contact.
-    animator.play('swing', { side: handedness(), strength: 0.55 + 0.45 * j.power });
-    let skip = (clock - (j.contactMs - SWING_CONTACT_AT * SWING_CLIP_S * 1000)) / 1000;
-    skip = Math.min(0.3, Math.max(0, skip));
-    while (skip > 1e-4) {
-      const step = Math.min(skip, 0.1);
-      animator.update(step);
-      skip -= step;
-    }
   };
 
   const onResolved = (r: PitchResult, s: RoundSummary): void => {
@@ -256,6 +273,11 @@ export const createBatting: SportFactory = (ctx: SportContext): Sport & BattingP
 
   const onEnding = (s: RoundSummary): void => {
     const good = s.hits * 2 >= s.pitches;
+    // Turn to face the camera for the celebration, hands open, bat down.
+    over = true;
+    bat.visible = false;
+    ctx.avatar.setMittCurl('left', 0);
+    ctx.avatar.setMittCurl('right', 0);
     animator.play(good ? 'celebrate' : 'slump');
     celebrateAtMs = -1;
   };
@@ -288,6 +310,8 @@ export const createBatting: SportFactory = (ctx: SportContext): Sport & BattingP
       handedness,
       realtime,
       hooks: {
+        reset: onReset,
+        set: onSet,
         windup: onWindup,
         release: onRelease,
         swing: onSwing,
@@ -305,48 +329,34 @@ export const createBatting: SportFactory = (ctx: SportContext): Sport & BattingP
   // ---- per-frame visuals (no allocation) ----
   const updatePitcher = (nowMs: number): void => {
     const p = round === null ? null : round.pitch;
-    if (p !== null && !pitcherClipPlayed) {
-      const tw = nowMs - p.windupStartMs;
-      if (nowMs >= p.releaseMs - THROW_LEAD_MS) {
-        pitcherClipPlayed = true;
-        pitcherAnimator.play('throw-over', { side: 'right' });
-      } else if (tw >= 0) {
-        // Wind-up: the throwing arm rises and cocks back behind the shoulder.
-        const u = smooth(tw / Math.max(1, cfg.windupMs - THROW_LEAD_MS));
-        pitcher.setArmTarget(
-          'right',
-          0.28 + 0.06 * u,
-          0.8 + 0.76 * u,
-          0.0 + 0.32 * u,
-          0.5 + 0.1 * u,
-          1.0 + 0.4 * u,
-          0.1 + 0.2 * u,
-        );
-      }
+    if (p === null || pitcherClipPlayed || nowMs < p.setStartMs) return;
+    if (nowMs >= p.releaseMs - THROW_LEAD_MS) {
+      pitcherClipPlayed = true;
+      pitcherAnimator.play('throw-over', { side: 'right' });
+      return;
     }
+    // Set: hands together at the chest, holding still (blended in from the rest pose).
+    const enter = smooth((nowMs - p.setStartMs) / 200);
+    // Wind-up: the glove arm reaches out, the throwing arm cocks back behind the shoulder and the
+    // front leg lifts.
+    const u = smooth((nowMs - p.windupStartMs) / Math.max(1, cfg.windupMs - THROW_LEAD_MS));
+    const rx = 0.28 + (0.06 - 0.28) * enter + (0.34 - 0.06) * u;
+    const ry = 0.8 + (1.12 - 0.8) * enter + (1.56 - 1.12) * u;
+    const rz = -0.3 * enter + (0.32 + 0.3) * u;
+    pitcher.setArmTarget('right', rx, ry, rz, 0.5 + 0.1 * u, 1.0 + 0.4 * u, 0.1 + 0.2 * u);
+    const lx = -0.28 + (-0.06 + 0.28) * enter + (-0.25 + 0.06) * u;
+    const ly = 0.8 + (1.12 - 0.8) * enter + (1.3 - 1.12) * u;
+    const lz = -0.3 * enter + (-0.5 + 0.3) * u;
+    pitcher.setArmTarget('left', lx, ly, lz, -0.3, 1.0, -0.1);
+    const lift = smooth(u / 0.5) * (1 - 0.8 * smooth((u - 0.7) / 0.3));
+    pitcher.setLeg('left', 1.0 * lift, 1.3 * lift);
   };
 
-  const updateBat = (nowMs: number): void => {
-    ctx.avatar.mitts.left.getWorldPosition(vA);
-    ctx.avatar.mitts.right.getWorldPosition(vB);
-    bat.position.set((vA.x + vB.x) / 2, (vA.y + vB.y) / 2, (vA.z + vB.z) / 2);
-    // Direction: cocked up and back over the rear shoulder, level and forward at contact,
-    // then across the body. Keyed on the contact time, so the bat meets the ball when the game says.
-    const tc = nowMs - batContactMs;
-    const s1 = smooth((tc + 230) / 230);
-    const s2 = smooth(tc / 260);
-    const s3 = smooth((tc - 600) / 300);
-    // k0 cocked (0.35 sg, 0.8, 0.5); k1 contact (-0.5 sg, 0.1, -0.86); k2 follow (-0.95 sg, 0.35, -0.15)
-    const a = (1 - s1) * (1 - s3) + s3;
-    const b = s1 * (1 - s2) * (1 - s3);
-    const c = s2 * (1 - s3);
-    dir.set(
-      sg * (0.35 * a - 0.5 * b - 0.95 * c),
-      0.8 * a + 0.1 * b + 0.35 * c,
-      0.5 * a - 0.86 * b - 0.15 * c,
-    );
-    if (dir.lengthSq() < 1e-6) dir.set(0, 1, 0);
-    dir.normalize();
+  const updateBat = (): void => {
+    if (over) return;
+    const b = pose.bat;
+    bat.position.set(b.x, b.y, b.z);
+    dir.set(b.dx, b.dy, b.dz);
     bat.quaternion.setFromUnitVectors(UP, dir);
   };
 
@@ -367,7 +377,7 @@ export const createBatting: SportFactory = (ctx: SportContext): Sport & BattingP
         hitDist = Math.hypot(tmp.x, tmp.z - cfg.plateZ);
         if (res.trajectory.total < cfg.cameraFollowFrom) hitDist = 0;
       } else if (p !== null && r.phase !== 'ending' && r.phase !== 'done') {
-        if (nowMs >= p.windupStartMs && nowMs < p.releaseMs) {
+        if (nowMs >= p.setStartMs && nowMs < p.releaseMs) {
           pitcher.mitts.right.getWorldPosition(vA);
           ball.position.set(vA.x, vA.y + 0.02, vA.z);
           visible = true;
@@ -446,18 +456,29 @@ export const createBatting: SportFactory = (ctx: SportContext): Sport & BattingP
 
     frame(dt: number, nowMs: number): void {
       clock = nowMs;
-      // Fast phase: extrapolate the mirrored pose a little to hide some of the tracker's latency.
-      if (!animator.busy) mirrorUpperBody(ctx.avatar, ctx.input.state, nowMs, 1.5);
       if (celebrateAtMs > 0 && nowMs >= celebrateAtMs) {
         celebrateAtMs = -1;
         animator.play('celebrate');
       }
+      // A celebration turns the batter to face the camera; the stance turns back to the plate.
+      const yawTarget = over || animator.current === 'celebrate' ? 0 : stanceYaw;
+      const root = ctx.avatar.root;
+      root.rotation.y +=
+        (yawTarget - root.rotation.y) * (1 - Math.exp(-Math.min(0.1, dt) * cfg.turnRate));
       animator.update(dt);
+      // The player's mirrored pose is not used here: the batter is side-on, so the arms are placed
+      // from the swing's timing (see stance.ts).
+      if (!animator.busy && !over) {
+        const st = round === null ? 'result' : round.stage(nowMs);
+        const want = st === 'set' || st === 'windup' ? 1 : 0;
+        waggle += (want - waggle) * (1 - Math.exp(-Math.min(0.1, dt) * 6));
+        pose.update(ctx.avatar, nowMs, dt, batContactMs, batHeight, waggle);
+      }
       updatePitcher(nowMs);
       pitcherAnimator.update(dt);
       pitcher.update(dt);
       pitcherShadow.follow(pitcher.root, 0.2);
-      updateBat(nowMs);
+      updateBat();
       updateBall(nowMs, dt);
       updateRing(nowMs);
     },
@@ -519,6 +540,13 @@ export const createBatting: SportFactory = (ctx: SportContext): Sport & BattingP
     },
     get phase(): string {
       return round === null ? 'waiting' : round.phase;
+    },
+    get stage(): string {
+      return round === null ? 'waiting' : round.stage(clock);
+    },
+    get batter(): { x: number; z: number; yaw: number } {
+      const p = ctx.avatar.root.position;
+      return { x: p.x, z: p.z, yaw: stanceYaw };
     },
     results,
   };

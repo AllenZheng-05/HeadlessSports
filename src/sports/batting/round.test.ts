@@ -145,8 +145,8 @@ describe('round structure', () => {
     const rig = makeRound(false);
     playAll(rig, 0);
     for (let i = 1; i < rig.results.length; i++) {
-      const gap = rig.results[i]!.pitch.windupStartMs - rig.results[i - 1]!.contactMs;
-      expect(gap).toBeLessThanOrEqual(cfg.maxBetweenPitchesMs + 400);
+      const gap = rig.results[i]!.pitch.setStartMs - rig.results[i - 1]!.contactMs;
+      expect(gap).toBeLessThanOrEqual(cfg.maxResultBeatMs + cfg.resetMs + 400);
     }
   });
 });
