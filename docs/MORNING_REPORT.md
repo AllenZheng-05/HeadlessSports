@@ -123,4 +123,15 @@ Open `http://localhost:5173/debug.html` in Chrome or Edge, allow the camera, sta
    Play any clip back with the source picker on the debug page to see what the game saw.
 9. **Gate.** Open `http://localhost:5173/tracking-harness.html?mode=gate`. Write down the whole report (inference ms, tracking Hz, render fps, passed or failed). Thresholds are tracking 25 Hz and render 50 fps.
 
-Checklists for milestone 2 and each sport are added as they are completed.
+### Milestone 3: rock climbing
+
+Open `http://localhost:5173/`, pick Rock climbing. Sit or stand about 1 m from the camera with both hands in view. Without a camera: `/?sport=climbing&input=debug&skipGate=1` (A / D select a hand, mouse moves it, Q / E toggle fists) or watch the bot at `/?sport=climbing&source=synthetic&skipGate=1`. Add `&debug=1` for the tunables panel.
+
+1. **Grab.** Hold a hand over a hold: it should brighten and grow slightly. Close the hand: the mitt snaps on and a sound plays. Note whether grabs register reliably. Tunables: `grabWindowMs` 250, `jugRadius` 0.17, `crimpRadius` 0.10.
+2. **Pull.** Pull the closed hand down: the climber rises about 1.5 m per full image height. Does tracker jitter shake the body? Tunables: `reachWidth`, `reachHeight`, `reachOffsetY`, `followRate`, `maxClimbSpeed`.
+3. **Alternate hands for a minute.** Count unintended drops (the fist flickered or the hand was lost for a moment). Tunables: `lostHandGraceMs` 500, `slipGraceMs` 350, and the fist thresholds in the input config.
+4. **Stamina and ledges.** Can you reach the first rest ledge at 20 m? I lowered the drain rates (two hands 0.02/s, one hand 0.035/s) after the bot ran out near 11 m; judge whether it is now too easy. Tunables: `drainTwoHands`, `drainOneHand`, `ledgeEveryM`.
+5. **Comfort.** Is the top of the reach comfortable, and do your hands stay in frame? Does a 75 second round tire your arms too much?
+6. Known cosmetic issues: a hand held below shoulder height can hide behind the torso; the putty body picks up a slight green tint from the scene lighting.
+
+Checklists for the remaining sports are added as they are completed.
