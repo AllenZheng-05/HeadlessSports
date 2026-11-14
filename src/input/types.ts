@@ -131,6 +131,9 @@ export type GameEvent =
       t: number;
       hand: Side;
       speed: number;
+      /** Wrist velocity at the peak, sw/s. vx positive toward screen right, vy positive UP. */
+      vx: number;
+      vy: number;
       lateral: number;
       loft: number;
       curvature: number;
