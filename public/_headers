@@ -1,0 +1,42 @@
+# Cloudflare headers file (Workers static assets and Pages both read it). Copied into dist/ by Vite.
+# The first block's security headers must equal src/sw/securityHeaders.ts; a unit test checks it.
+#
+# CSP deviations from the starting policy, each proven by e2e-deploy/deploy.spec.ts:
+#   script-src 'wasm-unsafe-eval'  MediaPipe and Rapier compile WebAssembly. Nothing more is needed:
+#                                  no 'unsafe-eval', no inline or remote scripts.
+#   worker-src 'self'              the tracker worker and the service worker are same-origin files.
+#                                  blob: was dropped: no blob workers are created.
+#   connect-src 'self'             the privacy promise: the page can only talk to its own origin, so
+#                                  camera frames cannot be sent anywhere.
+#   img-src 'self' data:           blob: was dropped: nothing loads blob images. data: is kept as a
+#                                  harmless allowance for tiny inline images.
+#   media-src 'self'               blob: was dropped: the camera stream is attached with srcObject,
+#                                  which the CSP does not govern.
+#   style-src 'self'               'unsafe-inline' was dropped: all CSS is in files, and styles set
+#                                  from script through the CSSOM (element.style) are allowed anyway.
+/*
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; connect-src 'self'; img-src 'self' data:; media-src 'self'; style-src 'self'; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'; frame-ancestors 'none'
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: no-referrer
+  Permissions-Policy: camera=(self), microphone=(), geolocation=()
+  Cross-Origin-Opener-Policy: same-origin
+
+# Vite's content-hashed output: the file name changes when the content does.
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# The MediaPipe version is in the path (/wasm/tasks-vision-<version>/).
+/wasm/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# Model file names are not versioned, so no immutable: one week, and the service worker revalidates.
+/models/*
+  Cache-Control: public, max-age=604800
+
+# HTML and the service worker must always be revalidated so a deploy shows up on the next visit.
+/
+  Cache-Control: no-cache
+/*.html
+  Cache-Control: no-cache
+/sw.js
+  Cache-Control: no-cache

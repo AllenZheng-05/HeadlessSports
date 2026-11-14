@@ -30,7 +30,10 @@ export interface HandState {
   /** Palm centre, mirrored normalised image coordinates, filtered. */
   x: number;
   y: number;
-  /** Palm centre velocity, sw per second (hand widths * k when no pose is tracked). */
+  /**
+   * Palm centre velocity, sw per second; vx positive toward screen right, vy positive UP.
+   * With no pose tracked the scale is 4x the palm size instead of the shoulder width.
+   */
   vx: number;
   vy: number;
 }
@@ -131,6 +134,9 @@ export type GameEvent =
       t: number;
       hand: Side;
       speed: number;
+      /** Wrist velocity at the peak, sw/s. vx positive toward screen right, vy positive UP. */
+      vx: number;
+      vy: number;
       lateral: number;
       loft: number;
       curvature: number;

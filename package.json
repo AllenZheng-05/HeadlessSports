@@ -17,7 +17,10 @@
     "format": "prettier --write .",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "check:dist": "node scripts/check-dist.mjs",
+    "deploy:dry": "pnpm setup:assets && pnpm build && pnpm check:dist && wrangler deploy --dry-run",
+    "deploy": "pnpm setup:assets && pnpm build && pnpm check:dist && wrangler deploy"
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "0.21.0",
@@ -40,6 +43,7 @@
     "typescript": "6.0.3",
     "typescript-eslint": "8.72.2",
     "vite": "8.3.8",
-    "vitest": "5.1.0"
+    "vitest": "5.1.0",
+    "wrangler": "4.162.0"
   }
 }

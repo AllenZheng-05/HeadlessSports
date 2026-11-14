@@ -11,3 +11,5 @@ Claude outputs/
 .claude/settings.local.json
 .claude/worktrees/
 .wrangler/
+
+dist-*/
