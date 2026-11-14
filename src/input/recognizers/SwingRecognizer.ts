@@ -15,7 +15,7 @@ const COOLDOWN = 2;
  * midpoint of the wrists is tracked with its own slope estimators. SwingStarted fires when the
  * midpoint speed exceeds `startSpeed` after it was seen below `readySpeed` while gripped;
  * SwingPeak fires when the speed peak is confirmed (speed < peak * dropRatio) and the peak is at
- * least `minPeak`. Losing the grip resets everything.
+ * least `minPeak`. Losing the grip resets everything, except that during a swing it is tolerated for `gripGraceMs`.
  */
 export class SwingRecognizer implements Recognizer {
   readonly name = 'swing';
@@ -26,6 +26,8 @@ export class SwingRecognizer implements Recognizer {
   private gripped = false;
   private armed = false;
   private cooldownUntil = 0;
+  /** Time the grip was first lost during a swing, or -1 while it is held. */
+  private lostSince = -1;
 
   private peakSpeed = 0;
   private peakT = 0;
@@ -42,9 +44,16 @@ export class SwingRecognizer implements Recognizer {
     const t = state.t;
     const sw = state.shoulderWidth;
     if (!(wristDistance(state) < c.gripDistance)) {
+      // Motion blur at bat speed often drops wrist visibility for a frame or two. Once a swing
+      // has started, hold the last valid estimate (take no new samples) for `gripGraceMs`.
+      if (this.phase === SWINGING) {
+        if (this.lostSince < 0) this.lostSince = t;
+        if (t - this.lostSince <= c.gripGraceMs) return;
+      }
       this.reset();
       return;
     }
+    this.lostSince = -1;
     const p = state.pose;
     const l = PoseIndex.LEFT_WRIST * POSE_STRIDE;
     const r = PoseIndex.RIGHT_WRIST * POSE_STRIDE;
@@ -123,5 +132,6 @@ export class SwingRecognizer implements Recognizer {
     this.gripped = false;
     this.armed = false;
     this.peakSpeed = 0;
+    this.lostSince = -1;
   }
 }

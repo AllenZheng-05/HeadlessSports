@@ -221,7 +221,10 @@ export class FrameProcessor {
     hand.y = this.palmFiltered[1];
     slopeX.push(hand.x * aspect, frame.t);
     slopeY.push(-hand.y, frame.t);
-    const scale = state.shoulderWidth > 0 ? state.shoulderWidth : 4 * palmSize(lm, aspect);
+    // With a pose this frame the scale is the shoulder width; hands-only it is 4x the palm size.
+    // (shoulderWidth is not cleared when the pose goes, so it must not be consulted without a pose.)
+    const scale =
+      state.hasPose && state.shoulderWidth > 0 ? state.shoulderWidth : 4 * palmSize(lm, aspect);
     if (scale > 1e-6) {
       hand.vx = slopeX.slope() / scale;
       hand.vy = slopeY.slope() / scale;

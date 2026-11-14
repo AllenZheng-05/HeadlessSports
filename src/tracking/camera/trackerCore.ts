@@ -56,6 +56,8 @@ export class TrackerCore {
   private readonly palmY = new Float32Array(2);
   private frameCounter = 0;
   private loadCount = 0;
+  private chain: Promise<void> = Promise.resolve();
+  private closed = false;
 
   constructor(opts: CoreOptions, inWorker: boolean) {
     this.opts = opts;
@@ -70,8 +72,26 @@ export class TrackerCore {
     this.cropCtxs = [a.ctx, b.ctx];
   }
 
-  /** Loads exactly the models `needs` asks for, closes the rest, and warms up the new ones. */
-  async setNeeds(needs: TrackerNeeds): Promise<void> {
+  /**
+   * Loads exactly the models `needs` asks for, closes the rest, and warms up the new ones. Calls
+   * are serialised: an overlapping call waits for the previous one, so two loads never race on
+   * the same slot. After close() a pending load closes whatever it created and rejects.
+   */
+  setNeeds(needs: TrackerNeeds): Promise<void> {
+    const run = this.chain.then(() => this.applyNeeds(needs));
+    this.chain = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+
+  private checkOpen(): void {
+    if (this.closed) throw new Error('tracker core was closed');
+  }
+
+  private async applyNeeds(needs: TrackerNeeds): Promise<void> {
+    this.checkOpen();
     const wantPose = needs.pose;
     const wantCrops = needs.handCrops && needs.pose;
     const wantFull = needs.fullFrameHands;
@@ -96,22 +116,37 @@ export class TrackerCore {
 
     if (wantPose && !this.pose) {
       const path = this.opts.modelBase + POSE_MODEL_FILES[this.opts.poseModel];
-      this.pose = await this.create((delegate) =>
+      const pose = await this.create((delegate) =>
         PoseLandmarker.createFromOptions(this.nextPaths(), {
           baseOptions: { modelAssetPath: path, delegate },
           runningMode: 'VIDEO',
           numPoses: 1,
         }),
       );
-      this.pose.detectForVideo(this.warmCanvas(), 0);
+      if (this.closed) {
+        pose.close();
+        this.checkOpen();
+      }
+      this.pose = pose;
+      pose.detectForVideo(this.warmCanvas(), 0);
     }
     if (wantCrops && !this.handCrop) {
-      this.handCrop = await this.createHands('IMAGE', 1);
-      this.handCrop.detect(this.warmCanvas());
+      const hands = await this.createHands('IMAGE', 1);
+      if (this.closed) {
+        hands.close();
+        this.checkOpen();
+      }
+      this.handCrop = hands;
+      hands.detect(this.warmCanvas());
     }
     if (wantFull && !this.handVideo) {
-      this.handVideo = await this.createHands('VIDEO', 2);
-      this.handVideo.detectForVideo(this.warmCanvas(), 0);
+      const hands = await this.createHands('VIDEO', 2);
+      if (this.closed) {
+        hands.close();
+        this.checkOpen();
+      }
+      this.handVideo = hands;
+      hands.detectForVideo(this.warmCanvas(), 0);
     }
     this.needs = { pose: wantPose, handCrops: wantCrops, fullFrameHands: wantFull };
   }
@@ -202,7 +237,13 @@ export class TrackerCore {
       const alternate = this.opts.handCropMode === 'alternate';
       const only = this.frameCounter & 1;
       for (let i = 0; i < 2; i++) {
-        if (alternate && i !== only) continue;
+        if (alternate && i !== only) {
+          // Not observed this frame: report it absent so the input layer does not see the
+          // previous frame's landmarks twice. It keeps its last known state meanwhile.
+          this.handPresent[i] = 0;
+          this.handScore[i] = 0;
+          continue;
+        }
         inferMs += this.cropHand(bitmap, w, h, i, wristLm);
       }
     }
@@ -297,6 +338,7 @@ export class TrackerCore {
   }
 
   close(): void {
+    this.closed = true;
     this.pose?.close();
     this.handCrop?.close();
     this.handVideo?.close();

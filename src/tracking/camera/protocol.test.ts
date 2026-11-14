@@ -5,6 +5,7 @@ import {
   H_INFERENCE_MS,
   HAND_LEN,
   PACKED_LEN,
+  RequestChain,
   createFrame,
   packHand,
   packPose,
@@ -69,5 +70,72 @@ describe('packed frame round trip', () => {
     unpackFrame(buf, frame);
     expect(frame.hasPose).toBe(false);
     expect(frame.pose[0]).toBe(9);
+  });
+});
+
+describe('RequestChain', () => {
+  function deferred<T = void>() {
+    let resolve!: (v: T) => void;
+    let reject!: (e: Error) => void;
+    const promise = new Promise<T>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  }
+  const tick = () => new Promise<void>((r) => setTimeout(r, 0));
+
+  it('runs tasks one at a time, in order, and settles every caller', async () => {
+    const chain = new RequestChain();
+    const log: string[] = [];
+    const a = deferred();
+    const b = deferred();
+    const pa = chain.run(async () => {
+      log.push('a start');
+      await a.promise;
+      log.push('a end');
+      return 1;
+    });
+    const pb = chain.run(async () => {
+      log.push('b start');
+      await b.promise;
+      log.push('b end');
+      return 2;
+    });
+    await tick();
+    expect(log).toEqual(['a start']);
+    a.resolve();
+    expect(await pa).toBe(1);
+    await tick();
+    expect(log).toEqual(['a start', 'a end', 'b start']);
+    b.resolve();
+    expect(await pb).toBe(2);
+  });
+
+  it('a failing task rejects its caller and does not block the next one', async () => {
+    const chain = new RequestChain();
+    const bad = chain.run(() => Promise.reject(new Error('boom')));
+    const good = chain.run(() => Promise.resolve('ok'));
+    await expect(bad).rejects.toThrow('boom');
+    await expect(good).resolves.toBe('ok');
+  });
+
+  it('cancelAll rejects running and queued requests at once and frees the chain', async () => {
+    const chain = new RequestChain();
+    const never = deferred();
+    let secondStarted = false;
+    const first = chain.run(() => never.promise);
+    const second = chain.run(async () => {
+      secondStarted = true;
+    });
+    const f = expect(first).rejects.toThrow('cancelled');
+    const s = expect(second).rejects.toThrow('cancelled');
+    chain.cancelAll(new Error('cancelled'));
+    await f;
+    await s;
+    never.resolve();
+    await tick();
+    expect(secondStarted).toBe(false);
+    await expect(chain.run(() => Promise.resolve(3))).resolves.toBe(3);
   });
 });

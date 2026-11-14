@@ -376,3 +376,16 @@ describe('DEBUG_KEYS', () => {
     expect(DEBUG_KEYS.every((k) => k.action.length > 0)).toBe(true);
   });
 });
+
+describe('DebugInput update', () => {
+  it('keeps both hands present with finite velocities across many updates', () => {
+    const { input } = make();
+    for (let i = 0; i <= 120; i++) input.update(i * 16);
+    for (const side of ['left', 'right'] as const) {
+      const h = input.state.hands[side];
+      expect(h.present).toBe(true);
+      expect(Number.isFinite(h.vx)).toBe(true);
+      expect(Number.isFinite(h.vy)).toBe(true);
+    }
+  });
+});

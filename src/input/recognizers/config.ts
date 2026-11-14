@@ -53,6 +53,8 @@ export interface RecognizerConfig {
     minPeak: number;
     dropRatio: number;
     cooldownMs: number;
+    /** Once a swing has started, a lost grip (blurred wrist) is tolerated this long (ms). */
+    gripGraceMs: number;
   };
   punch: {
     minPeak: number;
@@ -97,6 +99,7 @@ export const recognizerConfig: RecognizerConfig = {
     minPeak: 4.5,
     dropRatio: 0.85,
     cooldownMs: 500,
+    gripGraceMs: 120,
   },
   punch: { minPeak: 4.0, minElbowRate: 4, cooldownMs: 350, maxWristY: 0.7, minWristY: -0.6 },
   squat: { depth: 0.35, dwellMs: 150 },

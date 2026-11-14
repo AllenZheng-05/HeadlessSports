@@ -22,6 +22,12 @@ const result: ResultMsg = {
 };
 const transferOne: Transferable[] = [result.buffer.buffer];
 
+// Needs changes run strictly one at a time, each reply posted before the next change starts.
+let queue: Promise<void> = Promise.resolve();
+function enqueue(task: () => Promise<void>): void {
+  queue = queue.then(task, task);
+}
+
 function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
@@ -30,21 +36,27 @@ scope.onmessage = (e) => {
   const msg = e.data;
   switch (msg.type) {
     case 'init': {
-      core = new TrackerCore(msg.options, true);
-      core.debug = msg.debug;
-      core.setNeeds(msg.needs).then(
-        () => scope.postMessage({ type: 'ready', delegate: core?.delegate ?? 'CPU' }),
-        (err: unknown) =>
-          scope.postMessage({ type: 'error', phase: 'init', message: errMessage(err) }),
+      const next = new TrackerCore(msg.options, true);
+      next.debug = msg.debug;
+      core = next;
+      enqueue(() =>
+        next.setNeeds(msg.needs).then(
+          () => scope.postMessage({ type: 'ready', delegate: next.delegate }),
+          (err: unknown) =>
+            scope.postMessage({ type: 'error', phase: 'init', message: errMessage(err) }),
+        ),
       );
       break;
     }
     case 'needs': {
-      if (!core) break;
-      core.setNeeds(msg.needs).then(
-        () => scope.postMessage({ type: 'needs-ready', delegate: core?.delegate ?? 'CPU' }),
-        (err: unknown) =>
-          scope.postMessage({ type: 'error', phase: 'needs', message: errMessage(err) }),
+      const target = core;
+      if (!target) break;
+      enqueue(() =>
+        target.setNeeds(msg.needs).then(
+          () => scope.postMessage({ type: 'needs-ready', delegate: target.delegate }),
+          (err: unknown) =>
+            scope.postMessage({ type: 'error', phase: 'needs', message: errMessage(err) }),
+        ),
       );
       break;
     }

@@ -12,6 +12,11 @@ export interface CameraDebug {
 
 export type PoseModelName = 'lite' | 'full';
 export type DelegateName = 'GPU' | 'CPU';
+/**
+ * 'both' crops and tracks both hands every frame. 'alternate' crops one hand per frame, so each
+ * hand is observed every other frame; on the frames a hand is skipped it is reported as not
+ * present (the input layer keeps that hand's last known state meanwhile).
+ */
 export type HandCropMode = 'both' | 'alternate';
 
 export interface CoreOptions {
@@ -183,4 +188,48 @@ export function createFrame(): LandmarkFrame {
       { present: false, score: 0, landmarks: new Float32Array(HAND_LEN) },
     ],
   };
+}
+
+/**
+ * Runs async tasks strictly one at a time, in order. `cancelAll` rejects every queued and running
+ * request at once (the queued ones never start) and lets later requests start immediately, so a
+ * stuck task cannot block a restart. A cancelled running task keeps going in the background; its
+ * owner must discard its result.
+ */
+export class RequestChain {
+  private tail: Promise<void> = Promise.resolve();
+  private readonly entries = new Set<{ cancelled: boolean; reject: (err: Error) => void }>();
+
+  run<T>(task: () => Promise<T>): Promise<T> {
+    const entry = { cancelled: false, reject: (_err: Error): void => undefined };
+    const out = new Promise<T>((resolve, reject) => {
+      entry.reject = reject;
+      this.tail = this.tail.then(() => {
+        if (entry.cancelled) return undefined;
+        let p: Promise<T>;
+        try {
+          p = task();
+        } catch (err) {
+          p = Promise.reject(err instanceof Error ? err : new Error(String(err)));
+        }
+        return p.then(resolve, reject);
+      });
+    });
+    this.entries.add(entry);
+    const forget = (): void => {
+      this.entries.delete(entry);
+    };
+    out.then(forget, forget);
+    return out;
+  }
+
+  cancelAll(err: Error): void {
+    const list = [...this.entries];
+    this.entries.clear();
+    this.tail = Promise.resolve();
+    for (const e of list) {
+      e.cancelled = true;
+      e.reject(err);
+    }
+  }
 }

@@ -11,6 +11,7 @@ import {
 import type { HandObservation, LandmarkFrame } from '../tracking/types';
 import { FrameProcessor } from './FrameProcessor';
 import { inputConfig } from './config';
+import { palmSize } from './hands/fist';
 import { createInputState } from './state';
 
 const DT = 1000 / 30;
@@ -172,6 +173,35 @@ describe('FrameProcessor', () => {
     // Hand filter lags a ramp but the slope settles close to the true speed.
     expect(r.state.hands.left.vx).toBeGreaterThan((0.3 / 0.16) * 0.8);
     expect(r.state.hands.left.vx).toBeLessThan((0.3 / 0.16) * 1.05);
+  });
+
+  it('scales hand velocity by palm size once the pose is gone (no stale shoulder width)', () => {
+    const r = new Rig();
+    const lm = new Float32Array(OPEN);
+    const move = (i: number): void => {
+      const dx = 0.3 * ((i * DT) / 1000);
+      for (let k = 0; k < HAND_COUNT; k++) lm[k * HAND_STRIDE] = OPEN[k * HAND_STRIDE] + dx;
+      r.setHand(0, true, lm);
+    };
+    for (let i = 0; i < 20; i++) {
+      move(i);
+      r.step(i * DT);
+    }
+    const withPose = r.state.hands.left.vx;
+    expect(r.state.shoulderWidth).toBeGreaterThan(0);
+    r.frame.hasPose = false;
+    for (let i = 20; i < 60; i++) {
+      move(i);
+      r.step(i * DT);
+    }
+    const handsOnly = r.state.hands.left.vx;
+    const palm = palmSize(OPEN, r.state.aspect);
+    // Same hand speed: the palm scale (4 x palm) must be used, not the leftover shoulder width.
+    const expected = (0.3 * r.state.aspect) / (4 * palm);
+    expect(r.state.shoulderWidth).toBeGreaterThan(0);
+    expect(handsOnly).toBeGreaterThan(expected * 0.8);
+    expect(handsOnly).toBeLessThan(expected * 1.1);
+    expect(withPose).toBeGreaterThan(0);
   });
 
   it('loses tracking after lostAfterMs and recovers', () => {

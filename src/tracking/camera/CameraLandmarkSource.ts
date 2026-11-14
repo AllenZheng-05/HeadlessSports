@@ -7,7 +7,7 @@ import type {
 } from '../types';
 import { modelBaseUrl, wasmBaseUrl } from './assets';
 import { checkResolution, createTrackingError, mapCameraError } from './errors';
-import { PACKED_LEN, createFrame, unpackFrame } from './protocol';
+import { PACKED_LEN, RequestChain, createFrame, unpackFrame } from './protocol';
 import type {
   CameraDebug,
   CoreOptions,
@@ -26,6 +26,7 @@ export interface CameraSourceOptions {
   poseModel?: PoseModelName;
   delegate?: DelegateName;
   forceMainThread?: boolean;
+  /** See HandCropMode: 'alternate' observes each hand every other frame. */
   handCropMode?: HandCropMode;
   poseInputWidth?: number;
   handCropSize?: number;
@@ -35,6 +36,11 @@ const WORKER_INIT_TIMEOUT_MS = 20000;
 const MEDIAN_WINDOW = 30;
 const HZ_RING = 128;
 const LATENCY_SMOOTHING = 0.1;
+const NO_NEEDS: TrackerNeeds = { pose: false, handCrops: false, fullFrameHands: false };
+
+function cancelledError(): Error {
+  return new Error('CameraSource.start() was cancelled by stop()');
+}
 
 interface Pending {
   resolve: () => void;
@@ -66,13 +72,20 @@ class CameraSource implements LandmarkSource, CameraDebug {
   private worker: Worker | null = null;
   private core: TrackerCore | null = null;
   private pending: Pending | null = null;
+  /** Control requests (init, needs) run one at a time through this chain. */
+  private readonly requests = new RequestChain();
+  private wantedNeeds: TrackerNeeds = NO_NEEDS;
+  private workerReady = false;
+  /** Bumped by start() and stop(); a start whose token no longer matches has been cancelled. */
+  private generation = 0;
+  private readonly cancelHooks = new Set<() => void>();
   private started = false;
   private running = false;
   private rvfcHandle = 0;
 
   // Frame pipeline state.
   private busy = false;
-  private changingNeeds = false;
+  private needsInFlight = 0;
   private lastT = -Infinity;
   private pendingT = 0;
   private spare: Float32Array | null = new Float32Array(PACKED_LEN);
@@ -115,29 +128,38 @@ class CameraSource implements LandmarkSource, CameraDebug {
   async start(needs: TrackerNeeds): Promise<void> {
     if (this.started) throw new Error('CameraSource.start() called twice');
     this.started = true;
+    const gen = ++this.generation;
+    this.wantedNeeds = needs;
     this.options.wasmBase = wasmBaseUrl();
     this.options.modelBase = modelBaseUrl();
     try {
-      await this.openCamera();
-      await this.initBackend(needs);
+      await this.openCamera(gen);
+      this.assertCurrent(gen);
+      await this.initBackend(needs, gen);
+      this.assertCurrent(gen);
     } catch (err) {
-      this.stop();
+      // A cancelled start was already cleaned up by stop(); only a live one tears itself down.
+      if (gen === this.generation) this.stop();
       throw err;
     }
-    if (!this.started) return;
     this.running = true;
     this.rvfcHandle = this.video.requestVideoFrameCallback(this.onVideoFrame);
   }
 
   async setNeeds(needs: TrackerNeeds): Promise<void> {
-    this.changingNeeds = true;
+    this.wantedNeeds = needs;
+    this.needsInFlight++;
     try {
-      if (this.worker) {
-        await this.requestWorker({ type: 'needs', needs });
-      } else if (this.core) {
-        await this.core.setNeeds(needs);
-        this.stats.delegate = this.core.delegate;
-      }
+      // Each queued request applies the latest wanted needs, so queued calls coalesce.
+      await this.requests.run(async () => {
+        const latest = this.wantedNeeds;
+        if (this.worker) {
+          await this.requestWorker({ type: 'needs', needs: latest });
+        } else if (this.core) {
+          await this.core.setNeeds(latest);
+          this.stats.delegate = this.core.delegate;
+        }
+      });
     } catch (err) {
       throw createTrackingError(
         'model-load-failed',
@@ -145,7 +167,7 @@ class CameraSource implements LandmarkSource, CameraDebug {
         err,
       );
     } finally {
-      this.changingNeeds = false;
+      if (this.needsInFlight > 0) this.needsInFlight--;
     }
   }
 
@@ -161,6 +183,7 @@ class CameraSource implements LandmarkSource, CameraDebug {
   }
 
   stop(): void {
+    this.generation++;
     this.started = false;
     this.running = false;
     if (this.rvfcHandle) {
@@ -172,18 +195,37 @@ class CameraSource implements LandmarkSource, CameraDebug {
       this.stream = null;
     }
     this.video.srcObject = null;
-    if (this.worker) {
-      this.worker.onmessage = null;
-      this.worker.onerror = null;
-      this.worker.terminate();
-      this.worker = null;
-    }
+    // Settle everything in flight now so nothing waits for a timeout.
+    const err = cancelledError();
+    const p = this.pending;
+    this.pending = null;
+    p?.reject(err);
+    this.requests.cancelAll(err);
+    for (const hook of [...this.cancelHooks]) hook();
+    this.cancelHooks.clear();
+    this.disposeWorker();
     if (this.core) {
       this.core.close();
       this.core = null;
     }
-    this.pending = null;
-    this.stats.delegate = 'none';
+    this.workerReady = false;
+    this.needsInFlight = 0;
+
+    // A frame that was inside the terminated worker will never come back.
+    this.busy = false;
+    this.lastT = -Infinity;
+    if (!this.spare) this.spare = new Float32Array(PACKED_LEN);
+    const s = this.stats;
+    s.inferenceMs = 0;
+    s.trackingHz = 0;
+    s.latencyMs = 0;
+    s.droppedFrames = 0;
+    s.delegate = 'none';
+    s.inWorker = false;
+    this.infCount = 0;
+    this.infHead = 0;
+    this.hzCount = 0;
+    this.hzHead = 0;
   }
 
   // ---- CameraDebug ----
@@ -206,7 +248,11 @@ class CameraSource implements LandmarkSource, CameraDebug {
 
   // ---- Camera ----
 
-  private async openCamera(): Promise<void> {
+  private assertCurrent(gen: number): void {
+    if (gen !== this.generation) throw cancelledError();
+  }
+
+  private async openCamera(gen: number): Promise<void> {
     let stream: MediaStream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({
@@ -219,19 +265,34 @@ class CameraSource implements LandmarkSource, CameraDebug {
         audio: false,
       });
     } catch (err) {
+      this.assertCurrent(gen);
       throw mapCameraError(err);
+    }
+    if (gen !== this.generation) {
+      // stop() ran while the permission prompt was open: release the late stream ourselves.
+      for (const track of stream.getTracks()) track.stop();
+      throw cancelledError();
     }
     this.stream = stream;
     this.video.srcObject = stream;
     try {
       await this.video.play();
     } catch (err) {
+      this.assertCurrent(gen);
       throw mapCameraError(err);
     }
+    this.assertCurrent(gen);
     if (this.video.videoWidth === 0) {
       await new Promise<void>((resolve) => {
-        this.video.addEventListener('loadedmetadata', () => resolve(), { once: true });
+        const done = (): void => {
+          this.cancelHooks.delete(done);
+          this.video.removeEventListener('loadedmetadata', done);
+          resolve();
+        };
+        this.cancelHooks.add(done);
+        this.video.addEventListener('loadedmetadata', done, { once: true });
       });
+      this.assertCurrent(gen);
     }
     const low = checkResolution(this.video.videoWidth, this.video.videoHeight);
     if (low) throw low;
@@ -239,13 +300,17 @@ class CameraSource implements LandmarkSource, CameraDebug {
 
   // ---- Backend (worker, with main-thread fallback) ----
 
-  private async initBackend(needs: TrackerNeeds): Promise<void> {
+  private async initBackend(needs: TrackerNeeds, gen: number): Promise<void> {
     if (!this.forceMainThread) {
       try {
-        await this.initWorker(needs);
+        await this.requests.run(() => this.initWorker(needs));
+        this.assertCurrent(gen);
+        this.workerReady = true;
         this.stats.inWorker = true;
         return;
       } catch (err) {
+        // Cancelled by stop(): it already released the worker; do not fall back.
+        this.assertCurrent(gen);
         console.warn(
           `[tracking] worker unavailable, using the main thread: ${
             err instanceof Error ? err.message : String(err)
@@ -254,7 +319,8 @@ class CameraSource implements LandmarkSource, CameraDebug {
         this.disposeWorker();
       }
     }
-    await this.initMainThread(needs);
+    await this.requests.run(() => this.initMainThread(needs, gen));
+    this.assertCurrent(gen);
     this.stats.inWorker = false;
   }
 
@@ -279,14 +345,19 @@ class CameraSource implements LandmarkSource, CameraDebug {
         },
       };
       worker.onmessage = this.onWorkerMessage;
-      worker.onerror = (e) => {
-        e.preventDefault();
+      const onFail = (message: string): void => {
         const p = this.pending;
         this.pending = null;
-        const err = new Error(e.message || 'worker error');
-        if (p) p.reject(err);
-        else console.error(`[tracking] worker error: ${err.message}`);
+        const err = new Error(message);
+        p?.reject(err);
+        if (this.workerReady && this.worker === worker) this.recoverFromWorkerCrash(err);
+        else if (!p) console.error(`[tracking] worker error: ${err.message}`);
       };
+      worker.onerror = (e) => {
+        e.preventDefault();
+        onFail(e.message || 'worker error');
+      };
+      worker.onmessageerror = () => onFail('worker message could not be deserialised');
       const init: ToWorker = {
         type: 'init',
         options: this.options,
@@ -301,21 +372,57 @@ class CameraSource implements LandmarkSource, CameraDebug {
     if (this.worker) {
       this.worker.onmessage = null;
       this.worker.onerror = null;
+      this.worker.onmessageerror = null;
       this.worker.terminate();
       this.worker = null;
     }
     this.pending = null;
   }
 
-  private async initMainThread(needs: TrackerNeeds): Promise<void> {
+  /**
+   * The worker died after init. Tear it down and continue on the main thread with the current
+   * needs; if that fails too, stop the source.
+   */
+  private recoverFromWorkerCrash(cause: Error): void {
+    const gen = this.generation;
+    console.warn(`[tracking] worker crashed, falling back to the main thread: ${cause.message}`);
+    this.disposeWorker();
+    this.workerReady = false;
+    this.stats.inWorker = false;
+    this.busy = false;
+    // The frame buffer was inside the worker; make a new one.
+    if (!this.spare) this.spare = new Float32Array(PACKED_LEN);
+    this.needsInFlight++;
+    this.requests
+      .run(() => this.initMainThread(this.wantedNeeds, gen))
+      .then(
+        () => {
+          if (gen === this.generation && this.needsInFlight > 0) this.needsInFlight--;
+        },
+        (err: unknown) => {
+          if (gen !== this.generation) return;
+          console.error(
+            `[tracking] worker-failed: worker crashed and the main-thread fallback failed too: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
+          this.stop();
+        },
+      );
+  }
+
+  private async initMainThread(needs: TrackerNeeds, gen: number): Promise<void> {
     try {
       const { TrackerCore } = await import('./trackerCore');
+      this.assertCurrent(gen);
       const core = new TrackerCore(this.options, false);
       core.debug = this.debugEnabled;
       this.core = core;
       await core.setNeeds(needs);
+      this.assertCurrent(gen);
       this.stats.delegate = core.delegate;
     } catch (err) {
+      if (gen !== this.generation) throw cancelledError();
       throw createTrackingError(
         'model-load-failed',
         `Could not load trackers: ${err instanceof Error ? err.message : String(err)}`,
@@ -365,7 +472,7 @@ class CameraSource implements LandmarkSource, CameraDebug {
   private readonly onVideoFrame = (_now: number, meta: VideoFrameCallbackMetadata): void => {
     if (!this.running) return;
     this.rvfcHandle = this.video.requestVideoFrameCallback(this.onVideoFrame);
-    if (this.changingNeeds) return;
+    if (this.needsInFlight > 0) return;
     const t = meta.captureTime ?? meta.presentationTime ?? meta.expectedDisplayTime;
     if (!(t > this.lastT)) return;
     if (this.busy) {
@@ -385,7 +492,7 @@ class CameraSource implements LandmarkSource, CameraDebug {
 
   private readonly onBitmap = (bitmap: ImageBitmap): void => {
     const buffer = this.spare;
-    if (!this.running || this.changingNeeds || !buffer) {
+    if (!this.running || this.needsInFlight > 0 || !buffer) {
       bitmap.close();
       this.busy = false;
       return;
@@ -473,7 +580,7 @@ class CameraSource implements LandmarkSource, CameraDebug {
     s.trackingHz = n;
 
     s.latencyMs =
-      this.frame.seq === 1 ? latency : s.latencyMs + (latency - s.latencyMs) * LATENCY_SMOOTHING;
+      this.infCount === 1 ? latency : s.latencyMs + (latency - s.latencyMs) * LATENCY_SMOOTHING;
   }
 }
 

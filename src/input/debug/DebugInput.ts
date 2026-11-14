@@ -112,6 +112,7 @@ const PUNCH_SPEED = 6;
 const MAX_PENDING = 4;
 const CURL_CLOSED = 0.8;
 const CURL_OPEN = 1.8;
+const SIDES: readonly Side[] = ['left', 'right'];
 const HANDLED_PREVENT = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight']);
 
 function clamp(v: number, lo: number, hi: number): number {
@@ -708,7 +709,8 @@ export class DebugInput implements InputProvider {
     const midX = c.centreX + (sinL * TORSO * sw) / ASPECT;
     const midY = c.shoulderY + drop + TORSO * sw * (1 - cosL);
 
-    for (const side of ['left', 'right'] as const) {
+    for (let si = 0; si < 2; si++) {
+      const side = SIDES[si];
       const sg = sideSign(side);
       const h = s.hands[side];
       h.curl = h.closed ? CURL_CLOSED : CURL_OPEN;

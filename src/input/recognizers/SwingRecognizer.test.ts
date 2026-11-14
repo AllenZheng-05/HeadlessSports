@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { POSE_STRIDE, PoseIndex } from '../../tracking/types';
 import { collector, drive, ofType } from '../testing/collect';
 import { createTestState, setGrip } from '../testing/frames';
 import { recognizerConfig } from './config';
@@ -88,10 +89,47 @@ describe('SwingRecognizer', () => {
     expect(events).toHaveLength(0);
   });
 
-  it('resets when the grip is lost mid-swing', () => {
+  it('resets when the grip is lost mid-swing for longer than the grace window', () => {
+    // Lost from after the start (1100) until 1320: about 200 ms, well past gripGraceMs.
     const events = run(swing(-0.8, -0.2, 0.6, -0.2, 1000, 140), 2500, (t) =>
-      t > 1100 && t < 1200 ? 1.5 : 0.1,
+      t > 1120 && t < 1320 ? 1.5 : 0.1,
     );
+    expect(ofType(events, 'SwingStarted')).toHaveLength(1);
+    expect(ofType(events, 'SwingPeak')).toHaveLength(0);
+  });
+
+  it('tolerates two low-visibility frames mid-acceleration (within gripGraceMs)', () => {
+    const rec = new SwingRecognizer();
+    const state = createTestState();
+    const { events, emit } = collector();
+    const pos = swing(-0.8, -0.2, 0.6, -0.2, 1000, 140);
+    drive(rec, state, emit, 0, 2500, (t) => {
+      const [x, y] = pos(t);
+      setGrip(state, x, y, 0.1);
+      // Two consecutive frames (1120 < t < 1180: frames at 1133 and 1167) with the wrists not visible.
+      if (t > 1120 && t < 1180) {
+        state.pose[PoseIndex.LEFT_WRIST * POSE_STRIDE + 3] = 0.2;
+        state.pose[PoseIndex.RIGHT_WRIST * POSE_STRIDE + 3] = 0.2;
+      }
+    });
+    expect(ofType(events, 'SwingStarted')).toHaveLength(1);
+    const peak = ofType(events, 'SwingPeak');
+    expect(peak).toHaveLength(1);
+    expect(peak[0].speed).toBeGreaterThan(c.minPeak);
+  });
+
+  it('a visibility loss longer than the grace resets with no peak', () => {
+    const rec = new SwingRecognizer();
+    const state = createTestState();
+    const { events, emit } = collector();
+    const pos = swing(-0.8, -0.2, 0.6, -0.2, 1000, 140);
+    drive(rec, state, emit, 0, 2500, (t) => {
+      const [x, y] = pos(t);
+      setGrip(state, x, y, 0.1);
+      if (t > 1120 && t < 1120 + c.gripGraceMs + 100) {
+        state.pose[PoseIndex.LEFT_WRIST * POSE_STRIDE + 3] = 0.2;
+      }
+    });
     expect(ofType(events, 'SwingPeak')).toHaveLength(0);
   });
 
