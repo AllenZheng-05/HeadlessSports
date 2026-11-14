@@ -150,6 +150,11 @@ export interface SportContext {
   random(): number;
   /** True when the tunables panel and debug overlays are on. */
   debug: boolean;
+  /**
+   * True with ?short=1: play a shortened round (fewer frames, attempts or seconds) so headless
+   * checks finish quickly. Each sport keeps its short-round values in its config object.
+   */
+  short: boolean;
   /** Call once when the round is over. The shell saves the score and shows the results screen. */
   finish(result: RoundResult): void;
 }

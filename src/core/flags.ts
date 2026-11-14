@@ -25,6 +25,8 @@ export interface Flags {
   sport: string | null;
   /** `?seed=`, default 1. */
   seed: number;
+  /** `?short=1`: sports play a shortened round (for headless checks and quick tries). */
+  short: boolean;
 }
 
 export const TIME_SCALE_MIN = 0.1;
@@ -65,5 +67,6 @@ export function parseFlags(search: string | URLSearchParams): Flags {
     mainThread: params.get('main') === '1',
     sport: text(params, 'sport'),
     seed: Number.isFinite(seedNum) ? seedNum : 1,
+    short: params.get('short') === '1',
   };
 }

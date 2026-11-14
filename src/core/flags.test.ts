@@ -16,6 +16,7 @@ describe('parseFlags', () => {
       mainThread: false,
       sport: null,
       seed: 1,
+      short: false,
     });
   });
 
@@ -36,6 +37,7 @@ describe('parseFlags', () => {
       mainThread: true,
       sport: 'bowling',
       seed: 7,
+      short: false,
     });
   });
 

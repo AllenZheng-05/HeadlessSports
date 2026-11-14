@@ -243,6 +243,7 @@ export class SportHost {
         best,
         random: mulberry32(this.flags.seed),
         debug: this.flags.debug,
+        short: this.flags.short,
         finish: (result) => this.finishRound(round, result),
       };
       const sport = await factory(ctx);
