@@ -1,0 +1,35 @@
+:root {
+  --sky: #bfe3f7;
+  --turf: #8fd694;
+  --turf-light: #a9e0ac;
+  --turf-shadow: #6fbf7a;
+  --chalk: #fbf8f1;
+  --putty: #f4f1ea;
+  --whistle: #ff7a59;
+  --ink: #27364a;
+  --ink-2: #4a5a70;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--sky);
+  color: var(--ink);
+  font-family: 'Nunito', system-ui, sans-serif;
+}
+
+#game {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+#ui {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+}

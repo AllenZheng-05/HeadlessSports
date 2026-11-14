@@ -1,0 +1,18 @@
+# Decisions
+
+Engineering calls made without the owner, newest last. Each has a reason so it can be revisited.
+
+| # | Date | Decision | Reason |
+|---|---|---|---|
+| 1 | 2026-11-14 | pnpm 10.34.6 (already on PATH), pinned via `packageManager`. | Available without any global install. |
+| 2 | 2026-11-14 | TypeScript pinned to the newest 6.0.x, not 7.0.2 (npm `latest`). | `typescript-eslint` 8.72.2 declares `typescript >=4.8.4 <6.1.0`; TS 7 (the native port) is not supported by the lint toolchain yet. |
+| 3 | 2026-11-14 | Pinned: three 0.187.0, @mediapipe/tasks-vision 1.2.3, @dimforge/rapier3d-compat 0.21.0, vite 8.3.8, vitest 5.1.0, eslint 10.15.0, @playwright/test 1.65.1. | Current stable on npm at kickoff; exact pins as required. |
+| 4 | 2026-11-14 | MediaPipe WASM and `.task` models are **not committed**. `pnpm setup:assets` copies WASM from `node_modules` into `public/wasm/tasks-vision-<version>/` and downloads models (version `1` URLs, not `latest`) into `public/models/`. Both directories are gitignored. | About 35 MB of binaries would bloat git history; the script is deterministic and the paths are versioned for immutable caching. Deploys run the script before `pnpm build`. |
+| 5 | 2026-11-14 | `Claude outputs/` (the kickoff brief) is gitignored, not committed and not modified. | It is the owner's planning file; its content now lives in `docs/`. Remove the ignore line to commit it. |
+| 6 | 2026-11-14 | Custom subagent types (`builder`, `helper`, `reviewer`) were created in `.claude/agents/` but are not loadable until the session restarts, so tonight's subagents are general-purpose agents with the model set explicitly (sonnet, haiku, opus) and the role text in the prompt. | As instructed in the brief. |
+| 7 | 2026-11-14 | The orchestrator writes the shared contract files (`src/tracking/types.ts`, `src/input/types.ts`, `src/core/sport.ts`) itself. They contain only type declarations and constants. | Interfaces must be decided by the orchestrator and committed before parallel builders start; writing them once as files is cheaper and more exact than repeating them in every brief. |
+| 8 | 2026-11-14 | `noUncheckedIndexedAccess` is off. | The landmark path is typed-array index arithmetic; the flag would force `!` on every read with no safety gain. |
+| 9 | 2026-11-14 | Landmark coordinates are mirrored once, in the tracking layer. Everything downstream (filters, recognizers, recordings, synthetic scripts) works in mirrored display space; landmark indices keep their anatomical meaning. The avatar is viewed from behind. | One convention, applied in one place; "player's left hand moves the on-screen left hand" then needs no further flips. |
+| 10 | 2026-11-14 | One time base, "game ms". Camera frames are stamped from `requestVideoFrameCallback` metadata (`captureTime`, falling back to `presentationTime`), which is on the `performance.now()` timeline. Synthetic and replay sources are stepped by the game clock. | Camera-clock timestamps as required, directly comparable with game time for latency compensation, and `?timeScale` can speed up headless checks. |
+| 11 | 2026-11-14 | Continuous signals (hand hold position, lean, knee-lift cadence) are exposed as in-place state on `InputProvider.state`; only discrete moments are events. | The brief lists `HandHold`, `Lean` and `KneeLiftCadence` as events, but emitting them every frame would allocate per frame. Same information, no garbage. |
+| 12 | 2026-11-14 | Debug input (`?input=debug`) is a second `InputProvider` implementation, not a fake landmark source. | It must produce the same events and state the recognizers produce; skipping landmarks keeps it simple and deterministic. The synthetic player covers the landmark-to-recognizer path. |
