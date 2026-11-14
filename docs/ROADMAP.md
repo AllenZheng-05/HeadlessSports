@@ -46,7 +46,7 @@ Contracts first (0.6), then three builders in parallel on disjoint directories, 
 | 2.7 Onboarding and calibration, out-of-frame pause, camera permission flow, safety reminder | B | done | |
 | 2.8 Gate screen wired to the benchmark | B | done | |
 | 2.9 Scores: `ScoreStore` interface, IndexedDB implementation | B | done | |
-| 2.10 Service worker caching | B | doing | |
+| 2.10 Service worker caching | B | done | |
 | 2.11 Review of milestone 2 | R | todo | |
 
 ## Milestones 3 to 7: sports
@@ -57,8 +57,8 @@ Each sport: module under `src/sports/<name>/`, typed tunables, synthetic script,
 |---|---|---|---|---|
 | 3 | Rock climbing | B | done | |
 | 4 | Bowling | B | done | Rapier, lazy-loaded |
-| 5 | Baseball batting | B | doing | Can run in parallel with 4 in a worktree |
-| 6 | Archery | B | doing | |
+| 5 | Baseball batting | B | done | Can run in parallel with 4 in a worktree |
+| 6 | Archery | B | done | |
 | 7 | Javelin | B | doing | Can run in parallel with 6 in a worktree |
 
 ## Milestone 8: launch polish
@@ -66,7 +66,7 @@ Each sport: module under `src/sports/<name>/`, typed tunables, synthetic script,
 | Task | Agent | Status | Notes |
 |---|---|---|---|
 | 8.1 Accessibility pass and seated modes | B | todo | |
-| 8.2 Deployment config (`wrangler`, `_headers`, CSP) and full `docs/DEPLOY.md` | B / H | doing | Deploy nothing |
+| 8.2 Deployment config (`wrangler`, `_headers`, CSP) and full `docs/DEPLOY.md` | B / H | done | Deploy nothing |
 | 8.3 Memory soak test under the synthetic player | B | todo | |
 
 ## If everything above is done

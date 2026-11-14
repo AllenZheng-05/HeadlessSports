@@ -147,6 +147,18 @@ Pick Bowling; stand about 2 to 2.5 m back, whole body in view. Without a camera:
 7. **Pins.** Do they fall believably and settle in reasonable time? Any pins left wobbling or counted wrongly?
 8. Known issues: with keyboard and mouse, a straight ball needs the mouse about two thirds of the way across the screen (mouse centre aims left); `E` toggles, so the second pick-up needs two presses; the bowler's body hides the near half of the lane; the ball-return pedestal is partly behind the camera preview.
 
+### Milestone 5: batting
+
+Pick Batting; stand 2 to 2.5 m back, whole body in view, hands together like a bat grip. Without a camera: `/?sport=batting&input=debug&skipGate=1` (S swings, Shift for a harder swing, mouse height sets hand height) or the bot at `/?sport=batting&source=synthetic&skipGate=1`.
+
+1. **Timing offset (the main number).** Swing at all ten pitches trying to hit them, and read the "N ms early / late" line after each. If you are consistently early or late by a similar amount while it feels on time, shift `batTravelMs` (130) by that amount. Tell me the readings.
+2. **Windows.** Do `perfectMs` 45, `goodMs` 95, `okMs` 160, `foulMs` 230 feel fair? A late swing should say "Too late", not "Strike": if real swing events arrive more than 250 ms late, raise `lateWindowMs` and `eventDelayAllowanceMs`.
+3. **Grip.** Does holding both hands together register as a swing reliably, and does a swing ever start but never finish (hands blurred mid-swing)? Tunables: `swing.gripDistance`, `swing.gripGraceMs` in the recognizer config.
+4. **Power.** Do a lazy swing and a hard swing give clearly different distances? Tunables: `powerFloor` 3, `powerCeil` 9, `startSpeedGain` 1.5.
+5. **Height.** Hands low, chest-high and high: do you get fly balls, line drives and grounders as expected, and is "Under it / Over it" fair? Tunables: `swToMetres`, `batDrop`, `missHeight`, `launchPerMetre`.
+6. **Home runs.** The bot hits one every time (about 100 m), so they are probably too easy. Raise `drag` or lower `maxExit` if they come too cheaply for you.
+7. Known issues: the ball is small against the pitcher; the fence is far and faint.
+
 ### Milestone 6: archery
 
 Pick Archery; sitting or standing, shoulders and both arms in view. Without a camera: `/?sport=archery&input=debug&skipGate=1` (A selects the bow hand and the mouse places it, D selects the draw hand, E closes it near the bow hand to nock, drag away to draw, E again to release) or the bot at `/?sport=archery&source=synthetic&skipGate=1`.
