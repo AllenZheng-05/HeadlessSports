@@ -171,7 +171,7 @@ Open `http://localhost:5173/`, pick Rock climbing. Sit or stand about 1 m from t
 3. **Alternate hands for a minute.** Count unintended drops (the fist flickered or the hand was lost for a moment). Tunables: `lostHandGraceMs` 500, `slipGraceMs` 350, and the fist thresholds in the input config.
 4. **Stamina and ledges.** Can you reach the first rest ledge at 20 m? I lowered the drain rates (two hands 0.02/s, one hand 0.035/s) after the bot ran out near 11 m; judge whether it is now too easy. Tunables: `drainTwoHands`, `drainOneHand`, `ledgeEveryM`.
 5. **Comfort.** Is the top of the reach comfortable, and do your hands stay in frame? Does a 75 second round tire your arms too much?
-6. Known cosmetic issues: a hand held below shoulder height can hide behind the torso; the putty body picks up a slight green tint from the scene lighting.
+6. Known cosmetic issue: a hand held below shoulder height can hide behind the torso.
 
 ### Milestone 4: bowling
 
@@ -184,7 +184,7 @@ Pick Bowling; stand about 2 to 2.5 m back, whole body in view. Without a camera:
 5. **Position.** Step left and right: the bowler should move about 0.3 m per shoulder width (`lateralScale`).
 6. **Second ball.** After a first ball, does picking up again work with your hand still partly closed?
 7. **Pins.** Do they fall believably and settle in reasonable time? Any pins left wobbling or counted wrongly?
-8. Known issues: with keyboard and mouse, a straight ball needs the mouse about two thirds of the way across the screen (mouse centre aims left); `E` toggles, so the second pick-up needs two presses; the bowler's body hides the near half of the lane; the ball-return pedestal is partly behind the camera preview.
+8. Known issues: with keyboard and mouse, `E` toggles, so the second pick-up needs two presses; the bowler's body hides the near half of the lane; the ball-return pedestal is partly behind the camera preview.
 
 ### Milestone 5: batting
 
