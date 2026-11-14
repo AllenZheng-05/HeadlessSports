@@ -129,6 +129,12 @@ describe('scorecard', () => {
     expect(frameMarks([...rep(18, 0), 5, 5, 10])[9]).toBe('5/X');
     expect(frameMarks([...rep(18, 0), 10, 5, 5])[9]).toBe('X5/');
   });
+  it('marks a 0 then 10 as a spare, never X, including in the tenth frame', () => {
+    expect(frameMarks([0, 10, 3])[0]).toBe('-/');
+    expect(frameMarks([...rep(18, 0), 10, 0, 10])[9]).toBe('X-/');
+    expect(frameMarks([...rep(18, 0), 0, 10, 10])[9]).toBe('-/X');
+    expect(frameMarks([...rep(18, 0), 10, 10, 0])[9]).toBe('XX-');
+  });
   it('builds three rows with one cell per frame', () => {
     const rows = scorecardRows([10, 3, 4]);
     expect(rows).toHaveLength(3);

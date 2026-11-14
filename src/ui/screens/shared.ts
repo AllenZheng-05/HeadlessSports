@@ -17,8 +17,13 @@ export interface ScreenSpec {
   onMount?: () => void;
   /** The hand cursor stays off on this screen (play). */
   noCursor?: boolean;
-  /** Make the camera indicator visible on this screen. */
+  /** The screen lays out the camera indicator itself (calibration, play): show it even when off. */
   camera?: boolean;
+  /**
+   * Show the camera indicator, when the camera is active, in a compact row inside this screen's
+   * card instead of the corner of the page (for cards that reach close to the page edge).
+   */
+  cameraInCard?: boolean;
 }
 
 export interface ScreenHost {

@@ -3,7 +3,7 @@ import type { Sport, SportBot, SportContext, SportFactory } from '../../core/spo
 import { AvatarAnimator } from '../../render/avatar/AvatarAnimator';
 import { createBowlingBot } from './bot';
 import { bowlingConfig, bowlingRanges } from './config';
-import { BowlingGame } from './game';
+import { BowlingGame, rollBanner } from './game';
 import type { BowlPhase, RollOutcome } from './game';
 import { createRapierBowling } from './physics';
 import type { Release } from './release';
@@ -97,28 +97,28 @@ export const createBowling: SportFactory = async (ctx: SportContext) => {
     refreshCard();
     switch (o.kind) {
       case 'strike':
-        ctx.hud.setBanner('Strike!', 1600);
+        ctx.hud.setBanner(rollBanner(o), 1600);
         ctx.audio.play('great');
         ctx.hud.flash('great');
         animator.play('celebrate');
         break;
       case 'spare':
-        ctx.hud.setBanner('Spare!', 1600);
+        ctx.hud.setBanner(rollBanner(o), 1600);
         ctx.audio.play('good');
         ctx.hud.flash('good');
         animator.play('celebrate');
         break;
       case 'gutter':
-        ctx.hud.setBanner('Gutter', 1600);
+        ctx.hud.setBanner(rollBanner(o), 1600);
         ctx.audio.play('bad');
         ctx.hud.flash('bad');
         break;
       case 'miss':
-        ctx.hud.setBanner('Miss', 1600);
+        ctx.hud.setBanner(rollBanner(o), 1600);
         ctx.audio.play('bad');
         break;
       default:
-        ctx.hud.setBanner(o.pins === 1 ? '1 pin' : `${o.pins} pins`, 1600);
+        ctx.hud.setBanner(rollBanner(o), 1600);
         if (o.pins >= 7) ctx.audio.play('good');
     }
   };
@@ -207,9 +207,12 @@ export const createBowling: SportFactory = async (ctx: SportContext) => {
   );
 
   const unsubscribers = [
-    ctx.input.on('FistClosed', (e) => game.onFistClosed(e.hand)),
+    ctx.input.on('FistClosed', (e) => {
+      if (!ctx.paused) game.onFistClosed(e.hand);
+    }),
     ctx.input.on('ThrowReleased', (e) => {
-      game.onThrow(e);
+      // Gestures made while the round is paused (player out of frame) do not count.
+      if (!ctx.paused) game.onThrow(e);
     }),
   ];
 

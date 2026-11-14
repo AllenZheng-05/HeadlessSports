@@ -9,7 +9,7 @@ import {
   sideSign,
   swayAmplitude,
   swayOffset,
-  wristDistance,
+  wristDistanceRawException,
   targetPitch,
   targetYaw,
 } from './aim';
@@ -132,7 +132,8 @@ export const createArchery: SportFactory = (ctx: SportContext): ArcherySport => 
   let lastImpactX = 0;
   let lastImpactY = cfg.targetHeight;
   let shownScore = -1;
-  let shownSubKey = '';
+  let shownLeft = -1;
+  let shownWind = Number.NaN;
   let shownHint: string | null = '';
   let meterOn = false;
   let flagWind = 0;
@@ -146,10 +147,10 @@ export const createArchery: SportFactory = (ctx: SportContext): ArcherySport => 
   };
 
   const unsubClose = ctx.input.on('FistClosed', (e) => {
-    if (e.hand === drawHand) machine.noteClosed();
+    if (e.hand === drawHand && !ctx.paused) machine.noteClosed();
   });
   const unsubOpen = ctx.input.on('FistOpened', (e) => {
-    if (e.hand === drawHand) machine.noteOpened(e.t - clockOff);
+    if (e.hand === drawHand && !ctx.paused) machine.noteOpened(e.t - clockOff);
   });
 
   const refreshHud = (): void => {
@@ -160,9 +161,9 @@ export const createArchery: SportFactory = (ctx: SportContext): ArcherySport => 
     }
     const wind = currentWind();
     const left = round.left;
-    const key = `${left}|${wind}`;
-    if (key !== shownSubKey) {
-      shownSubKey = key;
+    if (left !== shownLeft || wind !== shownWind) {
+      shownLeft = left;
+      shownWind = wind;
       const w =
         Math.abs(wind) < 0.05 ? 'calm' : `${Math.abs(wind).toFixed(1)} ${wind > 0 ? '→' : '←'}`;
       ctx.hud.setSubScore(`${left} ${left === 1 ? 'arrow' : 'arrows'} left · Wind ${w}`);
@@ -280,7 +281,7 @@ export const createArchery: SportFactory = (ctx: SportContext): ArcherySport => 
     const s = ctx.input.state;
     const bowArm = s.arms[bowHand];
     const dh = s.hands[drawHand];
-    const dist = wristDistance(s.pose, s.aspect, s.shoulderWidth);
+    const dist = wristDistanceRawException(s.pose, s.aspect, s.shoulderWidth);
     const valid = s.hasPose && s.tracking && dist >= 0;
     const bowUp = valid && bowArmUp(bowArm.wristX, bowArm.wristY, cfg);
     if (bowUp) {
@@ -428,7 +429,8 @@ export const createArchery: SportFactory = (ctx: SportContext): ArcherySport => 
     start(): void {
       started = true;
       shownHint = '';
-      shownSubKey = '';
+      shownLeft = -1;
+      shownWind = Number.NaN;
       shownScore = -1;
       refreshHud();
     },

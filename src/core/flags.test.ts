@@ -17,6 +17,7 @@ describe('parseFlags', () => {
       sport: null,
       seed: 1,
       short: false,
+      hand: null,
     });
   });
 
@@ -38,6 +39,7 @@ describe('parseFlags', () => {
       sport: 'bowling',
       seed: 7,
       short: false,
+      hand: null,
     });
   });
 
@@ -61,6 +63,13 @@ describe('parseFlags', () => {
     expect(parseFlags('source=replay&timeScale=0.01').timeScale).toBe(0.1);
     expect(parseFlags('source=synthetic&timeScale=nope').timeScale).toBe(1);
     expect(parseFlags('source=synthetic&timeScale=2.5').timeScale).toBe(2.5);
+  });
+
+  it('parses the hand flag', () => {
+    expect(parseFlags('hand=left').hand).toBe('left');
+    expect(parseFlags('hand=right').hand).toBe('right');
+    expect(parseFlags('hand=both').hand).toBeNull();
+    expect(parseFlags('').hand).toBeNull();
   });
 
   it('forces timeScale to 1 for the camera', () => {

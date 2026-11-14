@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { bowlingConfig } from './config';
-import { BowlingGame } from './game';
+import { BowlingGame, rollBanner } from './game';
 import type { GameEvents, PlayerView, RollOutcome } from './game';
 import type { BowlingPhysics } from './physics';
 
@@ -265,6 +265,37 @@ describe('frames', () => {
     expect(t.outcomes[0]).toMatchObject({ pins: 10, kind: 'strike' });
     expect(t.game.next).toMatchObject({ frame: 1, ball: 0 });
     expect(t.game.strikes).toBe(1);
+  });
+
+  it('counts 0 then 10 as a spare, not a strike', () => {
+    const t = setup([0, 10, 10]);
+    t.playBall();
+    expect(t.outcomes[0]?.kind).toBe('miss');
+    t.playBall();
+    expect(t.outcomes[1]).toMatchObject({ pins: 10, kind: 'spare', frame: 0, ball: 1 });
+    expect(rollBanner(t.outcomes[1]!)).toBe('Spare!');
+    expect(t.game.strikes).toBe(0);
+    expect(t.game.spares).toBe(1);
+    // The next frame starts on a fresh rack: a clean sweep there is a strike.
+    t.playBall();
+    expect(t.outcomes[2]).toMatchObject({ pins: 10, kind: 'strike', frame: 1, ball: 0 });
+    expect(rollBanner(t.outcomes[2]!)).toBe('Strike!');
+    expect(t.game.strikes).toBe(1);
+    expect(t.game.spares).toBe(1);
+  });
+
+  it('counts tenth-frame X, 0, 10 as a spare and a fresh-rack ball as a strike', () => {
+    // Nine open frames of 0 0, then X, 0, 10.
+    const t = setup([...new Array<number>(18).fill(0), 10, 0, 10]);
+    for (let i = 0; i < 21; i++) t.playBall();
+    const tenth = t.outcomes.slice(18);
+    expect(tenth.map((o) => o.kind)).toEqual(['strike', 'miss', 'spare']);
+    expect(t.game.strikes).toBe(1);
+    expect(t.game.spares).toBe(1);
+    // X after a tenth-frame spare is a strike again (fresh rack).
+    const u = setup([...new Array<number>(18).fill(0), 4, 6, 10]);
+    for (let i = 0; i < 21; i++) u.playBall();
+    expect(u.outcomes.slice(18).map((o) => o.kind)).toEqual(['count', 'spare', 'strike']);
   });
 
   it('reports a gutter or a miss when nothing falls', () => {

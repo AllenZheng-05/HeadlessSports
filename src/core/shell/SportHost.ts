@@ -45,6 +45,8 @@ export class SportHost {
   result: RoundResult | null = null;
   /** The live sport object, for tests and debugging. */
   sport: Sport | null = null;
+  /** True when the last `play` ended because the sport (or its factory) threw. Reset by `play`. */
+  lastRoundFailed = false;
 
   private readonly renderer: RendererHandle;
   private readonly ui: Ui;
@@ -95,13 +97,18 @@ export class SportHost {
     this.round = round;
     this.phase = 'loading';
     this.result = null;
+    this.lastRoundFailed = false;
     void this.startRound(entry, calibration, gen, round);
     return done;
   }
 
-  /** Leave the current round (Escape, quit control). Resolves `play` with null. */
+  /**
+   * Leave the current round (Escape, quit control, camera off). Works in every phase: while
+   * loading it abandons the load (anything the factory returns later is disposed), and after the
+   * round finished it tears the finished sport down. Resolves `play` with null.
+   */
   quit(): void {
-    if (this.phase === 'idle' || this.phase === 'finished') return;
+    if (this.phase === 'idle') return;
     this.teardown();
   }
 
@@ -216,8 +223,9 @@ export class SportHost {
     round: Round,
   ): Promise<void> {
     const meta = entry.meta;
+    const isPaused = (): boolean => this.phase === 'paused';
     try {
-      this.ui.showLoading(meta.title);
+      this.ui.showLoading(meta.title, undefined, () => this.quit());
       const factory = (await entry.load()).default;
       if (gen !== this.generation) return;
       const stage = createFieldDayScene({ accent: meta.accent });
@@ -244,6 +252,9 @@ export class SportHost {
         random: mulberry32(this.flags.seed),
         debug: this.flags.debug,
         short: this.flags.short,
+        get paused(): boolean {
+          return isPaused();
+        },
         finish: (result) => this.finishRound(round, result),
       };
       const sport = await factory(ctx);
@@ -293,11 +304,14 @@ export class SportHost {
     round.resolve(result);
   }
 
-  /** A sport factory or method threw: log, clean up, tell the player, resolve null. */
+  /**
+   * A sport factory or method threw: log, clean up (the HUD is cleared), resolve `play` with null
+   * and flag `lastRoundFailed` so the shell can say so on the menu.
+   */
   private fail(err: unknown): void {
     console.error('Sport failed', err);
+    this.lastRoundFailed = true;
     this.teardown();
-    this.ui.hud.setBanner('That round broke. Back to the menu.', 2500);
   }
 
   /** Dispose the round's sport, stage and avatar; back to the lobby; settle `play` with null. */

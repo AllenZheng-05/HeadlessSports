@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'vite';
 import type { Plugin } from 'vite';
+import { MEDIAPIPE_VERSION } from '../core/version';
 import { buildIdFromFiles } from './cacheNames';
 import { buildPrecacheList } from './precache';
 import type { BundleEntry } from './precache';
@@ -59,6 +60,7 @@ export function serviceWorkerPlugin(): Plugin {
         define: {
           __BUILD_ID__: JSON.stringify(buildIdFromFiles(precache)),
           __PRECACHE__: JSON.stringify(precache),
+          __WASM_VERSION__: JSON.stringify(MEDIAPIPE_VERSION),
         },
         build: {
           outDir,

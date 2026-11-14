@@ -3,7 +3,7 @@ import { runScript, syntheticCalibration } from '../../input/testing/runScript';
 import type { GameEvent, InputState, Side } from '../../input/types';
 import type { ScriptStep } from '../../tracking/synthetic/script';
 import { drawBow, idle } from '../../tracking/synthetic/scripts/moves';
-import { bowArmUp, otherSide, targetPitch, targetYaw, wristDistance } from './aim';
+import { bowArmUp, otherSide, targetPitch, targetYaw, wristDistanceRawException } from './aim';
 import { adjustSteps, nockSteps, pullSteps, releaseSteps } from './bot';
 import { archeryConfig } from './config';
 import { DrawMachine, StepEvent } from './draw';
@@ -43,7 +43,7 @@ function play(steps: ScriptStep[], drawHand: Side): Outcome {
       calibration: cal,
       extraMs: 600,
       onFrame: (s: InputState, t: number) => {
-        const dist = wristDistance(s.pose, s.aspect, s.shoulderWidth);
+        const dist = wristDistanceRawException(s.pose, s.aspect, s.shoulderWidth);
         const valid = s.hasPose && s.tracking && dist >= 0;
         const arm = s.arms[bowHand];
         const hand = s.hands[drawHand];

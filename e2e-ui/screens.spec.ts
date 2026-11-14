@@ -144,3 +144,109 @@ test('long banner stays clear of the score block and the table', async ({ page }
   expect((banner?.x ?? 0) + (banner?.width ?? 0)).toBeLessThanOrEqual(table?.x ?? 0);
   expect(banner?.x ?? 0).toBeGreaterThanOrEqual((score?.x ?? 0) + (score?.width ?? 0));
 });
+
+interface Box {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+function overlaps(a: Box, b: Box): boolean {
+  return a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+}
+
+const CAMERA_SCREENS: { name: string; query: string; content: string }[] = [
+  { name: 'menu-cam', query: 'screen=menu&cam=1', content: '.heading, .sport-card' },
+  { name: 'menu-cam-8', query: 'screen=menu&n=8&cam=1', content: '.heading, .sport-card' },
+  {
+    name: 'howto-cam',
+    query: 'screen=howto&debugkeys=1&cam=1&toggle=right',
+    content: '.howto-swatch, .heading, .steps, .howto-side, .actions, .fist-hint',
+  },
+  {
+    name: 'results-cam',
+    query: 'screen=results&sport=4&cam=1',
+    content: '.results-sport, .results-headline, .best-badge, .results-best, .actions',
+  },
+  { name: 'loading-cam', query: 'screen=loading&cancel=1&cam=1', content: '.brand, .loading-text' },
+];
+
+for (const { name, query, content } of CAMERA_SCREENS) {
+  test(`camera indicator sits clear of the content: ${name}`, async ({ page }) => {
+    const problems = watchErrors(page);
+    await page.goto(`/ui-harness.html?${query}`);
+    await page.waitForTimeout(900);
+    await page.screenshot({ path: `e2e-ui/screenshots/${name}.png` });
+    await expect(page.locator('.camera-pill')).toHaveText('Camera on');
+    await expect(page.locator('.camera-off')).toBeVisible();
+    const indicator = (await page.locator('.camera-indicator').boundingBox()) as Box;
+    expect(indicator).not.toBeNull();
+    // Fully on the page, at 1280x720.
+    expect(indicator.x).toBeGreaterThanOrEqual(0);
+    expect(indicator.y).toBeGreaterThanOrEqual(0);
+    const boxes = await page.locator(content).evaluateAll((els) =>
+      els.map((el) => {
+        const r = el.getBoundingClientRect();
+        return { x: r.x, y: r.y, width: r.width, height: r.height };
+      }),
+    );
+    expect(boxes.length).toBeGreaterThan(0);
+    for (const box of boxes) expect(overlaps(indicator, box)).toBe(false);
+    expect(problems).toEqual([]);
+  });
+}
+
+test('the camera indicator is absent on menus when the camera is off', async ({ page }) => {
+  await page.goto('/ui-harness.html?screen=menu');
+  await page.waitForTimeout(400);
+  await expect(page.locator('.camera-indicator')).toBeHidden();
+});
+
+test('the menu notice is shown and stays clear of the card', async ({ page }) => {
+  const problems = watchErrors(page);
+  await page.goto('/ui-harness.html?screen=menu&notice=1&cam=1');
+  await page.waitForTimeout(900);
+  await page.screenshot({ path: 'e2e-ui/screenshots/menu-notice.png' });
+  const note = page.locator('.menu-notice');
+  await expect(note).toHaveText('That round broke. Pick a sport to try again.');
+  await expect(note).toHaveAttribute('aria-live', 'polite');
+  const noteBox = (await note.boundingBox()) as Box;
+  const indicator = (await page.locator('.camera-indicator').boundingBox()) as Box;
+  const card = (await page.locator('.card-menu').boundingBox()) as Box;
+  expect(overlaps(noteBox, card)).toBe(false);
+  expect(overlaps(noteBox, indicator)).toBe(false);
+  expect(problems).toEqual([]);
+});
+
+test('loading Back button and Escape cancel', async ({ page }) => {
+  await page.goto('/ui-harness.html?screen=loading&cancel=1');
+  await page.getByRole('button', { name: 'Back' }).click();
+  await expect.poll(() => resolved(page)).toBe('cancelled');
+  await page.goto('/ui-harness.html?screen=loading&cancel=1');
+  await page.keyboard.press('Escape');
+  await expect.poll(() => resolved(page)).toBe('cancelled');
+});
+
+test('the throwing hand toggle works from the keyboard', async ({ page }) => {
+  await page.goto('/ui-harness.html?screen=howto&debugkeys=1&toggle=right');
+  const left = page.getByRole('button', { name: 'Left' });
+  await left.focus();
+  await page.keyboard.press('Enter');
+  await expect.poll(() => resolved(page)).toBe('hand:left');
+  await expect(left).toHaveAttribute('aria-pressed', 'true');
+  await expect(left).toHaveText('✓ Left');
+});
+
+test('the seated toggle on calibration reports its state', async ({ page }) => {
+  const problems = watchErrors(page);
+  await page.goto('/ui-harness.html?screen=calibration&sport=3');
+  await page.waitForTimeout(900);
+  await page.screenshot({ path: 'e2e-ui/screenshots/calibration-seat.png' });
+  const seat = page.locator('.cal-seat');
+  await expect(seat).toHaveText('Sitting: off');
+  await seat.click();
+  await expect(seat).toHaveText('Sitting: on');
+  await expect.poll(() => resolved(page)).toBe('seated:true');
+  expect(problems).toEqual([]);
+});

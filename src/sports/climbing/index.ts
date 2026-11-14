@@ -108,7 +108,7 @@ export const createClimbing: SportFactory = (ctx: SportContext): ClimbingSport =
     if (secs !== shownSecs) {
       shownSecs = secs;
       ctx.hud.setSubScore(
-        ctx.best === null ? `${secs} s left` : `${secs} s left � Best ${ctx.best.toFixed(1)} m`,
+        ctx.best === null ? `${secs} s left` : `${secs} s left · Best ${ctx.best.toFixed(1)} m`,
       );
     }
     const pct = Math.round(state.stamina * 100);
@@ -275,7 +275,8 @@ export const createClimbing: SportFactory = (ctx: SportContext): ClimbingSport =
     },
 
     fixedUpdate(dt: number): void {
-      if (finished) return;
+      // Grab and release come from hand state read here, so nothing changes while paused.
+      if (finished || ctx.paused) return;
       const hands = ctx.input.state.hands;
       input.left.present = hands.left.present;
       input.left.closed = hands.left.closed;

@@ -58,6 +58,11 @@ export interface RoundResult {
   lines?: string[];
   /** Compact numeric summary of the round for later server-side recompute. */
   detail?: Record<string, number>;
+  /**
+   * Default true. False means show the results screen but do not store the score or claim a
+   * personal best (for example a timed-out round of a lower-is-better sport).
+   */
+  saveScore?: boolean;
 }
 
 export type MeterTone = 'neutral' | 'good' | 'warn' | 'bad';
@@ -155,6 +160,11 @@ export interface SportContext {
    * checks finish quickly. Each sport keeps its short-round values in its config object.
    */
   short: boolean;
+  /**
+   * True while the host has paused the round because the player is out of frame. Sports should
+   * ignore gesture events (throws, swings, grabs) while it is true. A getter, read it when needed.
+   */
+  readonly paused: boolean;
   /** Call once when the round is over. The shell saves the score and shows the results screen. */
   finish(result: RoundResult): void;
 }

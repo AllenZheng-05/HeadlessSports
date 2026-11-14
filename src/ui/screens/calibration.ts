@@ -123,6 +123,21 @@ export function buildCalibration(
   const status = h('p', 'cal-status');
   status.setAttribute('aria-live', 'polite');
   side.append(ringWrap, stepText, dots, status);
+  let seatedHandler: ((seated: boolean) => void) | null = null;
+  let sitting = false;
+  const seat = selectButton('Sitting: off', 'btn btn-small btn-secondary cal-seat');
+  seat.setAttribute('aria-pressed', 'false');
+  seat.addEventListener('click', () => {
+    sitting = !sitting;
+    seat.textContent = sitting ? 'Sitting: on' : 'Sitting: off';
+    seat.setAttribute('aria-pressed', String(sitting));
+    // A seated player is not asked to fit a full-body outline.
+    guide = createGuide(sitting && meta.stance === 'full-body' ? 'upper-body' : meta.stance);
+    guide.classList.toggle('ok', lastOk === true);
+    host.mirror.setGuide(guide);
+    seatedHandler?.(sitting);
+  });
+  if (meta.seatedOk) side.append(seat);
   row.append(mirrorSlot, side);
 
   const message = h('p', 'cal-message');
@@ -138,7 +153,7 @@ export function buildCalibration(
   skip.addEventListener('click', () => doSkip());
   el.append(skip);
 
-  const guide = createGuide(meta.stance);
+  let guide = createGuide(meta.stance);
 
   let lastMessage: string | null = null;
   let lastHint: string | null | undefined;
@@ -185,6 +200,11 @@ export function buildCalibration(
     set,
     skipped,
     close: release,
+    onSeated: meta.seatedOk
+      ? (handler): void => {
+          seatedHandler = handler;
+        }
+      : undefined,
   };
 
   const spec = {

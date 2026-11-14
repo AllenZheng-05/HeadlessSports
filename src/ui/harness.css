@@ -1,0 +1,6 @@
+/* Stand-in backdrop for the UI harness (kept out of the HTML so the production CSP holds). */
+#stand-in {
+  position: fixed;
+  inset: 0;
+  background: linear-gradient(to bottom, #bfe3f7 0%, #bfe3f7 55%, #8fd694 55%, #a9e0ac 100%);
+}
