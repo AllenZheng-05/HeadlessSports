@@ -181,7 +181,14 @@ export function createUi(root: HTMLElement, options: UiOptions = {}): Ui {
     tunables,
 
     update(dt: number, nowMs: number): void {
-      cursor.update(current && !current.noCursor && input ? input.state : null, dt, nowMs);
+      // Bots and recordings do not navigate menus; mouse and keyboard still work.
+      const kind = input?.source?.kind;
+      const botLike = kind === 'synthetic' || kind === 'replay';
+      cursor.update(
+        current && !current.noCursor && input && !botLike ? input.state : null,
+        dt,
+        nowMs,
+      );
       mirror.update(nowMs);
     },
 

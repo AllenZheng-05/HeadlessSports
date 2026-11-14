@@ -8,7 +8,8 @@ const EPSILON = 1e-9;
 export interface LoopCallbacks {
   /** Start of every rendered frame, before fixed steps. `nowMs` is game time. */
   begin(nowMs: number, dt: number): void;
-  fixed(dt: number, nowMs: number): void; // 120 Hz
+  /** `simMs` is the simulation clock: it advances by exactly FIXED_DT * 1000 per step. */
+  fixed(dt: number, simMs: number): void; // 120 Hz
   frame(dt: number, nowMs: number, alpha: number): void; // once per rendered frame, after fixed steps
 }
 
@@ -30,6 +31,9 @@ export class GameLoop {
   private readonly timeScale: number;
   private readonly maxSteps: number;
   private accumulator = 0;
+  /** Simulation clock (game ms): end time of the last fixed step. nowMs - simMs is the leftover. */
+  private simMs = 0;
+  private resync = true;
   private lastTs = 0;
   private started = false;
   private rafId = 0;
@@ -81,27 +85,35 @@ export class GameLoop {
       if (realMs > MAX_REAL_DT_MS) realMs = MAX_REAL_DT_MS;
     }
     this.lastTs = ts;
+    const prevNowMs = this.nowMs;
     const gameMs = realMs * this.timeScale;
     this.nowMs = this.timeScale === 1 ? ts : this.nowMs + gameMs;
     const cb = this.callbacks;
 
     if (this.paused) {
       this.accumulator = 0;
+      this.resync = true; // the simulation clock stays put; it re-aligns on resume
       cb.begin(this.nowMs, 0);
       cb.frame(0, this.nowMs, 0);
       return;
     }
 
     const dt = gameMs / 1000;
+    if (this.resync) {
+      this.simMs = prevNowMs - this.accumulator * 1000;
+      this.resync = false;
+    }
     cb.begin(this.nowMs, dt);
     this.accumulator += dt;
     let steps = 0;
     while (this.accumulator >= FIXED_DT - EPSILON) {
       if (steps === this.maxSteps) {
         this.accumulator = 0; // drop the remainder: a slow frame must not spiral
+        this.simMs = this.nowMs; // the clock jumps forward with the dropped steps
         break;
       }
-      cb.fixed(FIXED_DT, this.nowMs);
+      this.simMs += FIXED_DT * 1000;
+      cb.fixed(FIXED_DT, this.simMs);
       this.accumulator -= FIXED_DT;
       steps++;
     }

@@ -281,6 +281,26 @@ describe('raised fist starts the how-to', () => {
   });
 });
 
+describe('hand cursor and the input source', () => {
+  function cursorHidden(kind: string | null): boolean {
+    const input = createFakeInput('pose');
+    (input as { source: unknown }).source = kind ? { kind } : null;
+    input.setMouse(0.05, 0.05, false);
+    ui.setInput(input);
+    void ui.showTitle();
+    ui.update(0.016, 0);
+    ui.update(0.016, 16);
+    return (root.querySelector('.hand-cursor') as HTMLElement).hidden === true;
+  }
+
+  it('is disabled for synthetic and replay sources, enabled otherwise', () => {
+    expect(cursorHidden('synthetic')).toBe(true);
+    expect(cursorHidden('replay')).toBe(true);
+    expect(cursorHidden('camera')).toBe(false);
+    expect(cursorHidden(null)).toBe(false);
+  });
+});
+
 describe('tunables via the ui', () => {
   it('debug renders a panel and non-debug does not', () => {
     const debugRoot = document.createElement('div');

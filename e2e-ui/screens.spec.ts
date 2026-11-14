@@ -87,12 +87,15 @@ test('keyboard Tab and Enter activate a menu card', async ({ page }) => {
 
 test('hand cursor: holding over a card selects it, leaving early does not', async ({ page }) => {
   await page.goto('/ui-harness.html?screen=menu&hand=1');
-  await page.waitForTimeout(600);
   const card = page.locator('.sport-card[data-sport="archery"]');
   const box = await card.boundingBox();
   expect(box).not.toBeNull();
   const cx = (box?.x ?? 0) + (box?.width ?? 0) / 2;
   const cy = (box?.y ?? 0) + (box?.height ?? 0) / 2;
+
+  // a new screen ignores the hand for 1.2 s and wants it seen outside every button first
+  await page.mouse.move(6, 6);
+  await page.waitForTimeout(1500);
 
   // move away before one second: nothing happens
   await page.mouse.move(cx, cy);

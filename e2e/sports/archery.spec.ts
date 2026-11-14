@@ -150,11 +150,11 @@ test.describe('archery', () => {
     await waitPhase(page, 'playing');
 
     // Debug body: shoulders at y 0.32, one shoulder width is 0.0731 across. DebugInput measures a
-    // wrist from the opposite shoulder (see the report), so the cursor for a wrist `wx` sw from its
-    // own shoulder sits at 0.5 - side * 0.5 sw + wx sw.
+    // wrist from its own shoulder, so the cursor for a wrist `wx` sw from that shoulder sits at
+    // 0.5 + side * 0.5 sw + wx sw.
     const SW_X = 0.13 / (16 / 9);
     const cursor = (side: -1 | 1, wx: number, wy: number): { x: number; y: number } => ({
-      x: 0.5 - side * 0.5 * SW_X + wx * SW_X,
+      x: 0.5 + side * 0.5 * SW_X + wx * SW_X,
       y: 0.32 - 0.13 * wy,
     });
     const bow = cursor(-1, -1.2, 0.1);

@@ -71,16 +71,21 @@ function probe(page: Page): Promise<BowlingProbe | null> {
   });
 }
 
-async function waitSport(page: Page, expr: string, timeout = 60000): Promise<void> {
-  await page.waitForFunction(
-    (code) => {
-      const s = (window as unknown as { __game: { sport: unknown } }).__game.sport;
-      if (!s) return false;
-      return new Function('s', `return ${code}`)(s) as boolean;
-    },
-    expr,
-    { timeout, polling: 30 },
-  );
+/** Poll the sport's probe from Node until `check` passes. No string-to-code evaluation (CSP). */
+async function waitSport(
+  page: Page,
+  check: (s: BowlingProbe) => boolean,
+  timeout = 60000,
+): Promise<void> {
+  const deadline = Date.now() + timeout;
+  for (;;) {
+    const s = await probe(page);
+    if (s && check(s)) return;
+    if (Date.now() > deadline) {
+      throw new Error(`waitSport timed out after ${timeout} ms: ${check.toString()}`);
+    }
+    await page.waitForTimeout(30);
+  }
 }
 
 test.describe('bowling', () => {
@@ -105,7 +110,7 @@ test.describe('bowling', () => {
     const problems = watch(page);
     await page.goto('/?sport=bowling&input=debug&skipGate=1&short=1');
     await waitPhase(page, 'playing');
-    await waitSport(page, "s.phase === 'pickup'");
+    await waitSport(page, (s) => s.phase === 'pickup');
     interface Dbg {
       press(c: string): void;
       release(c: string): void;
@@ -121,26 +126,26 @@ test.describe('bowling', () => {
         [fn, args] as const,
       );
 
-    // Mouse x near 0.655 keeps the wrist at its neutral offset: a straight ball.
-    await dbg('moveTo', 0.655, 0.6);
+    // Mouse at the centre is a natural straight throw (debugInputConfig.neutralLateral).
+    await dbg('moveTo', 0.5, 0.6);
     await page.waitForTimeout(900);
     await page.screenshot({ path: `${SHOTS}/bowling-pickup.png` });
     await dbg('press', 'KeyE');
     await dbg('release', 'KeyE');
-    await waitSport(page, "s.phase === 'aim'");
+    await waitSport(page, (s) => s.phase === 'aim');
     await page.waitForTimeout(500);
     await page.screenshot({ path: `${SHOTS}/bowling-aim.png` });
     await dbg('press', 'KeyB');
     await page.waitForTimeout(700);
     await dbg('release', 'KeyB');
-    await waitSport(page, "s.phase === 'rolling'", 5000);
-    await waitSport(page, 's.ballZ < -8');
+    await waitSport(page, (s) => s.phase === 'rolling', 5000);
+    await waitSport(page, (s) => s.ballZ < -8);
     await page.screenshot({ path: `${SHOTS}/bowling-rolling.png` });
-    await waitSport(page, 's.contacted === true', 10000);
+    await waitSport(page, (s) => s.contacted, 10000);
     await page.waitForTimeout(150);
     await page.screenshot({ path: `${SHOTS}/bowling-pins.png` });
-    await waitSport(page, "s.phase === 'pickup' || s.rolls.length >= 1", 40000);
-    await waitSport(page, "s.phase === 'pickup' || s.phase === 'done'", 40000);
+    await waitSport(page, (s) => s.phase === 'pickup' || s.rolls.length >= 1, 40000);
+    await waitSport(page, (s) => s.phase === 'pickup' || s.phase === 'done', 40000);
     const p = await probe(page);
     expect(p?.rolls.length).toBeGreaterThanOrEqual(1);
     const mark = await page.evaluate(() => {

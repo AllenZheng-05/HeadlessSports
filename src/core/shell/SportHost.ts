@@ -273,7 +273,8 @@ export class SportHost {
     const enqueue = (steps: ScriptStep[]): void => {
       synthetic.queue?.enqueue(steps);
     };
-    synthetic.setDirector((_queue, t) => bot.next(enqueue, t));
+    // The bot's time is game ms (the frame's `t`), not the source's anchor-relative time.
+    synthetic.setDirector((_queue, _rel, frameT) => bot.next(enqueue, frameT));
   }
 
   private finishRound(round: Round, result: RoundResult): void {

@@ -5,6 +5,7 @@ import {
   DwellTracker,
   HandChooser,
   HandCursor,
+  SCREEN_GUARD_MS,
   LOCKOUT_MS,
   SmoothPoint,
   hitTest,
@@ -154,7 +155,7 @@ describe('hitTest', () => {
 });
 
 describe('HandCursor', () => {
-  it('selects the button under the hand after the dwell and shows hover', () => {
+  function setup() {
     const host = document.createElement('div');
     document.body.append(host);
     const button = document.createElement('button');
@@ -168,17 +169,76 @@ describe('HandCursor', () => {
     const click = vi.fn();
     button.addEventListener('click', click);
     const input = createFakeInput('hands');
-    input.setMouse(0.5, 0.5, false);
+    return { host, button, cursor, click, input };
+  }
 
+  it('selects the button under the hand after the dwell and shows hover', () => {
+    const { host, button, cursor, click, input } = setup();
+    input.setMouse(0.05, 0.05, false);
     let t = 0;
     cursor.update(input.state, 0.016, t);
     expect(cursor.el.hidden).toBe(false);
+    // the hand has been seen outside every button; it then moves onto one after the guard
+    for (; t < SCREEN_GUARD_MS; t += 16) cursor.update(input.state, 0.016, t);
+    input.setMouse(0.5, 0.5, false);
+    while (!button.classList.contains('hovered') && t < SCREEN_GUARD_MS + 1000) {
+      t += 16;
+      cursor.update(input.state, 0.016, t);
+    }
     expect(button.classList.contains('hovered')).toBe(true);
-    for (; t < DWELL_MS - 50; t += 16) cursor.update(input.state, 0.016, t);
+    const start = t;
+    for (; t < start + DWELL_MS - 50; t += 16) cursor.update(input.state, 0.016, t);
     expect(click).not.toHaveBeenCalled();
-    for (; t < DWELL_MS + 100; t += 16) cursor.update(input.state, 0.016, t);
+    for (; t < start + DWELL_MS + 100; t += 16) cursor.update(input.state, 0.016, t);
     expect(click).toHaveBeenCalledTimes(1);
-    for (; t < DWELL_MS + 400; t += 16) cursor.update(input.state, 0.016, t);
+    for (; t < start + DWELL_MS + 400; t += 16) cursor.update(input.state, 0.016, t);
+    expect(click).toHaveBeenCalledTimes(1);
+    cursor.dispose();
+    host.remove();
+  });
+
+  it('cannot begin a dwell in the first 1200 ms of a screen, even after leaving the buttons', () => {
+    const { host, button, cursor, click, input } = setup();
+    input.setMouse(0.05, 0.05, false);
+    cursor.update(input.state, 0.016, 0);
+    input.setMouse(0.5, 0.5, false);
+    let t = 16;
+    for (; t < SCREEN_GUARD_MS; t += 16) cursor.update(input.state, 0.016, t);
+    expect(button.classList.contains('hovered')).toBe(false);
+    cursor.update(input.state, 0.016, t);
+    expect(button.classList.contains('hovered')).toBe(true);
+    const start = t;
+    for (; t < start + DWELL_MS + 50; t += 16) cursor.update(input.state, 0.016, t);
+    expect(click).toHaveBeenCalledTimes(1);
+    cursor.dispose();
+    host.remove();
+  });
+
+  it('a hand resting on a new button never selects it until it has left every button', () => {
+    const { host, cursor, click, input } = setup();
+    input.setMouse(0.5, 0.5, false);
+    let t = 0;
+    for (; t < 6000; t += 16) cursor.update(input.state, 0.016, t);
+    expect(click).not.toHaveBeenCalled();
+    input.setMouse(0.05, 0.05, false); // leaves: now seen outside
+    for (; t < 6200; t += 16) cursor.update(input.state, 0.016, t);
+    input.setMouse(0.5, 0.5, false);
+    for (; t < 6200 + DWELL_MS + 600; t += 16) cursor.update(input.state, 0.016, t);
+    expect(click).toHaveBeenCalledTimes(1);
+    cursor.dispose();
+    host.remove();
+  });
+
+  it('a hand that was lowered for the guard time may then dwell, and a new screen re-arms the guard', () => {
+    const { host, button, cursor, click, input } = setup();
+    let t = 0;
+    for (; t < SCREEN_GUARD_MS + 100; t += 16) cursor.update(input.state, 0.016, t); // no hand
+    input.setMouse(0.5, 0.5, false);
+    const start = t;
+    for (; t < start + DWELL_MS + 100; t += 16) cursor.update(input.state, 0.016, t);
+    expect(click).toHaveBeenCalledTimes(1);
+    cursor.setButtons([button]); // new screen
+    for (let u = 0; u < 3000; u += 16, t += 16) cursor.update(input.state, 0.016, t);
     expect(click).toHaveBeenCalledTimes(1);
     cursor.dispose();
     host.remove();

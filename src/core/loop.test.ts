@@ -6,6 +6,7 @@ function harness(options?: { timeScale?: number; maxStepsPerFrame?: number }) {
   const calls = {
     begin: [] as [number, number][],
     fixed: 0,
+    sim: [] as number[],
     frame: [] as [number, number, number][],
   };
   const loop = new GameLoop(
@@ -14,9 +15,10 @@ function harness(options?: { timeScale?: number; maxStepsPerFrame?: number }) {
         log.push('begin');
         calls.begin.push([now, dt]);
       },
-      fixed() {
+      fixed(_dt, simMs) {
         log.push('fixed');
         calls.fixed++;
+        calls.sim.push(simMs);
       },
       frame(dt, now, alpha) {
         log.push('frame');
@@ -92,5 +94,71 @@ describe('GameLoop', () => {
     loop.paused = false;
     loop.tick(10);
     expect(calls.fixed).toBe(before + 1); // no burst of catch-up steps
+  });
+
+  describe('simulation clock', () => {
+    const STEP_MS = FIXED_DT * 1000;
+
+    it('gives each substep a strictly increasing time, 8.333 ms apart', () => {
+      const { loop, calls } = harness();
+      loop.tick(16);
+      loop.tick(33);
+      loop.tick(5);
+      expect(calls.sim.length).toBeGreaterThan(5);
+      for (let i = 1; i < calls.sim.length; i++) {
+        expect(calls.sim[i]! - calls.sim[i - 1]!).toBeCloseTo(STEP_MS, 6);
+      }
+    });
+
+    function checkInvariant(timeScale: number, gaps: number[]) {
+      const { loop, calls } = harness({ timeScale, maxStepsPerFrame: 1000 });
+      for (const gap of gaps) {
+        const before = calls.sim.length;
+        loop.tick(gap);
+        const alphaMs = calls.frame[calls.frame.length - 1]![2] * STEP_MS;
+        const last = calls.sim.length > before ? calls.sim[calls.sim.length - 1]! : null;
+        if (last !== null) {
+          expect(last).toBeLessThanOrEqual(loop.nowMs + 1e-6);
+          expect(loop.nowMs - last).toBeCloseTo(alphaMs, 5);
+        }
+      }
+    }
+
+    it('keeps nowMs - simMs equal to the leftover over irregular frames', () => {
+      checkInvariant(1, [16, 7, 33, 4, 21, 9, 50, 12, 16.7, 3, 27]);
+    });
+
+    it('keeps the invariant with timeScale 4', () => {
+      checkInvariant(4, [16, 7, 33, 4, 21, 9, 12, 16.7, 3, 6]);
+    });
+
+    it('re-aligns the clocks after a frame that drops steps', () => {
+      const { loop, calls } = harness({ maxStepsPerFrame: 3 });
+      loop.tick(10);
+      loop.tick(60); // 7 steps wanted, 3 run, rest dropped
+      const last = calls.sim[calls.sim.length - 1]!;
+      expect(last).toBeLessThan(loop.nowMs);
+      loop.tick(8.34); // next frame: 1 step, clock back in step with game time
+      const t = calls.sim[calls.sim.length - 1]!;
+      expect(t).toBeLessThanOrEqual(loop.nowMs + 1e-6);
+      expect(loop.nowMs - t).toBeLessThan(STEP_MS);
+    });
+
+    it('does not advance while paused and re-aligns on resume', () => {
+      const { loop, calls } = harness();
+      loop.tick(16);
+      const n = calls.sim.length;
+      const lastSim = calls.sim[n - 1]!;
+      loop.paused = true;
+      loop.tick(50);
+      loop.tick(50);
+      expect(calls.sim.length).toBe(n);
+      loop.paused = false;
+      loop.tick(10);
+      const t = calls.sim[calls.sim.length - 1]!;
+      expect(t).toBeGreaterThan(lastSim);
+      expect(t).toBeLessThanOrEqual(loop.nowMs + 1e-6);
+      expect(loop.nowMs - t).toBeLessThan(STEP_MS);
+    });
   });
 });

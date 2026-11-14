@@ -192,9 +192,9 @@ describe('SportHost', () => {
     const bot = (sport.createBot as ReturnType<typeof vi.fn>).mock.results[0]!.value as {
       next: ReturnType<typeof vi.fn>;
     };
-    const director = setDirector.mock.calls[0]![0] as (q: unknown, t: number) => void;
-    director({}, 5);
-    expect(bot.next).toHaveBeenCalledWith(expect.any(Function), 5);
+    const director = setDirector.mock.calls[0]![0] as (q: unknown, rel: number, t: number) => void;
+    director({}, 5, 12345);
+    expect(bot.next).toHaveBeenCalledWith(expect.any(Function), 12345);
     const steps = [{ dur: 100 }];
     (bot.next.mock.calls[0]![0] as (s: unknown) => void)(steps);
     expect(enqueue).toHaveBeenCalledWith(steps);

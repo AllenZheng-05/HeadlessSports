@@ -103,9 +103,12 @@ export function createFieldDayScene(options?: {
   const sky = buildSky();
   scene.add(sky);
 
-  const hemi = new HemisphereLight(PALETTE.sky, PALETTE.turf, 1.6);
+  // Bounce light: turf green mixed 70% toward chalk, so it keeps a hint of green and warmth without
+  // tinting the putty athlete mint. Intensity is lowered and the sun raised to keep brightness.
+  const bounce = new Color(PALETTE.turf).lerp(new Color(PALETTE.chalk), 0.7);
+  const hemi = new HemisphereLight(PALETTE.sky, bounce, 1.45);
   scene.add(hemi);
-  const sun = new DirectionalLight(0xfff4e0, 2.2);
+  const sun = new DirectionalLight(0xfff4e0, 2.45);
   // Upper left, in front of the athlete (towards the camera at +z).
   sun.position.set(-4, 8, 5);
   scene.add(sun);

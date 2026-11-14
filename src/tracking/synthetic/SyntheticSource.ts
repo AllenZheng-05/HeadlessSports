@@ -28,11 +28,12 @@ export interface SyntheticSource extends LandmarkSource {
   readonly currentLabel: string;
   /**
    * Closed-loop mode: whenever the move queue is idle at a frame, `director` is called and may
-   * enqueue steps (if it enqueues nothing the pose holds). Time restarts at the next pump. `null`
+   * enqueue steps (if it enqueues nothing the pose holds). `tMs` counts from the source's own anchor
+   * (the MoveQueue's clock); `frameT` is the emitted frame's `t`, i.e. game ms. Time restarts at the next pump. `null`
    * leaves director mode (the current script, if any, restarts). `setScript` also leaves it.
    */
   setDirector(
-    director: ((queue: MoveQueue, tMs: number) => void) | null,
+    director: ((queue: MoveQueue, tMs: number, frameT: number) => void) | null,
     start?: Partial<BodyControls>,
   ): void;
   /** The director's queue, or null outside director mode. */
@@ -45,7 +46,7 @@ class SyntheticSourceImpl extends SteppedSource implements SyntheticSource {
   scriptTimeMs = 0;
   currentLabel = '';
   queue: MoveQueue | null = null;
-  private director: ((queue: MoveQueue, tMs: number) => void) | null = null;
+  private director: ((queue: MoveQueue, tMs: number, frameT: number) => void) | null = null;
   private player: ScriptPlayer;
   private loop: boolean;
   private readonly body: SyntheticBody;
@@ -63,7 +64,7 @@ class SyntheticSourceImpl extends SteppedSource implements SyntheticSource {
   }
 
   setDirector(
-    director: ((queue: MoveQueue, tMs: number) => void) | null,
+    director: ((queue: MoveQueue, tMs: number, frameT: number) => void) | null,
     start?: Partial<BodyControls>,
   ): void {
     this.director = director;
@@ -96,7 +97,7 @@ class SyntheticSourceImpl extends SteppedSource implements SyntheticSource {
   protected fill(_k: number, rel: number, frame: LandmarkFrame): void {
     const queue = this.queue;
     if (queue !== null && this.director !== null) {
-      if (queue.idle) this.director(queue, rel);
+      if (queue.idle) this.director(queue, rel, frame.t);
       queue.sample(rel, this.controls);
       this.body.write(this.controls, frame);
       this.scriptTimeMs = rel;

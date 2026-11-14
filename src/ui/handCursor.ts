@@ -11,6 +11,8 @@ export const LOCKOUT_MS = 600;
 export const SWITCH_MARGIN_SW = 0.15;
 /** ...for this long before it takes over, ms. */
 export const SWITCH_HOLD_MS = 300;
+/** After a new screen appears the cursor cannot begin a dwell for this long, ms. */
+export const SCREEN_GUARD_MS = 1200;
 /** Extra hit area around each button, px. */
 export const FORGIVENESS_PX = 12;
 const SMOOTH_TIME_S = 0.08;
@@ -208,6 +210,10 @@ export class HandCursor {
   private shown = false;
   private closed = false;
   private hovered = -1;
+  /** Time the current screen was first seen by update(), or -1 before that. */
+  private screenSince = -1;
+  /** The hand has been outside every button (or absent for the guard time) on this screen. */
+  private seenOutside = false;
   private lastRing = -1;
   private lastX = -1;
   private lastY = -1;
@@ -258,6 +264,8 @@ export class HandCursor {
     this.rects = new Float32Array(buttons.length * 4);
     this.count = buttons.length;
     this.dwell.reset();
+    this.screenSince = -1;
+    this.seenOutside = false;
     this.refresh();
   }
 
@@ -308,6 +316,8 @@ export class HandCursor {
       this.hide();
       return;
     }
+    if (this.screenSince < 0) this.screenSince = nowMs;
+    const guardOver = nowMs - this.screenSince >= SCREEN_GUARD_MS;
     const pose = state.pose;
     const left = state.hands.left;
     const right = state.hands.right;
@@ -343,6 +353,7 @@ export class HandCursor {
     }
     const side = this.chooser.update(lOk, ly, rOk, ry, state.shoulderWidth, nowMs);
     if (side === null) {
+      if (guardOver) this.seenOutside = true; // hand lowered or out of view for the whole guard
       this.hide();
       return;
     }
@@ -399,7 +410,9 @@ export class HandCursor {
       sy * window.innerHeight,
       FORGIVENESS_PX * uiScale(),
     );
-    const done = this.dwell.update(hit, nowMs);
+    if (hit < 0) this.seenOutside = true;
+    // A hand resting where a button appears must not select it.
+    const done = this.dwell.update(guardOver && this.seenOutside ? hit : -1, nowMs);
     const shownHover = this.dwell.target;
     if (shownHover !== this.hovered) {
       this.clearHover();

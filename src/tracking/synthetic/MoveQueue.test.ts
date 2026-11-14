@@ -169,6 +169,22 @@ describe('SyntheticSource director mode', () => {
     expect(s.finished).toBe(false);
   });
 
+  it('passes the emitted frame t (game ms) to the director, not the anchor-relative time', async () => {
+    const s = createSyntheticSource({ script: { name: 'x', steps: [] } });
+    const seen: number[] = [];
+    const frameTs: number[] = [];
+    s.subscribe((f) => frameTs.push(f.t));
+    s.setDirector((_q, rel, frameT) => {
+      seen.push(frameT);
+      expect(frameT).toBe(5000 + rel);
+    });
+    await s.start(ALL);
+    for (let t = 5000; t <= 5500; t += 16) s.pump(t);
+    expect(seen.length).toBeGreaterThan(5);
+    expect(seen).toEqual(frameTs);
+    expect(seen[0]).toBe(5000);
+  });
+
   it('holds the pose when the director enqueues nothing, and keeps 30 Hz stepping', async () => {
     const s = createSyntheticSource({ script: { name: 'x', steps: [] } });
     const ts: number[] = [];

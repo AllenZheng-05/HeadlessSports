@@ -43,6 +43,8 @@ export interface DebugInputConfig {
   maxLean: number;
   /** Curvature magnitude applied while Z or C is held. */
   curve: number;
+  /** ThrowReleased lateral (sw) for the mouse at screen centre: a natural straight throw. */
+  neutralLateral: number;
 }
 
 export const debugInputConfig: DebugInputConfig = {
@@ -57,18 +59,25 @@ export const debugInputConfig: DebugInputConfig = {
   maxLateral: 2.0,
   maxLean: 0.45,
   curve: 0.6,
+  neutralLateral: 0.62,
 };
 
 /** One row per binding, for an on-screen help overlay. */
 export const DEBUG_KEYS: readonly { keys: string; action: string }[] = [
-  { keys: 'Mouse', action: 'Move the selected hand' },
+  { keys: 'Mouse', action: 'Move the selected hand (A / D alone does not move it)' },
   { keys: 'A / D', action: 'Select left / right hand' },
   { keys: 'Left button (hold)', action: 'Close the selected hand' },
   { keys: 'Q / E', action: 'Toggle left / right fist' },
   { keys: 'U (hold)', action: 'Raise the selected arm' },
   { keys: 'I (hold)', action: 'Raise both arms' },
-  { keys: 'T (hold, release)', action: 'Overarm throw, longer hold is harder' },
-  { keys: 'B (hold, release)', action: 'Underarm throw / bowl, longer hold is harder' },
+  {
+    keys: 'T (hold, release)',
+    action: 'Overarm throw, longer hold is harder (mouse at centre: straight)',
+  },
+  {
+    keys: 'B (hold, release)',
+    action: 'Underarm throw / bowl, longer hold is harder (mouse at centre: straight)',
+  },
   { keys: 'Z / C (hold)', action: 'Curve the throw left / right' },
   { keys: 'S', action: 'Swing (Shift: faster)' },
   { keys: 'R', action: 'One running step' },
@@ -161,7 +170,6 @@ export class DebugInput implements InputProvider {
   private selected: Side = 'right';
   private mouseX = 0.5;
   private mouseY = 0.5;
-  private mouseMoved = false;
   private mouseFistSide: Side | null = null;
 
   // Gestures.
@@ -416,7 +424,6 @@ export class DebugInput implements InputProvider {
     if (r.kind === KIND_MOVE) {
       this.mouseX = r.x;
       this.mouseY = r.y;
-      this.mouseMoved = true;
       this.moveCursor(this.selected);
     } else if (r.kind === KIND_BUTTON) {
       if (r.down) {
@@ -457,8 +464,8 @@ export class DebugInput implements InputProvider {
     switch (code) {
       case 'KeyA':
       case 'KeyD':
+        // Selection alone does not move the hand; it follows once the mouse moves again.
         this.selected = code === 'KeyA' ? 'left' : 'right';
-        if (this.mouseMoved) this.moveCursor(this.selected);
         break;
       case 'KeyQ':
         this.setFist('left', !s.hands.left.closed, nowMs);
@@ -561,7 +568,7 @@ export class DebugInput implements InputProvider {
         if (this.throwStart >= 0 && code === this.throwKey) {
           const charge = clamp((nowMs - this.throwStart) / c.throwChargeMs, 0, 1);
           const speed = c.throwMinSpeed + (c.throwMaxSpeed - c.throwMinSpeed) * charge;
-          const lateral = (this.mouseX - 0.5) * 4;
+          const lateral = sideSign(this.throwHand) * c.neutralLateral + (this.mouseX - 0.5) * 4;
           const loft =
             this.throwStyle === 'overarm' ? clamp((0.5 - this.mouseY) * 1.6 + 0.6, 0, 1.4) : 0.3;
           const curvature =
@@ -729,8 +736,9 @@ export class DebugInput implements InputProvider {
       this.prevY[side] = h.y;
 
       // Wrist target relative to the shoulder, sw, y up.
-      const shX = midX - (sg * 0.5 * sw * cosL) / ASPECT;
-      const shY = midY - sg * 0.5 * sw * sinL;
+      // The right shoulder is at +0.5 sw (screen right), as in SyntheticBody.
+      const shX = midX + (sg * 0.5 * sw * cosL) / ASPECT;
+      const shY = midY + sg * 0.5 * sw * sinL;
       let wx = ((h.x - shX) * ASPECT) / sw;
       let wy = (shY - h.y) / sw;
 

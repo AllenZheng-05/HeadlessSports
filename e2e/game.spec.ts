@@ -114,6 +114,8 @@ test.describe('game shell', () => {
     await pumpFists(page, 5);
     await waitPhase(page, 'results', 15000);
     expect((await game(page)).result?.score ?? 0).toBeGreaterThan(0);
+    await page.getByRole('button', { name: 'Menu' }).click();
+    await waitPhase(page, 'menu');
     expect(problems).toEqual([]);
   });
 
@@ -127,13 +129,16 @@ test.describe('game shell', () => {
     await waitPhase(page, 'menu');
     await page.waitForTimeout(600);
     await page.screenshot({ path: `${SHOTS}/game-menu.png` });
+    const ids = await page
+      .locator('.sport-card')
+      .evaluateAll((els) => els.map((e) => (e as HTMLElement).dataset.sport ?? ''));
+    expect(ids).toEqual(['climbing', 'bowling', 'batting', 'archery', 'javelin']);
     await page.keyboard.press('Enter'); // the first card holds focus
     await waitPhase(page, 'howto');
     await page.keyboard.press('Enter'); // Start holds focus
     await waitPhase(page, 'playing');
-    await pumpFists(page, 5);
-    await waitPhase(page, 'results', 15000);
-    await page.getByRole('button', { name: 'Menu' }).click();
+    expect((await game(page)).sportId).toBe('climbing');
+    await page.keyboard.press('Escape'); // quit the round
     await waitPhase(page, 'menu');
     expect(problems).toEqual([]);
   });

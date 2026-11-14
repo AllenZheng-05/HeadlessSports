@@ -81,6 +81,60 @@ describe('DebugInput events', () => {
     expect(input.state.hands.left.x).toBeCloseTo(0.2);
   });
 
+  it('mirrors the neutral lateral for the left hand', () => {
+    const { input, events } = make();
+    input.update(0);
+    input.press('KeyA');
+    input.moveTo(0.5, 0.5);
+    input.press('KeyT');
+    input.update(100);
+    input.release('KeyT');
+    input.update(200);
+    const rel = of(events, 'ThrowReleased')[0];
+    expect(rel.hand).toBe('left');
+    expect(rel.lateral).toBeCloseTo(-debugInputConfig.neutralLateral);
+  });
+
+  it('selecting a hand does not move it; it follows once the mouse moves', () => {
+    const { input } = make();
+    input.update(0);
+    input.moveTo(0.8, 0.3);
+    input.update(10); // right hand follows
+    const leftBefore = { x: input.state.hands.left.x, y: input.state.hands.left.y };
+    input.press('KeyA');
+    input.update(20);
+    expect(input.state.hands.left.x).toBe(leftBefore.x);
+    expect(input.state.hands.left.y).toBe(leftBefore.y);
+    input.moveTo(0.3, 0.4);
+    input.update(30);
+    expect(input.state.hands.left.x).toBeCloseTo(0.3);
+    expect(input.state.hands.right.x).toBeCloseTo(0.8);
+  });
+
+  it('synthesises wrists that land on the cursor for each hand', () => {
+    for (const [key, idx, side] of [
+      ['KeyA', PoseIndex.LEFT_WRIST, 'left'],
+      ['KeyD', PoseIndex.RIGHT_WRIST, 'right'],
+    ] as const) {
+      for (const [mx, my] of [
+        [0.5, 0.4],
+        [0.45, 0.35],
+        [0.56, 0.38],
+      ] as const) {
+        const { input } = make();
+        input.update(0);
+        input.press(key);
+        input.moveTo(mx, my);
+        input.update(16);
+        input.update(32);
+        const o = idx * POSE_STRIDE;
+        expect(Math.abs(input.state.pose[o]! - mx)).toBeLessThan(0.02);
+        expect(Math.abs(input.state.pose[o + 1]! - my)).toBeLessThan(0.02);
+        expect(input.state.hands[side].x).toBeCloseTo(mx);
+      }
+    }
+  });
+
   it('raises one arm or both', () => {
     const { input, events } = make();
     input.update(0);
@@ -127,13 +181,14 @@ describe('DebugInput events', () => {
 
   it('computes lateral, loft, velocity and style', () => {
     const over = throwFor(0, 'KeyT', undefined, 0.75, 0.5).released;
-    expect(over.lateral).toBeCloseTo(1);
+    expect(over.lateral).toBeCloseTo(debugInputConfig.neutralLateral + 1);
     expect(over.loft).toBeCloseTo(0.6);
     expect(over.style).toBe('overarm');
     expect(over.vy).toBeCloseTo(over.speed * Math.sin(0.6));
     expect(over.vx).toBeCloseTo(over.speed * Math.cos(0.6));
     const centre = throwFor(0, 'KeyT', undefined, 0.5, 0.5).released;
-    expect(centre.vx).toBe(0);
+    expect(centre.lateral).toBeCloseTo(debugInputConfig.neutralLateral);
+    expect(centre.vx).toBeGreaterThan(0); // the centre is a straight throw, not a dead-centre one
     const high = throwFor(0, 'KeyT', undefined, 0.5, 0).released;
     expect(high.loft).toBeCloseTo(1.4);
     const under = throwFor(0, 'KeyB', undefined, 0.25, 0.1).released;
