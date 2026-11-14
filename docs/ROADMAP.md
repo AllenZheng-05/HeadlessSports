@@ -24,10 +24,10 @@ Contracts first (0.6), then three builders in parallel on disjoint directories, 
 
 | Task | Agent | Status | Files | Notes |
 |---|---|---|---|---|
-| 1.1 Camera source, tracking worker, Pose lite, wrist crops, Hand Landmarker, main-thread fallback | B | todo | `src/tracking/camera/**` | Parallel group A |
-| 1.2 One Euro filter, least-squares velocity, fist classifier, pose kinematics | B | todo | `src/input/filters/**`, `src/input/kinematics/**`, `src/input/hands/**` | Parallel group A |
-| 1.3 Synthetic player (body model, script DSL), replayer, recorder | B | todo | `src/tracking/synthetic/**`, `src/tracking/replay/**` | Parallel group A |
-| 1.4 Renderer factory (WebGPU / WebGL switch), Field Day style kit basics, procedural athlete with two-bone IK | B | todo | `src/render/**` | Parallel group A |
+| 1.1 Camera source, tracking worker, Pose lite, wrist crops, Hand Landmarker, main-thread fallback | B | doing | `src/tracking/camera/**` | Parallel group A |
+| 1.2 One Euro filter, least-squares velocity, fist classifier, pose kinematics | B | doing | `src/input/filters/**`, `src/input/kinematics/**`, `src/input/hands/**` | Parallel group A |
+| 1.3 Synthetic player (body model, script DSL), replayer, recorder | B | doing | `src/tracking/synthetic/**`, `src/tracking/replay/**` | Parallel group A |
+| 1.4 Renderer factory (WebGPU / WebGL switch), Field Day style kit basics, procedural athlete with two-bone IK | B | doing | `src/render/**` | Parallel group A |
 | 1.5 Debug page: camera feed, skeleton overlay, hand crops, fist state, HUD (inference ms, tracking Hz, render fps, latency), athlete mirroring the upper body, record / replay controls | B | todo | `src/debug/**` | After group A |
 | 1.6 Gate benchmark, first draft | B | todo | `src/core/gate/**` | With 1.5 |
 | 1.7 Playwright harness: fake camera pipeline check, synthetic source check, screenshots | B | todo | `e2e/**` | After 1.5 |
