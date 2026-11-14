@@ -33,7 +33,7 @@ const DIM = {
 
 const TORSO_RADIUS = 0.19;
 const SHOULDER_UP = DIM.shoulderHeight - DIM.hipHeight; // shoulder joint above the pelvis
-const HIP_HALF = 0.1;
+const HIP_HALF = 0.105; // hips 0.21 m apart so the legs read as two legs from behind
 const MITT_OPEN = { x: 1.15, y: 0.55, z: 1.25 };
 const MITT_FIST = 0.95;
 const SMOOTH_TIME = 0.06; // seconds, critically damped
@@ -254,13 +254,14 @@ export class AvatarRig {
     shinMesh.name = `shin-${side}-mesh`;
     shin.add(shinMesh);
 
-    // Stubby rounded foot pointing -z, resting on the ground when standing (ankle is 0.04 up).
-    const footGeo = this.track(new CapsuleGeometry(0.055, 0.1, 6, 12));
-    footGeo.rotateX(-Math.PI / 2);
+    // Rounded shoe blob (0.16 wide, 0.096 tall, 0.23 long): wider than the shin so it shows from
+    // behind, with the heel reaching back (+z) past the ankle. Sits flat on the ground (ankle is 0.04 up).
+    const footGeo = this.track(new SphereGeometry(1, 16, 12));
+    footGeo.scale(0.08, 0.048, 0.115);
     const foot = new Mesh(footGeo, playerMat);
     foot.name = `foot-${side}`;
-    // Ankle is at the shin pivot's local y = -shin; the foot centre sits 0.015 above that.
-    foot.position.set(0, -DIM.shin + 0.015, -0.06);
+    // Ankle is at the shin pivot's local y = -shin; the foot centre sits 0.008 above that (ground + half height).
+    foot.position.set(0, -DIM.shin + 0.008, 0.0);
     shin.add(foot);
     thigh.add(shin);
     this.pelvis.add(thigh);

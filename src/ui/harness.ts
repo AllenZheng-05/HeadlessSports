@@ -110,7 +110,7 @@ switch (screen) {
     const hud = ui.hud;
     hud.setScore('187');
     hud.setSubScore('Best 212');
-    hud.setBanner('Strike!');
+    hud.setBanner(params.get('banner') ?? 'Strike!');
     hud.setHint('Swing your arm forward and let go');
     hud.setMeter('power', 0.72, 'Power', 'good');
     hud.setMeter('foul', 0.35, 'Foul line', 'warn');

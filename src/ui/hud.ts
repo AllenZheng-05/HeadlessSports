@@ -107,6 +107,7 @@ export function createHud(parent: HTMLElement): UiHud {
     if (text === bannerText) return;
     bannerText = text;
     bannerEl.textContent = text;
+    bannerEl.dataset.size = text.length > 16 ? 'long' : text.length > 8 ? 'mid' : 'short';
     // restart the squash-and-stretch pop
     bannerEl.classList.remove('show');
     void bannerEl.offsetWidth;

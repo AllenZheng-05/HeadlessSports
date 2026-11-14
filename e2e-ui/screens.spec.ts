@@ -40,11 +40,20 @@ for (const { name, query } of SCREENS) {
   });
 }
 
-for (const name of ['title', 'menu', 'results']) {
+const SCREENS_1080: { name: string; query: string }[] = [
+  { name: 'title', query: 'screen=title&sport=4' },
+  { name: 'menu', query: 'screen=menu&sport=4' },
+  { name: 'results', query: 'screen=results&sport=4' },
+  { name: 'playing', query: 'screen=playing' },
+  { name: 'howto', query: 'screen=howto&debugkeys=1' },
+  { name: 'calibration', query: 'screen=calibration' },
+];
+
+for (const { name, query } of SCREENS_1080) {
   test(`screen 1080p: ${name}`, async ({ page }) => {
     const problems = watchErrors(page);
     await page.setViewportSize({ width: 1920, height: 1080 });
-    await page.goto(`/ui-harness.html?screen=${name}&sport=4`);
+    await page.goto(`/ui-harness.html?${query}`);
     await page.waitForTimeout(900);
     await page.screenshot({ path: `e2e-ui/screenshots/${name}-1080.png` });
     expect(problems).toEqual([]);
@@ -119,4 +128,16 @@ test('gate fail Details toggle reveals the numbers', async ({ page }) => {
   await expect(details).toBeVisible();
   await expect(details).toContainText('14.2');
   await expect(details).toContainText('at least 24');
+});
+
+test('long banner stays clear of the score block and the table', async ({ page }) => {
+  await page.goto('/ui-harness.html?screen=playing&banner=Nice%20throw%2C%20keep%20going%20now');
+  await page.waitForTimeout(900);
+  await page.screenshot({ path: 'e2e-ui/screenshots/playing-longbanner.png' });
+  const banner = await page.locator('.hud-banner').boundingBox();
+  const score = await page.locator('.hud-topleft').boundingBox();
+  const table = await page.locator('.hud-table-host').boundingBox();
+  expect(banner).not.toBeNull();
+  expect((banner?.x ?? 0) + (banner?.width ?? 0)).toBeLessThanOrEqual(table?.x ?? 0);
+  expect(banner?.x ?? 0).toBeGreaterThanOrEqual((score?.x ?? 0) + (score?.width ?? 0));
 });

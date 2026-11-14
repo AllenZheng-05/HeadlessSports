@@ -1,6 +1,6 @@
 import type { InputState, Side } from '../input/types';
 import { PoseIndex, POSE_STRIDE } from '../tracking/types';
-import { clamp, h, svgEl } from './dom';
+import { clamp, h, svgEl, uiScale } from './dom';
 import { pctTenth } from './format';
 
 /** Hold time over a button before it is chosen, ms. */
@@ -397,7 +397,7 @@ export class HandCursor {
       this.count,
       sx * window.innerWidth,
       sy * window.innerHeight,
-      FORGIVENESS_PX,
+      FORGIVENESS_PX * uiScale(),
     );
     const done = this.dwell.update(hit, nowMs);
     const shownHover = this.dwell.target;

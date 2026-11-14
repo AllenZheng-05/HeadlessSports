@@ -2,6 +2,7 @@ import { DebugInput } from '../../input/debug/DebugInput';
 import { TrackedInput } from '../../input/TrackedInput';
 import type { Calibration, InputProvider } from '../../input/types';
 import { createRenderer } from '../../render/renderer';
+import { createFieldDayScene } from '../../render/style/scene';
 import { SPORTS, findSport } from '../../sports/registry';
 import { isTrackingError } from '../../tracking/camera/errors';
 import { createLandmarkSource } from '../../tracking/createSource';
@@ -88,6 +89,10 @@ class Shell {
     });
     if (!gateAcceptable(report, flags)) {
       hook.phase = 'gate-fail';
+      // Wipe the benchmark's last frame (cones and props) behind the card.
+      const clean = createFieldDayScene();
+      renderer.render(clean.scene, clean.camera);
+      clean.dispose();
       this.ui.showGateFail(report);
       return;
     }

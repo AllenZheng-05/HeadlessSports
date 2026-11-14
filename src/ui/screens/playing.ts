@@ -167,8 +167,14 @@ export function buildResults(
     for (let i = 0; i < 14; i++) {
       const c = h('span', 'confetti');
       const angle = (i / 14) * Math.PI * 2;
-      c.style.setProperty('--dx', `${Math.round(Math.cos(angle) * (150 + (i % 3) * 30))}px`);
-      c.style.setProperty('--dy', `${Math.round(Math.sin(angle) * (70 + (i % 3) * 16))}px`);
+      c.style.setProperty(
+        '--dx',
+        `calc(${Math.round(Math.cos(angle) * (150 + (i % 3) * 30))} * var(--u))`,
+      );
+      c.style.setProperty(
+        '--dy',
+        `calc(${Math.round(Math.sin(angle) * (70 + (i % 3) * 16))} * var(--u))`,
+      );
       c.style.setProperty('--c', CONFETTI_COLORS[i % CONFETTI_COLORS.length] as string);
       c.style.setProperty('--d', `${(i % 5) * 40}ms`);
       wrap.append(c);

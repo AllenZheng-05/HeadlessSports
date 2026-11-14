@@ -27,7 +27,21 @@ export function svgEl<K extends keyof SVGElementTagNameMap>(
 ): SVGElementTagNameMap[K] {
   const node = document.createElementNS(SVG_NS, tag);
   for (const key of Object.keys(attrs)) node.setAttribute(key, String(attrs[key]));
+  if (tag === 'svg') {
+    // Fixed pixel sizes scale with the interface (--u, see ui.css).
+    const w = attrs.width;
+    const hh = attrs.height;
+    if (typeof w === 'number') node.style.width = `calc(${w} * var(--u))`;
+    if (typeof hh === 'number') node.style.height = `calc(${hh} * var(--u))`;
+  }
   return node;
+}
+
+/** The interface scale for the current window. Mirrors `--u` in ui.css (1 at 1280x720). */
+export function uiScale(): number {
+  if (typeof window === 'undefined') return 1;
+  const s = Math.min(window.innerWidth / 1280, window.innerHeight / 720);
+  return s < 1 || !(s > 0) ? 1 : s > 2.25 ? 2.25 : s;
 }
 
 export function clamp(v: number, lo: number, hi: number): number {
