@@ -18,10 +18,19 @@ const rng = (): (() => number) => {
     return s / 4294967296;
   };
 };
-const mk = (total = 3): GameState => createGame(total, rng());
 /** Step in 10 ms slices. */
 const run = (g: GameState, ms: number, h: HandInput, paused = false): void => {
   for (let t = 0; t < ms; t += 10) stepGame(g, cfg, 0.01, h, paused);
+};
+/** Let the catcher's call play out (the hand is moving, so nothing is selected). */
+const skipCall = (g: GameState): void => {
+  run(g, cfg.callSetupMs + cfg.callReactMs + 20, hand({ speed: 3 }));
+};
+/** A game already past the call, in `sign` (the selection flow). */
+const mk = (total = 3): GameState => {
+  const g = createGame(total, rng());
+  skipCall(g);
+  return g;
 };
 const throwAt = (o: Partial<ThrowInput> = {}): ThrowInput => ({
   t: 0,
@@ -153,6 +162,7 @@ describe('the round', () => {
   it('plays the pitch count, finishes once, then stays done', () => {
     const g = mk(2);
     for (let p = 0; p < 2; p++) {
+      if (g.phase === 'call') skipCall(g);
       expect(g.phase).toBe('sign');
       toWindup(g);
       expect(onThrow(g, cfg, 0, throwAt(), 'right', false)).toBe('taken');
@@ -170,8 +180,11 @@ describe('the round', () => {
     expect(pitchesFor(cfg, false)).toBe(10);
   });
   it('acts on nothing while paused', () => {
-    const g = mk();
+    const g = createGame(3, rng());
     run(g, 5000, hand(), true);
+    expect(g.phase).toBe('call');
+    expect(g.bubbleOn).toBe(false);
+    skipCall(g);
     expect(g.phase).toBe('sign');
     expect(g.holdMs).toBe(0);
     toWindup(g);

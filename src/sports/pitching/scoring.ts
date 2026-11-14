@@ -12,10 +12,19 @@ export interface PitchScore {
   base: number;
   speedBonus: number;
   curveBonus: number;
+  /** Bonus for throwing the called pitch into the zone. */
+  calledBonus: number;
+  /** The pitch thrown is the one the catcher called (true when nothing was called). */
+  matched: boolean;
   label: string;
 }
 
-/** Points for one pitch. Pure. `scoredKmh` is capped again here, so callers cannot exceed it. */
+/**
+ * Points for one pitch. Pure. `scoredKmh` is capped again here, so callers cannot exceed it.
+ * `called` is the pitch the catcher asked for: the called type landing in the zone earns
+ * `calledBonus`; any other type is still a pitch but scores `wrongPitchFactor` of its points.
+ * Null means no call (the old rules).
+ */
 export function scorePitch(
   cfg: PitchingConfig,
   x: number,
@@ -23,6 +32,7 @@ export function scorePitch(
   targetCell: number,
   kind: PitchKind,
   scoredKmh: number,
+  called: PitchKind | null = null,
 ): PitchScore {
   const cell = cellAt(cfg, x, y);
   let base = 0;
@@ -51,6 +61,10 @@ export function scorePitch(
   }
   const painted = tier === 'bullseye' && kind === 'curve';
   const curveBonus = painted ? cfg.curveBonus : 0;
+  const matched = called === null || called === kind;
+  const calledBonus = called !== null && matched && cell >= 0 ? cfg.calledBonus : 0;
+  let points = base + speedBonus + curveBonus + calledBonus;
+  if (!matched) points = Math.floor(points * cfg.wrongPitchFactor);
   const label =
     tier === 'bullseye'
       ? painted && isCorner(targetCell)
@@ -64,12 +78,14 @@ export function scorePitch(
             ? 'Just missed'
             : 'Wild';
   return {
-    points: base + speedBonus + curveBonus,
+    points,
     tier,
     cell,
     base,
     speedBonus,
     curveBonus,
+    calledBonus,
+    matched,
     label,
   };
 }
@@ -81,6 +97,8 @@ export const BALK_SCORE: PitchScore = {
   base: 0,
   speedBonus: 0,
   curveBonus: 0,
+  calledBonus: 0,
+  matched: false,
   label: 'Balk',
 };
 
@@ -88,6 +106,8 @@ export const BALK_SCORE: PitchScore = {
 export interface PitchRecord {
   index: number;
   kind: PitchKind;
+  /** The pitch the catcher called. */
+  called: PitchKind;
   target: number;
   balk: boolean;
   /** Where it crossed the plate plane, m (0 for a balk). */
@@ -107,6 +127,8 @@ export interface RoundSummary {
   balks: number;
   fastballs: number;
   curves: number;
+  /** Pitches thrown as called. */
+  asCalled: number;
   bestKmh: number;
   meanMissCm: number;
 }
@@ -120,6 +142,7 @@ export function summarize(records: readonly PitchRecord[]): RoundSummary {
     balks: 0,
     fastballs: 0,
     curves: 0,
+    asCalled: 0,
     bestKmh: 0,
     meanMissCm: 0,
   };
@@ -135,6 +158,7 @@ export function summarize(records: readonly PitchRecord[]): RoundSummary {
     miss += r.missM;
     if (r.score.cell >= 0) s.strikes++;
     if (r.score.tier === 'bullseye') s.bullseyes++;
+    if (r.kind === r.called) s.asCalled++;
     if (r.kind === 'fastball') s.fastballs++;
     else s.curves++;
     if (r.kmh > s.bestKmh) s.bestKmh = r.kmh;

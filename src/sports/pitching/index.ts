@@ -5,11 +5,14 @@ import { AvatarAnimator } from '../../render/avatar/AvatarAnimator';
 import { AvatarRig } from '../../render/avatar/AvatarRig';
 import { BlobShadow } from '../../render/style/blobShadow';
 import { toonMaterial } from '../../render/style/toon';
-import { Group, Mesh, SphereGeometry } from 'three/webgpu';
+import { Group, Mesh, SphereGeometry, Vector3 } from 'three/webgpu';
 import type { Fog } from 'three/webgpu';
-import { sideSign } from './aim';
+import { createAim, createLiveInput, debugLive, sideSign, trackedLive } from './aim';
 import type { PitchKind } from './aim';
 import { createPitchingBot } from './bot';
+import { createBubble } from './bubble';
+import { KIND_LABEL, callText, reactionText } from './call';
+import { LiveAim } from './liveAim';
 import { pitchingConfig, pitchingRanges } from './config';
 import { ballAt } from './flight';
 import type { Vec3 } from './flight';
@@ -19,7 +22,7 @@ import { summarize } from './scoring';
 import type { PitchRecord, Tier } from './scoring';
 import { cellCentre } from './zone';
 import type { Point } from './zone';
-import { MOUND_HEIGHT, buildWorld, buildZone, drawX, drawY } from './world';
+import { MOUND_HEIGHT, buildAimMarker, buildWorld, buildZone, drawX, drawY } from './world';
 
 /** The catcher's shirt: a denim blue, clearly not the pitcher's coral mitts. */
 const CATCHER_COLOR = 0x4a6fa5;
@@ -33,6 +36,8 @@ const clamp01 = (v: number): number => (v < 0 ? 0 : v > 1 ? 1 : v);
 export interface PitchProbe {
   index: number;
   kind: PitchKind;
+  called: PitchKind;
+  matched: boolean;
   target: number;
   balk: boolean;
   /** Where it crossed the plate plane, m (scored coordinates). */
@@ -49,6 +54,13 @@ export interface PitchingSport extends Sport {
   readonly phase: Phase;
   readonly index: number;
   readonly kind: PitchKind;
+  /** The pitch the catcher called, and the words of the call. */
+  readonly called: PitchKind;
+  readonly callText: string;
+  /** The speech bubble is showing, and what it says. */
+  readonly bubble: { visible: boolean; text: string; sub: string };
+  /** The live aim indicator: visible, and where it points (scored plane coordinates, m). */
+  readonly aimMarker: { visible: boolean; x: number; y: number };
   readonly reading: Reading;
   readonly target: number;
   readonly score: number;
@@ -61,14 +73,30 @@ export interface PitchingSport extends Sport {
   readonly log: readonly string[];
 }
 
-const KIND_LABEL: Record<PitchKind, string> = { fastball: 'Fastball', curve: 'Curve' };
+/** Static strings for the bubble's second line, so nothing is built per frame. */
+const READING_SUB: Record<'none' | PitchKind, string> = {
+  none: 'Show your throwing hand and hold it still',
+  fastball: 'Fist: fastball',
+  curve: 'Open hand: curve',
+};
+const LOCKED_SUB: Record<PitchKind, string> = {
+  fastball: 'Locked in: fastball. Wind up when ready',
+  curve: 'Locked in: curve. Wind up when ready',
+};
 
 export const createPitching: SportFactory = (ctx: SportContext): PitchingSport => {
   const cfg = pitchingConfig;
   const hand: Side = ctx.calibration?.handedness ?? 'right';
   const sg = sideSign(hand);
   const isDebug = ctx.input.source === null;
-  const game = createGame(pitchesFor(cfg, ctx.short), ctx.random, isDebug);
+  const game = createGame(
+    pitchesFor(cfg, ctx.short),
+    ctx.random,
+    isDebug,
+    ctx.short ? cfg.shortGapScale : 1,
+    cfg.firstPitchExtraMs,
+    cfg.curveShare,
+  );
   const unregister = ctx.tunables.register('pitching', 'Pitching', cfg, pitchingRanges);
   const animator = new AvatarAnimator(ctx.avatar);
   const stage = ctx.stage;
@@ -80,6 +108,23 @@ export const createPitching: SportFactory = (ctx: SportContext): PitchingSport =
   // ---- world ----
   const world = buildWorld(scene, cfg);
   const zone = buildZone(scene, cfg, game.total);
+  const marker = buildAimMarker(scene, cfg);
+  const bubble = createBubble();
+  const liveAim = new LiveAim();
+  const liveIn = createLiveInput();
+  const liveRelease = createAim();
+  const bubbleAnchor = new Vector3();
+  let bubbleMain = '';
+  let bubbleSub = '';
+  let bubbleTone: 'call' | 'good' | 'bad' = 'call';
+  let callLine = '';
+  let mouseX = 0.5;
+  let mouseY = 0.5;
+  const onMouse = (e: MouseEvent): void => {
+    mouseX = window.innerWidth > 0 ? e.clientX / window.innerWidth : 0.5;
+    mouseY = window.innerHeight > 0 ? e.clientY / window.innerHeight : 0.5;
+  };
+  if (isDebug) window.addEventListener('mousemove', onMouse);
   const groundWasVisible = stage.ground.visible;
   stage.ground.visible = false;
   const fog = scene.fog as Fog | null;
@@ -130,6 +175,7 @@ export const createPitching: SportFactory = (ctx: SportContext): PitchingSport =
   const pos: Vec3 = { x: 0, y: 0, z: 0 };
   const cell: Point = { x: 0, y: 0 };
   const ballWorld = ball.position.clone();
+  const liveScratch: Point = { x: 0, y: 0 };
   const hin: HandInput = { present: false, known: false, closed: false, speed: 0 };
   let breakX = 0;
   let breakY = 0;
@@ -154,6 +200,8 @@ export const createPitching: SportFactory = (ctx: SportContext): PitchingSport =
   });
 
   // ---- phase reactions ----
+  let seenCall = 0;
+  let seenReveal = 0;
   let seenSelect = 0;
   let seenWindup = 0;
   let seenRelease = 0;
@@ -193,7 +241,8 @@ export const createPitching: SportFactory = (ctx: SportContext): PitchingSport =
       ctx.hud.setScore(score);
     }
     const n = Math.min(game.index + 1, game.total);
-    const kind = game.phase === 'sign' ? '' : ` · ${KIND_LABEL[game.kind]}`;
+    const kind =
+      game.phase === 'sign' || game.phase === 'call' ? '' : ` · ${KIND_LABEL[game.kind]}`;
     const speed = game.phase === 'flight' || game.phase === 'result' ? kmhShown : 0;
     const sub = `Pitch ${n} of ${game.total}${kind}${speed > 0 ? ` · ${speed} km/h` : ''}`;
     if (sub !== shownSub) {
@@ -205,10 +254,14 @@ export const createPitching: SportFactory = (ctx: SportContext): PitchingSport =
     let label = '';
     let tone: MeterTone = 'neutral';
     if (game.phase === 'sign') {
-      if (game.reading === 'none') {
+      if (game.reading === 'none' && game.stillTotalMs > 0) {
         pct = Math.floor(clamp01(game.stillTotalMs / cfg.signFallbackMs) * 20);
         label = 'Hand not read: fastball';
         tone = 'warn';
+      } else if (game.reading === 'none') {
+        pct = 0;
+        label = 'Show your hand';
+        tone = 'neutral';
       } else {
         pct = Math.floor(clamp01(game.holdMs / cfg.signHoldMs) * 20);
         label = game.reading === 'fastball' ? 'Fastball' : 'Curve';
@@ -243,17 +296,30 @@ export const createPitching: SportFactory = (ctx: SportContext): PitchingSport =
   const record = (): PitchRecord => game.records[game.records.length - 1]!;
 
   const react = (): void => {
+    if (game.callSeq !== seenCall) {
+      seenCall = game.callSeq;
+      // The catcher sets up: the mitt goes to the called spot; the call itself comes a beat later.
+      cellCentre(cfg, game.target, cell);
+      callLine = callText(game.called, game.target);
+      zone.setLit(-1);
+      liveAim.reset();
+      lungeGoal = 0;
+      note(`call ${game.called} target=${game.target}`);
+    }
+    if (game.revealSeq !== seenReveal) {
+      seenReveal = game.revealSeq;
+      zone.setLit(game.target);
+      ctx.audio.play('tick');
+      setHint('Take your time: read the call');
+    }
     if (game.selectSeq !== seenSelect) {
       seenSelect = game.selectSeq;
       ctx.audio.play('select');
-      ctx.hud.setBanner(KIND_LABEL[game.kind], 900);
       setCrops(false);
       note(`select ${game.kind}${game.usedFallback ? ' (fallback)' : ''}`);
     }
     if (game.windupSeq !== seenWindup) {
       seenWindup = game.windupSeq;
-      zone.setLit(game.target);
-      cellCentre(cfg, game.target, cell);
       setHint('Wind up and throw');
     }
     if (game.releaseSeq !== seenRelease) {
@@ -280,11 +346,13 @@ export const createPitching: SportFactory = (ctx: SportContext): PitchingSport =
     if (game.resultSeq !== seenResult) {
       seenResult = game.resultSeq;
       const r = record();
+      bubbleTone = r.balk || !r.score.matched ? 'bad' : 'good';
+      bubbleMain = r.balk ? 'Balk' : `${r.score.label} +${r.score.points}`;
+      bubbleSub = reactionText(r.score.matched, r.balk, r.score.tier !== 'wild');
       if (r.balk) {
         ctx.audio.play('bad');
         ctx.hud.flash('bad');
-        ctx.hud.setBanner('Balk');
-        setHint('No pitch. Next one');
+        setHint('No pitch. Next call coming');
         animator.play('slump');
         zone.setLit(-1);
         heldBall();
@@ -295,7 +363,6 @@ export const createPitching: SportFactory = (ctx: SportContext): PitchingSport =
         ball.position.set(to.x, to.y, plateZ + 0.05);
         zone.addDot(r.x, r.y);
         const pts = r.score.points;
-        ctx.hud.setBanner(`${r.score.label} +${pts}`);
         if (r.score.tier === 'wild' || r.score.tier === 'near') {
           // The catcher lunges and misses.
           ctx.audio.play('thud', { pitch: 0.8, volume: 0.5 });
@@ -321,7 +388,7 @@ export const createPitching: SportFactory = (ctx: SportContext): PitchingSport =
         setHint(`${r.kmh.toFixed(0)} km/h`);
       }
       note(
-        `result #${r.index} ${r.kind} target=${r.target} balk=${r.balk} x=${r.x.toFixed(2)} y=${r.y.toFixed(2)} ${r.score.tier} +${r.score.points}`,
+        `result #${r.index} ${r.kind} called=${r.called} target=${r.target} balk=${r.balk} x=${r.x.toFixed(2)} y=${r.y.toFixed(2)} ${r.score.tier} +${r.score.points}`,
       );
     }
     if (game.nextSeq !== seenNext) {
@@ -329,10 +396,9 @@ export const createPitching: SportFactory = (ctx: SportContext): PitchingSport =
       zone.setLit(-1);
       heldBall();
       lungeGoal = 0;
-      ctx.hud.setBanner('Fist for a fastball, open hand for a curve');
       if (animator.busy) animator.stop();
       setCrops(true);
-      setHint('Hold your throwing hand still');
+      setHint('The catcher is calling the next pitch');
     }
     if (game.doneSeq !== seenDone) {
       seenDone = game.doneSeq;
@@ -351,6 +417,7 @@ export const createPitching: SportFactory = (ctx: SportContext): PitchingSport =
     const lines = [
       `${s.strikes} of ${s.pitches} pitches in the zone`,
       s.bullseyes === 1 ? '1 pitch on the target' : `${s.bullseyes} pitches on the target`,
+      `${s.asCalled} of ${s.pitches} thrown as called`,
       s.bestKmh > 0 ? `Fastest pitch ${s.bestKmh} km/h` : 'No pitch thrown',
     ];
     ctx.finish({
@@ -364,6 +431,7 @@ export const createPitching: SportFactory = (ctx: SportContext): PitchingSport =
         balks: s.balks,
         fastballs: s.fastballs,
         curves: s.curves,
+        asCalled: s.asCalled,
         bestKmh: s.bestKmh,
         meanMissCm: s.meanMissCm,
       },
@@ -379,6 +447,8 @@ export const createPitching: SportFactory = (ctx: SportContext): PitchingSport =
       probeList = game.records.map((r) => ({
         index: r.index,
         kind: r.kind,
+        called: r.called,
+        matched: r.score.matched,
         target: r.target,
         balk: r.balk,
         x: r.x,
@@ -392,6 +462,29 @@ export const createPitching: SportFactory = (ctx: SportContext): PitchingSport =
     return probeList;
   };
 
+  // ---- live aim ----
+  let liveVisible = false;
+  const updateLive = (nowMs: number): void => {
+    const st = ctx.input.state;
+    let t = nowMs;
+    if (isDebug) {
+      debugLive(cfg, mouseX, mouseY, hand, liveIn);
+    } else if (st.tracking && st.hasPose) {
+      trackedLive(cfg, st.arms[hand], hand, liveIn);
+      t = st.t;
+    } else {
+      liveVisible = false;
+      return;
+    }
+    // Before the pitch is picked the indicator follows the hand's own reading, else the call.
+    let kind: PitchKind = game.kind;
+    if (game.phase === 'call' || game.phase === 'sign') {
+      kind = game.reading === 'none' ? game.called : game.reading;
+    }
+    liveAim.update(cfg, t, liveIn, hand, kind, game.target, liveScratch);
+    liveVisible = true;
+  };
+
   // ---- catcher and camera (called every frame) ----
   const placeCamera = (): void => {
     camera.position.set(-sg * cfg.cameraSide, cfg.cameraUp, cfg.cameraBack);
@@ -402,15 +495,20 @@ export const createPitching: SportFactory = (ctx: SportContext): PitchingSport =
     // Where the mitt should be: on the lit cell during the wind-up and flight, on the ball after.
     let gx = 0;
     let gy = cfg.zoneDrawCentreY * 0.9;
-    if (game.phase === 'windup' || game.phase === 'flight') {
+    if (
+      game.phase === 'call' ||
+      game.phase === 'sign' ||
+      game.phase === 'windup' ||
+      game.phase === 'flight'
+    ) {
       gx = drawX(cfg, cell.x);
       gy = drawY(cfg, cell.y);
     } else if (ballState === 2 && (game.phase === 'result' || game.phase === 'done')) {
       gx = ball.position.x;
       gy = ball.position.y;
     }
-    gy = Math.max(0.4, Math.min(2.0, gy));
-    gx = Math.max(-1.1, Math.min(1.1, gx));
+    gy = Math.max(0.4, Math.min(2.6, gy));
+    gx = Math.max(-1.4, Math.min(1.4, gx));
     const k = 1 - Math.exp(-14 * dt);
     mittX += (gx - mittX) * k;
     mittY += (gy - mittY) * k;
@@ -432,6 +530,39 @@ export const createPitching: SportFactory = (ctx: SportContext): PitchingSport =
     catcherShadow.follow(catcher.root, 0);
   };
 
+  const driveCallUi = (): void => {
+    // The aim marker: from the reveal of the call until the release.
+    const aiming = game.bubbleOn && liveVisible && liveAim.ready && !finished;
+    if (aiming && (game.phase === 'call' || game.phase === 'sign' || game.phase === 'windup')) {
+      marker.show(liveAim.aim.x, liveAim.aim.y);
+    } else {
+      marker.hide();
+    }
+    // The bubble: the call from the reveal until the release, then the catcher's reaction.
+    const reaction = game.phase === 'result';
+    const show = !finished && game.phase !== 'done' && (game.bubbleOn || reaction);
+    if (show) {
+      if (reaction) {
+        bubble.setText(bubbleMain, bubbleSub, bubbleTone);
+      } else {
+        let sub: string;
+        if (game.phase === 'sign') sub = READING_SUB[game.reading];
+        else if (game.phase === 'windup') sub = LOCKED_SUB[game.kind];
+        else sub = 'Read the call. Take your time';
+        bubbleMain = callLine;
+        bubbleSub = sub;
+        bubble.setText(callLine, sub, 'call');
+      }
+      bubbleAnchor.set(catcherGroup.position.x, cfg.bubbleHeight, catcherZ);
+      bubbleAnchor.project(camera);
+      bubble.place(
+        (bubbleAnchor.x * 0.5 + 0.5) * window.innerWidth,
+        (0.5 - bubbleAnchor.y * 0.5) * window.innerHeight,
+      );
+    }
+    bubble.setVisible(show);
+  };
+
   const sport: PitchingSport = {
     get phase(): Phase {
       return game.phase;
@@ -441,6 +572,18 @@ export const createPitching: SportFactory = (ctx: SportContext): PitchingSport =
     },
     get kind(): PitchKind {
       return game.kind;
+    },
+    get called(): PitchKind {
+      return game.called;
+    },
+    get callText(): string {
+      return callLine;
+    },
+    get bubble(): { visible: boolean; text: string; sub: string } {
+      return { visible: bubble.visible, text: bubbleMain, sub: bubbleSub };
+    },
+    get aimMarker(): { visible: boolean; x: number; y: number } {
+      return { visible: marker.visible, x: liveAim.aim.x, y: liveAim.aim.y };
     },
     get reading(): Reading {
       return game.reading;
@@ -474,15 +617,16 @@ export const createPitching: SportFactory = (ctx: SportContext): PitchingSport =
     start(): void {
       started = true;
       placeCamera();
-      ctx.hud.setBanner('Fist for a fastball, open hand for a curve');
-      setHint('Hold your throwing hand still');
+      setHint('The catcher is calling the first pitch');
       refreshHud();
     },
 
     fixedUpdate(dt: number, nowMs: number): void {
       if (finished || !started) return;
+      updateLive(nowMs);
       for (const e of pending) {
         if (e.type !== 'ThrowReleased') continue;
+        const haveLive = liveAim.ready && liveAim.forRelease(e.t, !isDebug, liveRelease);
         const out = onThrow(
           game,
           cfg,
@@ -498,6 +642,7 @@ export const createPitching: SportFactory = (ctx: SportContext): PitchingSport =
           },
           hand,
           ctx.paused,
+          haveLive ? liveRelease : null,
         );
         if (out === 'taken') {
           lastCurvature = e.curvature;
@@ -541,6 +686,7 @@ export const createPitching: SportFactory = (ctx: SportContext): PitchingSport =
       zone.pulse(nowMs);
       driveCatcher(dt);
       placeCamera();
+      driveCallUi();
       if (!finished) refreshHud();
     },
 
@@ -551,6 +697,9 @@ export const createPitching: SportFactory = (ctx: SportContext): PitchingSport =
     dispose(): void {
       offThrow();
       unregister();
+      if (isDebug) window.removeEventListener('mousemove', onMouse);
+      bubble.dispose();
+      marker.dispose();
       ball.removeFromParent();
       ballShadow.dispose();
       ballGeometry.dispose();

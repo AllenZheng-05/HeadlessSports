@@ -6,21 +6,34 @@ export const pitchingConfig = {
   pitches: 10,
   shortPitches: 3,
 
+  // The catcher's call and the rhythm of a pitch. Nothing here is a countdown: the player takes
+  // as long as they need once the call has been up for callReactMs.
+  /** The catcher sets up (mitt moves to the called spot) before the call appears, ms. */
+  callSetupMs: 900,
+  /** The call is up this long before a selection is accepted, so there is time to read it, ms. */
+  callReactMs: 2600,
+  /** Extra setup before the very first call, ms. */
+  firstPitchExtraMs: 1500,
+  /** With ?short=1 every gap above and betweenPitchesMs is multiplied by this. */
+  shortGapScale: 0.3,
+  /** Chance that the catcher calls a curve (otherwise a fastball). */
+  curveShare: 0.45,
+
   // Pitch selection (a slow, still moment, so hand state is allowed)
   /** The throwing wrist counts as still below this speed, sw/s. */
   signStillSpeed: 0.8,
   /** The hand must be still and read the same for this long to pick a pitch, ms. */
-  signHoldMs: 700,
+  signHoldMs: 900,
   /** Total stillness with an unknown or missing hand before the fastball is picked for you, ms. */
-  signFallbackMs: 2500,
+  signFallbackMs: 5000,
   /** Throws are ignored this long after the pitch is picked (settling the arm), ms. */
   throwLockoutMs: 400,
 
   // Pitch timing
   /** No throw within this long after the wind-up starts is a balk, s. */
-  pitchClockS: 12,
+  pitchClockS: 20,
   /** The result is shown this long before the next pitch, ms. */
-  betweenPitchesMs: 1500,
+  betweenPitchesMs: 1800,
 
   // Throw acceptance
   /** Wrist speed floor, sw/s (the recognizer's own minPeak). */
@@ -52,6 +65,19 @@ export const pitchingConfig = {
   /** Extra sideways break per unit of release path curvature (1/sw). 0 leaves it off. */
   curvatureGain: 0,
   curveSpeedFactor: 0.8,
+  // Live aim (the indicator). Release uses the same value the indicator showed.
+  /** Held wrist height relative to the shoulder (sw) that maps to the lowest and highest aim. */
+  holdAimLow: -0.6,
+  holdAimHigh: 0.9,
+  /** Below this wrist speed the indicator's height follows where the wrist is held, sw/s. */
+  blendSpeedLow: 1,
+  /** Smoothing time constant of the indicator while the arm is slow, ms. */
+  aimSmoothMs: 160,
+  /** At or above this fraction of minThrowSpeed the indicator is not smoothed at all. */
+  aimFastFraction: 0.4,
+  /** Keyboard and mouse: lateral of a mouse at screen centre, and sw per window width. */
+  debugNeutralLateral: 0.62,
+  debugMouseLateral: 4,
   /** The scored location is pulled this fraction of the way toward the lit cell's centre. */
   assist: 0.35,
 
@@ -77,6 +103,10 @@ export const pitchingConfig = {
   pointsNear: 1,
   speedBonusMax: 3,
   curveBonus: 2,
+  /** Added to a pitch that is the called type and lands in the zone. */
+  calledBonus: 3,
+  /** A pitch that is not the called type is a legal pitch, but its points are multiplied by this. */
+  wrongPitchFactor: 0.5,
 
   // Flight
   /** Mound to plate, m. */
@@ -90,17 +120,19 @@ export const pitchingConfig = {
 
   // Look
   /** The zone and plate are drawn this much larger than life so they read from the mound. */
-  zoneVisualScale: 2.8,
+  zoneVisualScale: 4,
   /** Height of the drawn zone's centre, m (the scored zone stays at zoneCentreY). */
-  zoneDrawCentreY: 1.05,
-  catcherScale: 1.6,
+  zoneDrawCentreY: 1.5,
+  catcherScale: 2.3,
+  /** World height the speech bubble's tail points at, above the catcher, m. */
+  bubbleHeight: 3.2,
   ballRadius: 0.14,
-  cameraFov: 24,
+  cameraFov: 22,
   cameraBack: 3.6,
   cameraUp: 1.95,
   /** Camera shift toward the glove side so the pitcher does not hide the zone, m. */
   cameraSide: 0.9,
-  cameraLookY: 1.0,
+  cameraLookY: 1.4,
   fogNear: 40,
   fogFar: 220,
 
@@ -120,8 +152,13 @@ export type PitchingConfig = typeof pitchingConfig;
 
 export const pitchingRanges: Record<string, TunableRange> = {
   signStillSpeed: { min: 0.2, max: 3, step: 0.1 },
+  callSetupMs: { min: 200, max: 3000, step: 100 },
+  callReactMs: { min: 1500, max: 6000, step: 100 },
+  firstPitchExtraMs: { min: 0, max: 4000, step: 100 },
+  shortGapScale: { min: 0.05, max: 1, step: 0.05 },
+  curveShare: { min: 0, max: 1, step: 0.05 },
   signHoldMs: { min: 200, max: 2000, step: 50 },
-  signFallbackMs: { min: 1000, max: 6000, step: 100 },
+  signFallbackMs: { min: 1000, max: 10000, step: 100 },
   throwLockoutMs: { min: 0, max: 1500, step: 50 },
   pitchClockS: { min: 4, max: 30, step: 1 },
   betweenPitchesMs: { min: 500, max: 5000, step: 100 },
@@ -137,6 +174,13 @@ export const pitchingRanges: Record<string, TunableRange> = {
   curvatureGain: { min: 0, max: 1, step: 0.02 },
   curveSpeedFactor: { min: 0.5, max: 1, step: 0.01 },
   assist: { min: 0, max: 1, step: 0.05 },
+  holdAimLow: { min: -1.5, max: 0.5, step: 0.05 },
+  holdAimHigh: { min: 0, max: 2, step: 0.05 },
+  blendSpeedLow: { min: 0.2, max: 2.5, step: 0.1 },
+  aimSmoothMs: { min: 1, max: 600, step: 10 },
+  aimFastFraction: { min: 0.1, max: 1, step: 0.05 },
+  calledBonus: { min: 0, max: 10, step: 1 },
+  wrongPitchFactor: { min: 0, max: 1, step: 0.05 },
   speedFloor: { min: 0, max: 8, step: 0.1 },
   speedCeil: { min: 4, max: 20, step: 0.5 },
   minKmh: { min: 30, max: 90, step: 1 },

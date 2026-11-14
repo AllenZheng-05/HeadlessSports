@@ -3,7 +3,8 @@ import { runScript } from '../../input/testing/runScript';
 import type { GameEvent, Side } from '../../input/types';
 import type { Script } from '../../tracking/synthetic/script';
 import { closeFist, idle, openFist, overarmThrow } from '../../tracking/synthetic/scripts/moves';
-import { aimPitch, createAim } from './aim';
+import { aimPitch, createAim, createLiveInput, trackedLive } from './aim';
+import { LiveAim } from './liveAim';
 import type { PitchKind } from './aim';
 import { botThrowOptions } from './bot';
 import { pitchingConfig as cfg } from './config';
@@ -103,5 +104,45 @@ describe('the bot mapping lands near the target', () => {
     // Not required to be accurate, but a sane fit keeps the bot's scores meaningful.
     expect(within / total).toBeGreaterThan(0.6);
     expect(sumMiss / total).toBeLessThan(0.3);
+  });
+});
+
+describe('the live aim through the real recognizers', () => {
+  it('at the release, the indicator and the release event give the same aim', () => {
+    for (const hand of ['right', 'left'] as const) {
+      for (const kind of ['fastball', 'curve'] as PitchKind[]) {
+        for (const cell of [0, 4, 8]) {
+          const script: Script = {
+            name: 'live-seq',
+            steps: [
+              ...idle(600),
+              ...(kind === 'fastball' ? closeFist(hand, 250) : openFist(hand, 250)),
+              ...idle(900),
+              ...overarmThrow(hand, botThrowOptions(cfg, hand, cell, kind, 0.7)),
+              ...idle(400),
+            ],
+          };
+          const la = new LiveAim();
+          const li = createLiveInput();
+          const scratch = { x: 0, y: 0 };
+          let lastT = -1;
+          const run = runScript(script, {
+            seed: 3,
+            onFrame: (state) => {
+              if (state.t === lastT) return;
+              lastT = state.t;
+              trackedLive(cfg, state.arms[hand], hand, li);
+              la.update(cfg, state.t, li, hand, kind, cell, scratch);
+            },
+          });
+          const e = run.events.find((x): x is Throw => x.type === 'ThrowReleased')!;
+          const rel = aimPitch(cfg, e, hand, kind, cell, false, createAim(), scratch);
+          const seen = createAim();
+          expect(la.forRelease(e.t, true, seen)).toBe(true);
+          expect(Math.abs(seen.x - rel.x)).toBeLessThan(0.1);
+          expect(Math.abs(seen.y - rel.y)).toBeLessThan(0.1);
+        }
+      }
+    }
   });
 });

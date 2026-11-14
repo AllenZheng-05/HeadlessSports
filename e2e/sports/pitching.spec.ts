@@ -8,6 +8,8 @@ mkdirSync(SHOTS, { recursive: true });
 interface Pitch {
   index: number;
   kind: string;
+  called: string;
+  matched: boolean;
   target: number;
   balk: boolean;
   x: number;
@@ -31,6 +33,10 @@ interface PitchingHook {
     phase: string;
     index: number;
     kind: string;
+    called: string;
+    callText: string;
+    bubble: { visible: boolean; text: string; sub: string };
+    aimMarker: { visible: boolean; x: number; y: number };
     reading: string;
     target: number;
     score: number;
@@ -92,9 +98,31 @@ test.describe('pitching', () => {
       );
       await waitPhase(page, 'playing');
 
-      // Sign: the grid, the catcher and the hint with the pitcher still deciding.
+      // The catcher sets up first; then the call appears in a speech bubble.
+      await waitSportPhase(page, 'call', 20000);
+      await page.waitForFunction(
+        () => (window as unknown as { __game: PitchingHook }).__game.sport?.bubble.visible === true,
+        undefined,
+        { timeout: 20000 },
+      );
+      const bubble = page.getByTestId('catcher-bubble');
+      await expect(bubble).toBeVisible();
+      const firstCall = await page.evaluate(
+        () => (window as unknown as { __game: PitchingHook }).__game.sport!.callText,
+      );
+      await expect(bubble).toContainText(firstCall);
+      if (seed === 1) await page.screenshot({ path: `${SHOTS}/pitching-call.png` });
+
+      // Sign: the call stays up while the pitcher shows the called pitch.
       await waitSportPhase(page, 'sign', 20000);
       await page.waitForTimeout(500);
+      await expect(bubble).toBeVisible();
+      // The aim marker shows from the call until the release.
+      await page.waitForFunction(
+        () => (window as unknown as { __game: PitchingHook }).__game.sport?.aimMarker.visible,
+        undefined,
+        { timeout: 5000 },
+      );
       if (seed === 1) await page.screenshot({ path: `${SHOTS}/pitching-sign.png` });
       const drawCalls = await page.evaluate(
         () => (window as unknown as { __game: PitchingHook }).__game.drawCalls,
@@ -103,13 +131,23 @@ test.describe('pitching', () => {
       expect(drawCalls).toBeLessThan(55);
 
       await waitSportPhase(page, 'windup', 60000);
-      await page.waitForTimeout(300);
       if (seed === 1) await page.screenshot({ path: `${SHOTS}/pitching-windup.png` });
 
-      // The ball in the air, with the grid visible.
+      // The ball in the air, with the grid visible; the marker and the call are gone.
       await waitSportPhase(page, 'flight', 60000);
+      expect(
+        await page.evaluate(
+          () => (window as unknown as { __game: PitchingHook }).__game.sport!.aimMarker.visible,
+        ),
+      ).toBe(false);
       if (seed === 1) await page.screenshot({ path: `${SHOTS}/pitching-flight.png` });
-      await waitSportPhase(page, 'result', 60000);
+      // The short round's result beat is brief, so wait for the pitch to be recorded.
+      await page.waitForFunction(
+        () =>
+          ((window as unknown as { __game: PitchingHook }).__game.sport?.pitches.length ?? 0) > 0,
+        undefined,
+        { timeout: 60000 },
+      );
       if (seed === 1) await page.screenshot({ path: `${SHOTS}/pitching-result.png` });
 
       await waitPhase(page, 'results', 170000);
@@ -131,6 +169,11 @@ test.describe('pitching', () => {
       expect(result!.detail?.balks).toBe(0);
       expect(result!.score).toBeGreaterThan(0);
       expect(thrown).toHaveLength(3);
+      // The bot reads the call and throws the called pitch every time.
+      for (const p of thrown) {
+        expect(p.kind).toBe(p.called);
+        expect(p.matched).toBe(true);
+      }
       if (seed === 1) await page.waitForTimeout(600);
       if (seed === 1) await page.screenshot({ path: `${SHOTS}/pitching-results.png` });
       expect(problems).toEqual([]);
@@ -152,9 +195,7 @@ test.describe('pitching', () => {
     expect(problems).toEqual([]);
   });
 
-  test('keyboard and mouse: pick a pitch, throw, and the mouse moves the ball', async ({
-    page,
-  }) => {
+  test('keyboard and mouse: read the call, show it, aim with the ring, throw', async ({ page }) => {
     const problems = watch(page);
     const press = (code: string): Promise<void> =>
       page.evaluate(
@@ -166,22 +207,48 @@ test.describe('pitching', () => {
         (c) => (window as unknown as { __game: PitchingHook }).__game.debugInput?.release(c),
         code,
       );
+    const sportNow = (): Promise<{
+      called: string;
+      reading: string;
+      marker: { visible: boolean; x: number; y: number };
+      bubbleVisible: boolean;
+    }> =>
+      page.evaluate(() => {
+        const sp = (window as unknown as { __game: PitchingHook }).__game.sport!;
+        return {
+          called: sp.called,
+          reading: sp.reading,
+          marker: sp.aimMarker,
+          bubbleVisible: sp.bubble.visible,
+        };
+      });
 
     await page.goto('/?sport=pitching&input=debug&skipGate=1&short=1');
     await waitPhase(page, 'playing');
-    await waitSportPhase(page, 'sign', 10000);
+    // The call comes first, and the bubble is up before a pitch can be picked.
+    await waitSportPhase(page, 'call', 10000);
+    await expect(page.getByTestId('catcher-bubble')).toBeVisible({ timeout: 10000 });
+    await waitSportPhase(page, 'sign', 20000);
     await page.waitForTimeout(300);
 
     const throwWith = async (mouseX: number, mouseY: number): Promise<Pitch> => {
       await waitSportPhase(page, 'sign', 30000);
       await page.mouse.move(mouseX, mouseY);
-      // E toggles the throwing hand's fist (closed fastball, open curve). The hand holds still, so
-      // the sign picks whichever the hand shows after the hold.
-      await press('KeyE');
-      await release('KeyE');
+      await page.waitForTimeout(200);
+      // Show the called pitch: a closed fist is a fastball, an open hand a curve. E toggles the fist.
+      const now = await sportNow();
+      expect(now.bubbleVisible).toBe(true);
+      if (now.reading !== now.called) {
+        await press('KeyE');
+        await release('KeyE');
+      }
       await waitSportPhase(page, 'windup', 15000);
       await page.waitForTimeout(500);
       await page.mouse.move(mouseX, mouseY);
+      await page.waitForTimeout(100);
+      // The aim marker shows before the release, and the pitch goes where it points.
+      const aim = (await sportNow()).marker;
+      expect(aim.visible).toBe(true);
       await press('KeyT');
       await page.waitForTimeout(500);
       await release('KeyT');
@@ -195,7 +262,11 @@ test.describe('pitching', () => {
         },
       );
       const all = await pitches(page);
-      return all[all.length - 1]!;
+      const last = all[all.length - 1]!;
+      expect(Math.abs(last.x - aim.x)).toBeLessThan(0.02);
+      expect(Math.abs(last.y - aim.y)).toBeLessThan(0.02);
+      expect(last.matched).toBe(true);
+      return last;
     };
 
     const left = await throwWith(40, 360);

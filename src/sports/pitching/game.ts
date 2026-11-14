@@ -12,12 +12,14 @@ import type { Point } from './zone';
  * The pitching rules: a phase machine per pitch, pure (no three.js, no clock of its own). Time
  * advances only through `stepGame(dt)`, so a paused round freezes every timer.
  *
- *   sign    hold the throwing hand still: closed = fastball, open = curve
- *   windup  one cell is lit; the first valid throw is the pitch (or a balk after the pitch clock)
+ *   call    the catcher sets up, then the call appears (pitch type and spot); nothing is accepted
+ *           until the player has had time to read it
+ *   sign    hold the throwing hand still: closed = fastball, open = curve (no clock to beat)
+ *   windup  the called cell is lit; the first valid throw is the pitch (or a balk after the clock)
  *   flight  the ball travels to the plate
- *   result  the points are shown, then the next pitch
+ *   result  the points are shown, then the next call
  */
-export type Phase = 'sign' | 'windup' | 'flight' | 'result' | 'done';
+export type Phase = 'call' | 'sign' | 'windup' | 'flight' | 'result' | 'done';
 export type Reading = PitchKind | 'none';
 
 /** The throwing hand as the rules see it. Filled in place by the sport. */
@@ -56,8 +58,16 @@ export interface GameState {
   /** Zero-based index of the pitch in progress. */
   index: number;
   total: number;
-  /** The pitch picked for this pitch (fastball until one is picked). */
+  /** The pitch the player picked for this pitch (fastball until one is picked). */
   kind: PitchKind;
+  /** The pitch the catcher called. */
+  called: PitchKind;
+  /** The call is showing (from the reveal until the release). */
+  bubbleOn: boolean;
+  /** Multiplier on the timing gaps (the short round shortens them). */
+  readonly gapScale: number;
+  /** Extra setup time before this call, ms (the first pitch gets a longer beat). */
+  extraMs: number;
   /** What the hand says right now, during `sign`. */
   reading: Reading;
   /** Still time with an unchanged reading, ms. */
@@ -83,6 +93,8 @@ export interface GameState {
   records: PitchRecord[];
   ignored: IgnoredCounts;
   // Counters the sport compares with what it has already handled.
+  callSeq: number;
+  revealSeq: number;
   selectSeq: number;
   windupSeq: number;
   releaseSeq: number;
@@ -98,12 +110,23 @@ export interface GameState {
 export const pitchesFor = (cfg: PitchingConfig, short: boolean): number =>
   Math.max(1, Math.round(short ? cfg.shortPitches : cfg.pitches));
 
-export function createGame(total: number, random: () => number, debug = false): GameState {
-  return {
-    phase: 'sign',
+export function createGame(
+  total: number,
+  random: () => number,
+  debug = false,
+  gapScale = 1,
+  firstExtraMs = 0,
+  curveShare = 0.45,
+): GameState {
+  const g: GameState = {
+    phase: 'call',
     index: 0,
     total: Math.max(1, total),
     kind: 'fastball',
+    called: 'fastball',
+    bubbleOn: false,
+    gapScale,
+    extraMs: firstExtraMs * gapScale,
     reading: 'none',
     holdMs: 0,
     stillTotalMs: 0,
@@ -120,6 +143,8 @@ export function createGame(total: number, random: () => number, debug = false): 
     balk: false,
     records: [],
     ignored: { paused: 0, wrongHand: 0, phase: 0, lockout: 0, slow: 0, style: 0 },
+    callSeq: 0,
+    revealSeq: 0,
     selectSeq: 0,
     windupSeq: 0,
     releaseSeq: 0,
@@ -130,6 +155,18 @@ export function createGame(total: number, random: () => number, debug = false): 
     random,
     scratch: { x: 0, y: 0 },
   };
+  startCall(g, curveShare);
+  return g;
+}
+
+/** The catcher picks the next pitch and spot (seeded, so a seed always gives the same calls). */
+export function startCall(g: GameState, curveShare: number): void {
+  g.called = g.random() < curveShare ? 'curve' : 'fastball';
+  g.target = pickTarget(g.random, g.lastTarget);
+  g.lastTarget = g.target;
+  g.bubbleOn = false;
+  g.callSeq++;
+  setPhase(g, 'call');
 }
 
 export const totalIgnored = (g: GameState): number => {
@@ -154,8 +191,6 @@ function select(g: GameState, cfg: PitchingConfig, kind: PitchKind, fallback: bo
   g.usedFallback = fallback;
   g.lockoutMs = cfg.throwLockoutMs;
   g.windupMs = 0;
-  g.target = pickTarget(g.random, g.lastTarget);
-  g.lastTarget = g.target;
   g.selectSeq++;
   g.windupSeq++;
   setPhase(g, 'windup');
@@ -168,6 +203,7 @@ function resolve(g: GameState, cfg: PitchingConfig): void {
   g.records.push({
     index: g.index,
     kind: g.kind,
+    called: g.called,
     target: g.target,
     balk: g.balk,
     x: g.balk ? 0 : g.aim.x,
@@ -198,6 +234,20 @@ export function stepGame(
   const ms = dt * 1000;
   g.phaseMs += ms;
   switch (g.phase) {
+    case 'call': {
+      const reveal = cfg.callSetupMs * g.gapScale + g.extraMs;
+      if (!g.bubbleOn && g.phaseMs >= reveal) {
+        g.bubbleOn = true;
+        g.revealSeq++;
+      }
+      if (g.bubbleOn && g.phaseMs >= reveal + cfg.callReactMs * g.gapScale) {
+        g.reading = 'none';
+        g.holdMs = 0;
+        g.stillTotalMs = 0;
+        setPhase(g, 'sign');
+      }
+      return;
+    }
     case 'sign': {
       const reading = readHand(hand);
       const still = hand.speed < cfg.signStillSpeed;
@@ -235,7 +285,7 @@ export function stepGame(
       return;
     }
     case 'result': {
-      if (g.phaseMs < cfg.betweenPitchesMs) return;
+      if (g.phaseMs < cfg.betweenPitchesMs * g.gapScale) return;
       g.index++;
       if (g.index >= g.total) {
         g.doneSeq++;
@@ -246,8 +296,9 @@ export function stepGame(
         g.stillTotalMs = 0;
         g.usedFallback = false;
         g.balk = false;
+        g.extraMs = 0;
         g.nextSeq++;
-        setPhase(g, 'sign');
+        startCall(g, cfg.curveShare);
       }
       return;
     }
@@ -267,6 +318,7 @@ export function onThrow(
   e: ThrowInput,
   throwingHand: Side,
   paused: boolean,
+  live: Aim | null = null,
 ): ThrowOutcome {
   const ig = g.ignored;
   if (paused) {
@@ -294,11 +346,20 @@ export function onThrow(
     return 'style';
   }
   aimPitch(cfg, e, throwingHand, g.kind, g.target, g.debug, g.aim, g.scratch);
-  g.score = scorePitch(cfg, g.aim.x, g.aim.y, g.target, g.kind, g.aim.scoredKmh);
+  if (live !== null) {
+    // The pitch goes where the aim indicator was pointing at the release time.
+    const dx = g.kind === 'curve' ? e.curvature * cfg.curvatureGain : 0;
+    g.aim.rawX = live.rawX + dx;
+    g.aim.rawY = live.rawY;
+    g.aim.x = live.x + dx * (1 - cfg.assist);
+    g.aim.y = live.y;
+  }
+  g.score = scorePitch(cfg, g.aim.x, g.aim.y, g.target, g.kind, g.aim.scoredKmh, g.called);
   g.flightMs = flightSeconds(cfg, g.aim.kmh) * 1000;
   g.flightElapsedMs = latencyProgress(cfg, nowMs, e.t, g.flightMs) * g.flightMs;
   g.balk = false;
   g.releaseSeq++;
+  g.bubbleOn = false;
   setPhase(g, 'flight');
   return 'taken';
 }

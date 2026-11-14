@@ -9,6 +9,7 @@ import {
   Mesh,
   MeshBasicMaterial,
   PlaneGeometry,
+  RingGeometry,
   Shape,
   ShapeGeometry,
   SphereGeometry,
@@ -217,7 +218,7 @@ export function buildZone(scene: Scene, cfg: PitchingConfig, capacity: number): 
   const tileMaterial = new MeshBasicMaterial({
     vertexColors: true,
     transparent: true,
-    opacity: 0.38,
+    opacity: 0.3,
     depthWrite: false,
     fog: false,
   });
@@ -321,6 +322,68 @@ export function buildZone(scene: Scene, cfg: PitchingConfig, capacity: number): 
       dotGeometry.dispose();
       dotMaterial.dispose();
       dots.dispose();
+    },
+  };
+}
+
+export interface AimMarker {
+  /** Move to a point on the drawn plane (scored plane coordinates, metres) and show. */
+  show(x: number, y: number): void;
+  hide(): void;
+  readonly visible: boolean;
+  dispose(): void;
+}
+
+/**
+ * The live aim indicator: a white ring with a dark outline and a centre dot, one merged mesh drawn
+ * on top of the zone and the catcher. Built once; moving it only sets a position.
+ */
+export function buildAimMarker(scene: Scene, cfg: PitchingConfig): AimMarker {
+  const plateZ = -cfg.plateDistance;
+  const r = 0.27;
+  const parts: BufferGeometry[] = [];
+  const add = (g: BufferGeometry, z: number, color: number): void => {
+    g.translate(0, 0, z);
+    parts.push(paintGeometry(g, color));
+  };
+  add(new RingGeometry(r - 0.07, r + 0.07, 36), 0, PALETTE.ink);
+  add(new RingGeometry(r - 0.035, r + 0.035, 36), 0.002, 0xffffff);
+  add(new CircleGeometry(0.075, 18), 0.003, PALETTE.ink);
+  add(new CircleGeometry(0.045, 18), 0.004, 0xffffff);
+  for (let k = 0; k < 4; k++) {
+    const tick = new PlaneGeometry(0.06, 0.16);
+    tick.translate(0, r + 0.17, 0);
+    tick.rotateZ((k * Math.PI) / 2);
+    add(tick, 0.001, PALETTE.ink);
+  }
+  const geometry = mergePainted(parts);
+  const material = new MeshBasicMaterial({
+    vertexColors: true,
+    depthTest: false,
+    depthWrite: false,
+    fog: false,
+  });
+  const mesh = new Mesh(geometry, material);
+  mesh.name = 'aim-marker';
+  mesh.renderOrder = 6;
+  mesh.frustumCulled = false;
+  mesh.visible = false;
+  scene.add(mesh);
+  return {
+    show(x: number, y: number): void {
+      mesh.position.set(drawX(cfg, x), drawY(cfg, y), plateZ + 0.03);
+      mesh.visible = true;
+    },
+    hide(): void {
+      mesh.visible = false;
+    },
+    get visible(): boolean {
+      return mesh.visible;
+    },
+    dispose(): void {
+      mesh.removeFromParent();
+      geometry.dispose();
+      material.dispose();
     },
   };
 }

@@ -76,6 +76,7 @@ describe('summarize', () => {
   ): PitchRecord => ({
     index: i,
     kind,
+    called: kind,
     target: 4,
     balk: false,
     x: 0,
@@ -98,8 +99,40 @@ describe('summarize', () => {
       balks: 1,
       fastballs: 1,
       curves: 1,
+      asCalled: 2,
       bestKmh: 98,
       meanMissCm: 20,
     });
+  });
+});
+
+describe('scorePitch with a call', () => {
+  it('the called pitch in the zone earns the called bonus', () => {
+    const p = at(4);
+    const plain = scorePitch(cfg, p.x, p.y, 4, 'fastball', 80);
+    const called = scorePitch(cfg, p.x, p.y, 4, 'fastball', 80, 'fastball');
+    expect(called.matched).toBe(true);
+    expect(called.calledBonus).toBe(cfg.calledBonus);
+    expect(called.points).toBe(plain.points + cfg.calledBonus);
+  });
+  it('another type is legal but scores wrongPitchFactor of the points, with no bonus', () => {
+    const p = at(4);
+    const plain = scorePitch(cfg, p.x, p.y, 4, 'curve', 80);
+    const wrong = scorePitch(cfg, p.x, p.y, 4, 'curve', 80, 'fastball');
+    expect(wrong.matched).toBe(false);
+    expect(wrong.calledBonus).toBe(0);
+    expect(wrong.points).toBe(Math.floor(plain.points * cfg.wrongPitchFactor));
+    expect(wrong.points).toBeGreaterThan(0);
+  });
+  it('matching beats not matching for the same location', () => {
+    const p = at(2);
+    const a = scorePitch(cfg, p.x, p.y, 2, 'curve', 90, 'curve');
+    const b = scorePitch(cfg, p.x, p.y, 2, 'curve', 90, 'fastball');
+    expect(a.points).toBeGreaterThan(b.points);
+  });
+  it('a called pitch outside the zone gets no bonus; no call changes nothing', () => {
+    expect(scorePitch(cfg, 3, 3, 4, 'fastball', 80, 'fastball').calledBonus).toBe(0);
+    const p = at(4);
+    expect(scorePitch(cfg, p.x, p.y, 4, 'fastball', 80, null).matched).toBe(true);
   });
 });

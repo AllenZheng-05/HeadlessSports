@@ -33,9 +33,10 @@ export function botThrowOptions(
 }
 
 /**
- * The closed-loop pitcher. In `sign` it shows a fist or an open hand and holds still (in slices,
- * until the sport reports `windup`); in `windup` it throws once at the lit cell using the inverse
- * of the aim mapping; in every other phase it waits. Every wait is sliced, so it cannot deadlock.
+ * The closed-loop pitcher. It reads the catcher's call: in `sign` it shows the called pitch (a fist
+ * or an open hand) and holds still (in slices, until the sport reports `windup`); in `windup` it
+ * throws once at the called cell using the inverse of the aim mapping; in every other phase
+ * (including the call itself, while the player would be reading it) it waits. Every wait is sliced, so it cannot deadlock.
  * It is not meant to be accurate: the mapping is fitted on the synthetic arm, with some power noise.
  */
 export function createPitchingBot(
@@ -44,16 +45,11 @@ export function createPitchingBot(
   hand: Side,
   random: () => number,
 ): SportBot {
-  let choiceFor = -1;
-  let choice: PitchKind = 'fastball';
   return {
     next(enqueue): void {
       switch (game.phase) {
         case 'sign': {
-          if (choiceFor !== game.index) {
-            choiceFor = game.index;
-            choice = random() < 0.5 ? 'fastball' : 'curve';
-          }
+          const choice: PitchKind = game.called;
           const steps: ScriptStep[] =
             choice === 'fastball' ? closeFist(hand, 250) : openFist(hand, 250);
           steps.push(...idle(250));
