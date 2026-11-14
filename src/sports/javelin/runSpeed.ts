@@ -10,7 +10,20 @@ export type SpeedCfg = Pick<
   | 'minAmplitudeFactor'
   | 'accel'
   | 'decel'
+  | 'cadenceHoldFactor'
+  | 'cadenceFadeMs'
 >;
+
+/**
+ * The step rate that drives the athlete: the last measured rate while the next step is not yet
+ * overdue (`cadenceHoldFactor` intervals), then a linear fade to 0 over `cadenceFadeMs`.
+ */
+export function effectiveCadence(cadence: number, sinceStepMs: number, cfg: SpeedCfg): number {
+  if (!(cadence > 0)) return 0;
+  const hold = (1000 / cadence) * cfg.cadenceHoldFactor;
+  if (sinceStepMs <= hold) return cadence;
+  return cadence * Math.max(0, 1 - (sinceStepMs - hold) / cfg.cadenceFadeMs);
+}
 
 /** Identity up to `knee`, then approaches `max` asymptotically (slope 1 at the knee, so no kink). */
 export function softCap(x: number, knee: number, max: number): number {

@@ -3,10 +3,10 @@ import { runScript } from '../../input/testing/runScript';
 import type { GameEvent } from '../../input/types';
 import { recognizerConfig } from '../../input/recognizers/config';
 import type { Script } from '../../tracking/synthetic/script';
-import { idle, overarmThrow, raiseArm, runInPlace } from '../../tracking/synthetic/scripts/moves';
+import { idle, overarmThrow, runInPlace } from '../../tracking/synthetic/scripts/moves';
 
 /**
- * The exact sequence the javelin bot plays: raise a fist, run, throw. Run through the real
+ * The exact sequence the javelin bot plays: run on the spot, then throw (no fist, no raise). Run through the real
  * recognizers (synthetic source -> TrackedInput) on seeds 1 to 5.
  */
 function play(seed: number, pauseMs: number, overrideBodySpeed?: number) {
@@ -17,8 +17,6 @@ function play(seed: number, pauseMs: number, overrideBodySpeed?: number) {
       name: 'javelin-seq',
       steps: [
         ...idle(600),
-        ...raiseArm('right', { fist: true, holdMs: 500 }),
-        ...idle(200),
         ...runInPlace({ steps: 14, stepsPerSecond: 4 }),
         ...(pauseMs > 0 ? idle(pauseMs) : []),
         ...overarmThrow('right', { power: 0.9, loftDeg: 35 }),
@@ -41,7 +39,7 @@ function play(seed: number, pauseMs: number, overrideBodySpeed?: number) {
 const count = (events: GameEvent[], type: GameEvent['type']): number =>
   events.filter((e) => e.type === type).length;
 
-describe('raise -> run -> throw through the real recognizers', () => {
+describe('run -> throw through the real recognizers', () => {
   for (const mode of [
     { name: 'default config, no pause', pause: 0, override: undefined },
     { name: 'default config, 450 ms pause', pause: 450, override: undefined },
@@ -53,13 +51,12 @@ describe('raise -> run -> throw through the real recognizers', () => {
         const { events, maxCadence } = play(seed, mode.pause, mode.override);
         const throws = events.filter((e) => e.type === 'ThrowReleased');
         const real = throws.filter((e) => e.type === 'ThrowReleased' && e.speed >= 2.5);
-        expect(count(events, 'ArmRaised')).toBeGreaterThanOrEqual(1);
         expect(maxCadence).toBeGreaterThan(3);
         expect(throws).toHaveLength(1);
         expect(real).toHaveLength(1);
         expect(real[0]!.type === 'ThrowReleased' && real[0]!.style).toBe('overarm');
         rows.push(
-          `seed ${seed}: raised=${count(events, 'ArmRaised')} steps=${count(events, 'Step')} cad=${maxCadence.toFixed(2)} throws=${throws.length} ` +
+          `seed ${seed}: steps=${count(events, 'Step')} cad=${maxCadence.toFixed(2)} throws=${throws.length} ` +
             real
               .map((e) =>
                 e.type === 'ThrowReleased'

@@ -18,13 +18,10 @@ export const javelinConfig = {
   /** The "Throw!" hint appears inside this distance to the line, metres. */
   throwZone: 9,
 
-  // Start gesture
-  /** Throws are ignored this long after the start (lowering the arm can look like a throw), ms. */
-  throwLockoutMs: 500,
-  /** After the start, lowering the throwing arm within this window extends the lockout, ms. */
-  lowerWindowMs: 3500,
-  /** A raised arm with a known open hand starts the run after this hold, ms. */
-  openHandHoldMs: 600,
+  // Start: there is no gesture. The run begins by itself after this get-ready beat, ms.
+  readyMs: 1400,
+  /** Throws are ignored this long after the run starts (a stray arm movement), ms. */
+  throwLockoutMs: 400,
 
   // Run speed
   maxRunSpeed: 9,
@@ -34,28 +31,48 @@ export const javelinConfig = {
   softCapKnee: 0.8,
   softCapMax: 1.15,
   minAmplitudeFactor: 0.75,
-  accel: 6,
+  /** Quick to speed up (a step or two) and slower to slow down, m/s^2. */
+  accel: 10,
   decel: 3,
   /** After a release or a foul the athlete plants and stops at this rate, m/s^2. */
   plantDecel: 9,
   idleTimeoutS: 8,
   idleMoveM: 1,
+  /** Step events closer than this are one step (ms); further apart than stepMaxMs restarts. */
+  stepMinMs: 140,
+  stepMaxMs: 1100,
+  /** Step rate ceiling, steps/s. */
+  maxCadence: 5.5,
+  /** How much of the newest step interval enters the step rate, 0..1 (1 = only the last step). */
+  cadenceBlend: 0.6,
+  /** The step rate is held this many intervals after the last step, then fades. */
+  cadenceHoldFactor: 1.5,
+  cadenceFadeMs: 450,
 
   // Throw acceptance
-  /** Wrist speed floor, sw/s (the recognizer's own minPeak). */
-  minThrowSpeed: 2.5,
-  acceptAnyStyle: true,
+  /** Wrist speed floor for a throw when standing, sw/s (the recognizer's own minPeak is 2.5). */
+  minThrowSpeed: 3,
+  /** Added to the floor at full run speed, sw/s: arm pumping while running must not throw. */
+  pumpMargin: 1.5,
+  /** Wrist speed a mouse click throws with (keyboard and mouse play), sw/s. */
+  clickThrowSpeed: 8.5,
+  /** Only a throw with the wrist above the shoulder at the speed peak counts. */
+  acceptAnyStyle: false,
   /** Latency compensation never steps back further than this, s. */
   maxLatencyS: 1,
   /**
-   * Raise the throw recognizer's body-speed limit (sw/s) for the duration of the sport; 0 leaves
-   * recognizerConfig.throw.maxBodySpeed alone. Running in place bobs the shoulders.
+   * Throw recognizer settings for the duration of the sport (restored afterwards); 0 leaves the
+   * shared value alone. Running in place bobs the shoulders and pumps the arms, so the body-speed
+   * limit is raised and the arm counts as ready at a higher wrist speed and after a shorter pause.
    */
-  maxBodySpeedOverride: 0,
+  maxBodySpeedOverride: 6,
+  recognizerArmSpeed: 2.2,
+  recognizerArmMs: 50,
 
   // Distance model
+  /** release speed = baseSpeed + runGain * run/maxRunSpeed + throwGain * armPower, m/s */
   baseSpeed: 9,
-  runTransfer: 0.85,
+  runGain: 8.5,
   throwGain: 15,
   throwFloor: 2.5,
   throwCeil: 11,
@@ -88,6 +105,9 @@ export const javelinConfig = {
   cameraLookAhead: 10,
   cameraLookY: 0.4,
   cameraSmooth: 3.2,
+  /** At full run speed the field of view widens by this many degrees and the camera drops back. */
+  cameraSpeedFov: 9,
+  cameraSpeedBack: 1.2,
   fogNear: 60,
   fogFar: 280,
 
@@ -97,6 +117,9 @@ export const javelinConfig = {
   /** The cadence recognizer keeps reporting the old cadence this long after the last step, s. */
   botCadenceHoldS: 0.8,
   botMarginM: 0.5,
+  /** Bot step rates, steps/s: the fixed rates of the slow and fast variants (?botRun=). */
+  botSlowCadence: 2.4,
+  botFastCadence: 4.4,
 };
 
 export type JavelinConfig = typeof javelinConfig;
@@ -104,17 +127,24 @@ export type JavelinConfig = typeof javelinConfig;
 export const javelinRanges: Record<string, TunableRange> = {
   runwayLength: { min: 15, max: 60, step: 1 },
   throwZone: { min: 3, max: 20, step: 0.5 },
+  readyMs: { min: 300, max: 4000, step: 100 },
   throwLockoutMs: { min: 0, max: 1500, step: 50 },
-  openHandHoldMs: { min: 200, max: 2000, step: 50 },
   maxRunSpeed: { min: 3, max: 14, step: 0.5 },
   fullCadence: { min: 2, max: 6, step: 0.1 },
   fullAmplitude: { min: 0.1, max: 1, step: 0.01 },
   accel: { min: 1, max: 20, step: 0.5 },
   decel: { min: 0.5, max: 20, step: 0.5 },
+  cadenceBlend: { min: 0.1, max: 1, step: 0.05 },
+  cadenceHoldFactor: { min: 1, max: 3, step: 0.1 },
+  cadenceFadeMs: { min: 100, max: 1500, step: 50 },
   minThrowSpeed: { min: 1, max: 8, step: 0.1 },
+  pumpMargin: { min: 0, max: 5, step: 0.1 },
+  clickThrowSpeed: { min: 2, max: 11, step: 0.5 },
   maxBodySpeedOverride: { min: 0, max: 12, step: 0.5 },
+  recognizerArmSpeed: { min: 0, max: 5, step: 0.1 },
+  recognizerArmMs: { min: 0, max: 300, step: 10 },
   baseSpeed: { min: 0, max: 20, step: 0.5 },
-  runTransfer: { min: 0, max: 1.5, step: 0.05 },
+  runGain: { min: 0, max: 20, step: 0.5 },
   throwGain: { min: 0, max: 30, step: 0.5 },
   throwFloor: { min: 0, max: 8, step: 0.1 },
   throwCeil: { min: 4, max: 20, step: 0.5 },
@@ -131,6 +161,8 @@ export const javelinRanges: Record<string, TunableRange> = {
   cameraUp: { min: 0.8, max: 5, step: 0.1 },
   cameraLookY: { min: 0, max: 2, step: 0.05 },
   cameraFov: { min: 35, max: 80, step: 1 },
+  cameraSpeedFov: { min: 0, max: 20, step: 1 },
+  cameraSpeedBack: { min: 0, max: 4, step: 0.1 },
   crossGraceS: { min: 0, max: 1.5, step: 0.05 },
   botThrowLeadS: { min: 0, max: 3, step: 0.05 },
   botCadenceHoldS: { min: 0, max: 2, step: 0.05 },

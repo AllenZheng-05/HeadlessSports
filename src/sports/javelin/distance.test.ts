@@ -13,8 +13,8 @@ import {
 
 describe('release speed', () => {
   it('matches the calibration targets', () => {
-    // Full sprint and a full-power throw: about 31.7 m/s.
-    expect(releaseSpeed(cfg, 9, 11)).toBeCloseTo(9 + 7.65 + 15, 5);
+    // Full sprint and a full-power throw: about 32.5 m/s.
+    expect(releaseSpeed(cfg, 9, 11)).toBeCloseTo(9 + 8.5 + 15, 5);
     // Standing with a weak throw: about 10.
     expect(releaseSpeed(cfg, 0, 2.5)).toBeCloseTo(9, 5);
     expect(releaseSpeed(cfg, 0, 3)).toBeLessThan(10);

@@ -8,16 +8,17 @@ import {
   stepFlight,
 } from './distance';
 import type { Flight } from './distance';
-import { approachSpeed, targetRunSpeed } from './runSpeed';
+import { approachSpeed, effectiveCadence, targetRunSpeed } from './runSpeed';
 
 /**
  * The javelin round as an explicit state machine. Pure: no three.js, no DOM, no input provider.
- * The sport feeds it gesture events and the live cadence and reads back counters to react to.
+ * The sport feeds it step and throw events and reads back counters to react to. There is no start
+ * gesture and no hand state: the javelin is always in the throwing hand, the run starts by itself
+ * after a short get-ready beat, and one big arm motion releases it.
  *
  *   ready -> run -> flight -> result -> (ready | done)
  */
 export type Phase = 'ready' | 'run' | 'flight' | 'result' | 'done';
-export type FistKnowledge = 'closed' | 'open' | 'unknown';
 
 export interface AttemptRecord {
   foul: boolean;
@@ -60,8 +61,12 @@ export interface GameState {
   /** Game ms the run started, and until when throws are ignored. */
   startMs: number;
   lockoutUntilMs: number;
-  /** When the throwing arm went up with an open hand (waiting for the hold), or -1. */
-  raisedSinceMs: number;
+  /** Instantaneous step rate from the last few step events, steps/s (0 when not running). */
+  cadence: number;
+  /** The cadence after the decay since the last step: what drives the run speed, steps/s. */
+  cadenceNow: number;
+  /** Game ms of the last step event. */
+  lastStepMs: number;
   idleHint: boolean;
   /** Seconds spent beyond the line plus overrun without a throw. */
   crossT: number;
@@ -99,7 +104,9 @@ export function createGame(attempts: number): GameState {
     runT: 0,
     startMs: 0,
     lockoutUntilMs: 0,
-    raisedSinceMs: -1,
+    cadence: 0,
+    cadenceNow: 0,
+    lastStepMs: -1e9,
     idleHint: false,
     crossT: 0,
     flight: createFlight(),
@@ -135,60 +142,54 @@ function begin(s: GameState, cfg: JavelinConfig, nowMs: number): void {
   s.crossT = 0;
   s.startMs = nowMs;
   s.lockoutUntilMs = nowMs + cfg.throwLockoutMs;
-  s.raisedSinceMs = -1;
   s.idleHint = false;
   s.startSeq++;
 }
 
 /**
- * The throwing arm went up. Starts the run when its fist is closed or not known (hand crops at
- * distance are unreliable), or when both arms are up. A known open hand starts it only after
- * `openHandHoldMs` of holding the arm up, so a wave is not enough but the keyboard path works.
- * The other arm alone never starts it.
+ * A `Step` event. The step rate is the reciprocal of the interval to the previous step, blended
+ * with the running value, so one faster step already raises the target speed. A long gap starts
+ * the average afresh.
  */
-export function onArmRaised(
-  s: GameState,
-  cfg: JavelinConfig,
-  nowMs: number,
-  hand: 'left' | 'right',
-  both: boolean,
-  fist: FistKnowledge,
-  throwHand: 'left' | 'right',
-): void {
-  if (s.phase !== 'ready') return;
-  if (both) {
-    begin(s, cfg, nowMs);
-    return;
+export function onStep(s: GameState, cfg: JavelinConfig, t: number): void {
+  const dt = t - s.lastStepMs;
+  if (dt < cfg.stepMinMs) return;
+  if (dt <= cfg.stepMaxMs) {
+    const inst = Math.min(cfg.maxCadence, 1000 / dt);
+    s.cadence = s.cadence > 0 ? s.cadence + (inst - s.cadence) * cfg.cadenceBlend : inst;
+  } else {
+    s.cadence = 0;
   }
-  if (hand !== throwHand) return;
-  if (fist !== 'open') begin(s, cfg, nowMs);
-  else s.raisedSinceMs = nowMs;
+  s.lastStepMs = t;
 }
 
-/** The throwing hand closed while its arm is up. */
-export function onFistClosed(
-  s: GameState,
-  cfg: JavelinConfig,
-  nowMs: number,
-  hand: 'left' | 'right',
-  throwHand: 'left' | 'right',
-): void {
-  if (s.phase === 'ready' && hand === throwHand && s.raisedSinceMs >= 0) begin(s, cfg, nowMs);
+/**
+ * Wrist speed a throw needs, sw/s. It rises with the run speed, so the arms pumping in time with
+ * the steps stay clearly below it while a deliberate overhand throw clears it.
+ */
+export function requiredThrowSpeed(s: GameState, cfg: JavelinConfig): number {
+  const f = Math.max(0, Math.min(1, s.speed / cfg.maxRunSpeed));
+  return cfg.minThrowSpeed + cfg.pumpMargin * f;
 }
 
-export function onArmLowered(
-  s: GameState,
+/**
+ * The throw a mouse click makes (keyboard and mouse play): a fixed good wrist speed, with the loft
+ * from the pointer height (top of the screen throws high), like the T key's mouse loft.
+ */
+export function clickThrow(
   cfg: JavelinConfig,
-  nowMs: number,
+  t: number,
   hand: 'left' | 'right',
-  throwHand: 'left' | 'right',
-): void {
-  if (hand !== throwHand) return;
-  if (s.phase === 'ready') s.raisedSinceMs = -1;
-  else if (s.phase === 'run' && nowMs - s.startMs < cfg.lowerWindowMs) {
-    // Lowering the start arm can look like a throw a moment later.
-    s.lockoutUntilMs = Math.max(s.lockoutUntilMs, nowMs + cfg.throwLockoutMs);
-  }
+  pointerY: number,
+): ThrowInput {
+  const loft = Math.max(0, Math.min(1.4, (0.5 - pointerY) * 1.6 + 0.6));
+  return {
+    t,
+    hand,
+    speed: cfg.clickThrowSpeed,
+    vy: cfg.clickThrowSpeed * Math.sin(loft),
+    style: 'overarm',
+  };
 }
 
 /**
@@ -208,7 +209,7 @@ export function onThrow(
     s.ignoredThrows++;
     return false;
   }
-  if (ev.speed < cfg.minThrowSpeed) return false;
+  if (ev.speed < requiredThrowSpeed(s, cfg)) return false;
   if (!cfg.acceptAnyStyle && ev.style !== 'overarm') return false;
 
   const delay = Math.max(0, Math.min(cfg.maxLatencyS, (nowMs - ev.t) / 1000));
@@ -261,7 +262,9 @@ function nextAttempt(s: GameState): void {
   s.runT = 0;
   s.position = 0;
   s.speed = 0;
-  s.raisedSinceMs = -1;
+  s.cadence = 0;
+  s.cadenceNow = 0;
+  s.lastStepMs = -1e9;
   s.idleHint = false;
   s.nextSeq++;
 }
@@ -272,19 +275,18 @@ export function stepGame(
   cfg: JavelinConfig,
   dt: number,
   nowMs: number,
-  stepsPerSecond: number,
   amplitude: number,
 ): void {
   s.phaseT += dt;
+  s.cadenceNow = effectiveCadence(s.cadence, nowMs - s.lastStepMs, cfg);
   switch (s.phase) {
     case 'ready':
-      if (s.raisedSinceMs >= 0 && nowMs - s.raisedSinceMs >= cfg.openHandHoldMs) {
-        begin(s, cfg, nowMs);
-      }
+      // No gesture to start: a short get-ready beat, then the run begins.
+      if (s.phaseT * 1000 >= cfg.readyMs) begin(s, cfg, nowMs);
       break;
     case 'run': {
       s.runT += dt;
-      const target = targetRunSpeed(stepsPerSecond, amplitude, cfg);
+      const target = targetRunSpeed(s.cadenceNow, amplitude, cfg);
       s.speed = approachSpeed(s.speed, target, dt, cfg);
       s.position += s.speed * dt;
       s.idleHint = s.runT > cfg.idleTimeoutS && s.position < cfg.idleMoveM;

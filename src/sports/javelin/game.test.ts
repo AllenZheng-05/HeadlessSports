@@ -1,14 +1,15 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { javelinConfig } from './config';
 import {
   attemptLine,
   attemptsFor,
+  clickThrow,
   createGame,
   distanceToLine,
-  onArmLowered,
-  onArmRaised,
-  onFistClosed,
+  onStep,
   onThrow,
+  requiredThrowSpeed,
   stepGame,
 } from './game';
 import type { GameState, ThrowInput } from './game';
@@ -16,14 +17,30 @@ import type { GameState, ThrowInput } from './game';
 const cfg = { ...javelinConfig };
 const DT = 1 / 120;
 
-/** Run the rules for `seconds` of game time, returning the new clock. */
+/**
+ * Run the rules for `seconds` of game time with a step every 1/sps s (none when sps is 0),
+ * returning the new clock.
+ */
 function run(s: GameState, now: number, seconds: number, sps = 4, amp = 0.45): number {
   const n = Math.round(seconds * 120);
   let t = now;
+  // Steps fall on a fixed grid of the clock, so many short calls step like one long one.
+  let nextStep = sps > 0 ? (Math.floor(t / (1000 / sps)) + 1) * (1000 / sps) : Infinity;
   for (let i = 0; i < n; i++) {
     t += DT * 1000;
-    stepGame(s, cfg, DT, t, sps, amp);
+    while (t >= nextStep) {
+      onStep(s, cfg, nextStep);
+      nextStep += 1000 / sps;
+    }
+    stepGame(s, cfg, DT, t, amp);
   }
+  return t;
+}
+
+/** Step the rules until the phase is `phase` (or `max` seconds pass). */
+function until(s: GameState, now: number, phase: GameState['phase'], max = 30): number {
+  let t = now;
+  for (let i = 0; i < max * 20 && s.phase !== phase; i++) t = run(s, t, 0.05, 0);
   return t;
 }
 
@@ -36,70 +53,125 @@ const throwAt = (t: number, over: Partial<ThrowInput> = {}): ThrowInput => ({
   ...over,
 });
 
+/** A round whose run has just started (the get-ready beat is over). */
 function started(): { s: GameState; now: number } {
   const s = createGame(3);
-  onArmRaised(s, cfg, 1000, 'right', false, 'closed', 'right');
-  return { s, now: 1000 };
+  const now = run(s, 0, cfg.readyMs / 1000 + 0.05, 0);
+  return { s, now };
 }
 
-describe('start gesture', () => {
-  it('starts on a raised throwing arm with a closed fist', () => {
+describe('start', () => {
+  it('begins by itself after the get-ready beat, with no gesture', () => {
     const s = createGame(3);
-    onArmRaised(s, cfg, 100, 'right', false, 'closed', 'right');
+    run(s, 0, cfg.readyMs / 1000 - 0.2, 0);
+    expect(s.phase).toBe('ready');
+    run(s, 0, cfg.readyMs / 1000 + 0.05, 0);
     expect(s.phase).toBe('run');
     expect(s.startSeq).toBe(1);
   });
-  it('starts when the hand state is not known (crops are unreliable at distance)', () => {
-    const s = createGame(3);
-    onArmRaised(s, cfg, 100, 'right', false, 'unknown', 'right');
-    expect(s.phase).toBe('run');
+  it('no javelin code reads fist or hand state', () => {
+    for (const f of ['game', 'index', 'bot', 'runSpeed', 'distance']) {
+      const text = readFileSync(`src/sports/javelin/${f}.ts`, 'utf8')
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/\/\/.*$/gm, '');
+      expect(text, f).not.toMatch(/fist|\.hands|\.closed|ArmRaised|ArmLowered|handCrops: true/i);
+    }
   });
-  it('starts when both arms are up, whatever the fists say', () => {
-    const s = createGame(3);
-    onArmRaised(s, cfg, 100, 'left', true, 'open', 'right');
-    expect(s.phase).toBe('run');
-  });
-  it('does not start from the other arm alone, closed or not', () => {
-    const s = createGame(3);
-    onArmRaised(s, cfg, 100, 'left', false, 'closed', 'right');
-    onArmRaised(s, cfg, 100, 'left', false, 'unknown', 'right');
-    expect(s.phase).toBe('ready');
-  });
-  it('a known open hand starts only after the hold, or when the fist closes', () => {
-    const s = createGame(3);
-    onArmRaised(s, cfg, 1000, 'right', false, 'open', 'right');
-    expect(s.phase).toBe('ready');
-    const t = run(s, 1000, 0.3);
-    expect(s.phase).toBe('ready');
-    run(s, t, 0.4);
-    expect(s.phase).toBe('run');
+});
 
-    const s2 = createGame(3);
-    onArmRaised(s2, cfg, 1000, 'right', false, 'open', 'right');
-    onFistClosed(s2, cfg, 1200, 'right', 'right');
-    expect(s2.phase).toBe('run');
+describe('run speed follows the step rate', () => {
+  function speedAfter(sps: number, seconds: number): number {
+    const { s, now } = started();
+    run(s, now, seconds, sps);
+    return s.speed;
+  }
+  it('a faster cadence gives a higher run speed, continuously', () => {
+    let prev = -1;
+    for (const sps of [1.5, 2, 2.5, 3, 3.5, 4]) {
+      const v = speedAfter(sps, 3);
+      expect(v).toBeGreaterThan(prev);
+      prev = v;
+    }
+    expect(speedAfter(4, 3)).toBeGreaterThan(speedAfter(2, 3) * 1.6);
   });
-  it('lowering the arm before the hold cancels it, and a fist with the arm down does nothing', () => {
-    const s = createGame(3);
-    onArmRaised(s, cfg, 1000, 'right', false, 'open', 'right');
-    onArmLowered(s, cfg, 1200, 'right', 'right');
-    run(s, 1200, 1.5);
-    expect(s.phase).toBe('ready');
-    onFistClosed(s, cfg, 3000, 'right', 'right');
-    expect(s.phase).toBe('ready');
+  it('speeds up within a step or two', () => {
+    const { s, now } = started();
+    run(s, now, 0.9, 4);
+    expect(s.speed).toBeGreaterThan(3);
   });
-  it('ignores a closed fist of the wrong hand', () => {
-    const s = createGame(3);
-    onArmRaised(s, cfg, 1000, 'right', false, 'open', 'right');
-    onFistClosed(s, cfg, 1100, 'left', 'right');
-    expect(s.phase).toBe('ready');
+  it('slows down smoothly when the player slows, and stops when they stop', () => {
+    const { s, now } = started();
+    let t = run(s, now, 3, 4);
+    const fast = s.speed;
+    t = run(s, t, 1.5, 2.2);
+    const mid = s.speed;
+    expect(mid).toBeLessThan(fast);
+    expect(mid).toBeGreaterThan(0.2 * fast);
+    run(s, t, 4, 0);
+    expect(s.speed).toBe(0);
   });
-  it('left-handed play uses the left arm', () => {
-    const s = createGame(3);
-    onArmRaised(s, cfg, 100, 'right', false, 'closed', 'left');
-    expect(s.phase).toBe('ready');
-    onArmRaised(s, cfg, 100, 'left', false, 'closed', 'left');
+});
+
+describe('throw guard', () => {
+  it('arm pumping while running does not throw, a big motion does', () => {
+    const { s, now } = started();
+    const t = run(s, now, 2.5, 4);
+    const need = requiredThrowSpeed(s, cfg);
+    expect(need).toBeGreaterThan(cfg.minThrowSpeed + 0.5 * cfg.pumpMargin);
+    // Arm swing at running pace: well under the guard.
+    expect(onThrow(s, cfg, t, throwAt(t, { speed: 2.8 }), 'right')).toBe(false);
+    expect(onThrow(s, cfg, t, throwAt(t, { speed: need - 0.1 }), 'right')).toBe(false);
     expect(s.phase).toBe('run');
+    expect(onThrow(s, cfg, t, throwAt(t, { speed: need + 0.1 }), 'right')).toBe(true);
+    expect(s.phase).toBe('flight');
+  });
+  it('a hand below the shoulder at the peak is not a throw', () => {
+    const { s, now } = started();
+    const t = run(s, now, 1, 4);
+    expect(onThrow(s, cfg, t, throwAt(t, { style: 'underarm' }), 'right')).toBe(false);
+  });
+  it('needs no pose first: a throw is accepted whenever the run is on', () => {
+    const { s, now } = started();
+    const t = run(s, now, 0.6, 0);
+    expect(onThrow(s, cfg, t, throwAt(t), 'right')).toBe(true);
+  });
+});
+
+describe('click throw', () => {
+  it('a click makes a valid overarm throw while running, higher with the pointer higher', () => {
+    const { s, now } = started();
+    const t = run(s, now, 2, 4);
+    const low = clickThrow(cfg, t, 'right', 0.9);
+    const high = clickThrow(cfg, t, 'right', 0.1);
+    expect(high.vy).toBeGreaterThan(low.vy);
+    expect(low.speed).toBeGreaterThan(requiredThrowSpeed(s, cfg));
+    expect(onThrow(s, cfg, t, high, 'right')).toBe(true);
+    expect(s.phase).toBe('flight');
+  });
+  it('a click before the run starts does nothing', () => {
+    const s = createGame(1);
+    expect(onThrow(s, cfg, 100, clickThrow(cfg, 100, 'right', 0.5), 'right')).toBe(false);
+    expect(s.phase).toBe('ready');
+  });
+});
+
+describe('distance rewards the approach', () => {
+  function throwDistance(sps: number, arm: number): number {
+    const { s, now } = started();
+    const t = run(s, now, 3, sps);
+    expect(s.position).toBeLessThan(cfg.runwayLength - 2);
+    expect(onThrow(s, cfg, t, throwAt(t, { speed: arm }), 'right')).toBe(true);
+    run(s, t, 8, 0);
+    expect(s.records[0]!.foul).toBe(false);
+    return s.records[0]!.distance;
+  }
+  it('faster cadence, same arm: longer throw, by a substantial amount', () => {
+    const slow = throwDistance(2, 8);
+    const mid = throwDistance(3, 8);
+    const fast = throwDistance(4, 8);
+    expect(mid).toBeGreaterThan(slow);
+    expect(fast).toBeGreaterThan(mid);
+    expect(fast / slow).toBeGreaterThan(1.15);
   });
 });
 
@@ -117,28 +189,15 @@ describe('throws', () => {
     expect(onThrow(s, cfg, t, throwAt(t), 'right')).toBe(true);
     expect(s.phase).toBe('flight');
   });
-  it('lowering the start arm shortly after starting extends the lockout', () => {
-    const { s, now } = started();
-    const t = run(s, now, 0.4);
-    onArmLowered(s, cfg, t, 'right', 'right');
-    expect(onThrow(s, cfg, t + 450, throwAt(t + 450), 'right')).toBe(false);
-    expect(onThrow(s, cfg, t + 600, throwAt(t + 600), 'right')).toBe(true);
-  });
-  it('lowering the arm much later does not lock anything out', () => {
-    const { s, now } = started();
-    const t = run(s, now, 4);
-    onArmLowered(s, cfg, t, 'right', 'right');
-    expect(onThrow(s, cfg, t + 10, throwAt(t + 10), 'right')).toBe(true);
-  });
   it('need the throwing hand, the speed floor and (optionally) an overarm style', () => {
     const { s, now } = started();
     const t = run(s, now, 1);
     expect(onThrow(s, cfg, t, throwAt(t, { hand: 'left' }), 'right')).toBe(false);
     expect(onThrow(s, cfg, t, throwAt(t, { speed: 1 }), 'right')).toBe(false);
-    cfg.acceptAnyStyle = false;
     expect(onThrow(s, cfg, t, throwAt(t, { style: 'underarm' }), 'right')).toBe(false);
     cfg.acceptAnyStyle = true;
     expect(onThrow(s, cfg, t, throwAt(t, { style: 'underarm' }), 'right')).toBe(true);
+    cfg.acceptAnyStyle = false;
   });
   it('a valid throw lands, scores the distance from the line and records the release', () => {
     const { s, now } = started();
@@ -240,8 +299,8 @@ describe('attempts and scoring', () => {
   function play(s: GameState, now: number, outcomes: ('foul' | 'throw')[]): number {
     let t = now;
     for (const o of outcomes) {
-      // ready -> start
-      onArmRaised(s, cfg, t, 'right', false, 'closed', 'right');
+      // ready -> start by itself
+      t = run(s, t, cfg.readyMs / 1000 + 0.05, 0);
       expect(s.phase).toBe('run');
       if (o === 'throw') {
         t = run(s, t, 1.8);
@@ -252,7 +311,7 @@ describe('attempts and scoring', () => {
         s.speed = 8;
         t = run(s, t, 0.2);
       }
-      t = run(s, t, 12);
+      t = until(s, t, s.attempt + 1 >= s.total ? 'done' : 'ready');
     }
     return t;
   }
@@ -288,11 +347,10 @@ describe('attempts and scoring', () => {
   });
   it('resets the athlete between attempts', () => {
     const s = createGame(3);
-    let t = 1000;
-    onArmRaised(s, cfg, t, 'right', false, 'closed', 'right');
+    let t = run(s, 1000, cfg.readyMs / 1000 + 0.05, 0);
     t = run(s, t, 1.8);
     onThrow(s, cfg, t, throwAt(t), 'right');
-    run(s, t, 8);
+    until(s, t, 'ready');
     expect(s.phase).toBe('ready');
     expect(s.position).toBe(0);
     expect(s.speed).toBe(0);

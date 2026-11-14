@@ -3,7 +3,8 @@ import type { JavelinConfig } from './config';
 export type DistanceCfg = Pick<
   JavelinConfig,
   | 'baseSpeed'
-  | 'runTransfer'
+  | 'runGain'
+  | 'maxRunSpeed'
   | 'throwGain'
   | 'throwFloor'
   | 'throwCeil'
@@ -23,11 +24,29 @@ const DEG = Math.PI / 180;
 
 const saturate = (v: number): number => (v < 0 ? 0 : v > 1 ? 1 : v);
 
-/** Javelin speed off the hand, m/s, before the angle efficiency. */
-export function releaseSpeed(cfg: DistanceCfg, runSpeed: number, throwSpeed: number): number {
+/** 0..1 (a little over at the soft-capped top) from the approach speed. */
+export function runFraction(cfg: DistanceCfg, runSpeed: number): number {
+  return Math.max(0, Math.min(1.15, runSpeed / cfg.maxRunSpeed));
+}
+
+/** 0..1 from the wrist speed at the release. */
+export function armPower(cfg: DistanceCfg, throwSpeed: number): number {
   const span = Math.max(1e-6, cfg.throwCeil - cfg.throwFloor);
-  const power = saturate((throwSpeed - cfg.throwFloor) / span);
-  return cfg.baseSpeed + Math.max(0, runSpeed) * cfg.runTransfer + cfg.throwGain * power;
+  return saturate((throwSpeed - cfg.throwFloor) / span);
+}
+
+/**
+ * Javelin speed off the hand, m/s, before the angle efficiency:
+ * `baseSpeed + runGain * runFraction + throwGain * armPower`. With the default constants the run
+ * is 8.5 of the 23.5 m/s that vary between a standing, feeble throw and a flat-out best throw
+ * (about 36 percent), the arm the other 64.
+ */
+export function releaseSpeed(cfg: DistanceCfg, runSpeed: number, throwSpeed: number): number {
+  return (
+    cfg.baseSpeed +
+    cfg.runGain * runFraction(cfg, runSpeed) +
+    cfg.throwGain * armPower(cfg, throwSpeed)
+  );
 }
 
 /**

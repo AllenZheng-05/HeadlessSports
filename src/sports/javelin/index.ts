@@ -13,15 +13,14 @@ import { flightPitch } from './distance';
 import {
   attemptLine,
   attemptsFor,
+  clickThrow,
   createGame,
   distanceToLine,
-  onArmLowered,
-  onArmRaised,
-  onFistClosed,
+  onStep,
   onThrow,
   stepGame,
 } from './game';
-import type { AttemptRecord, FistKnowledge, Phase } from './game';
+import type { AttemptRecord, Phase } from './game';
 import { JAVELIN_TIP, buildJavelinGeometry, buildMarkerGeometry, buildWorld } from './world';
 
 /** What the browser tests and the debugging overlay read from `__game.sport`. */
@@ -41,12 +40,29 @@ export interface JavelinSport extends Sport {
   readonly log: readonly string[];
 }
 
+/** The click API of the keyboard-and-mouse provider (duck-typed; camera input has none). */
+interface ClickInput {
+  setPointerMode(on: boolean): void;
+  readonly pointerClicks: number;
+  readonly pointerY: number;
+}
+
+function isClickInput(input: unknown): input is ClickInput {
+  return typeof (input as Partial<ClickInput> | null)?.setPointerMode === 'function';
+}
+
 /** Pitch of the javelin when held, radians (nose up). */
 const HOLD_PITCH = 0.22;
 /** How fast the visual launch offset (mitt vs model release point) fades, 1/s. */
 const OFFSET_FADE = 7;
 /** The javelin is drawn a little oversized in the air and in the turf so it reads at distance. */
 const FLIGHT_SCALE = 1.5;
+
+/** `?botRun=slow|fast` picks a fixed step rate for the bot (to compare approach speeds). */
+function botVariant(): 'slow' | 'fast' | null {
+  const v = new URLSearchParams(globalThis.location?.search ?? '').get('botRun');
+  return v === 'slow' || v === 'fast' ? v : null;
+}
 
 export const createJavelin: SportFactory = (ctx: SportContext): JavelinSport => {
   const cfg = javelinConfig;
@@ -55,9 +71,14 @@ export const createJavelin: SportFactory = (ctx: SportContext): JavelinSport => 
   const animator = new AvatarAnimator(ctx.avatar);
   const unregister = ctx.tunables.register('javelin', 'Javelin', cfg, javelinRanges);
 
-  // Running makes the shoulders bob; optionally let the throw recognizer tolerate more of it.
+  // Running bobs the shoulders and pumps the arms: let the throw recognizer tolerate that for the
+  // length of the sport (the speed guard in the rules keeps pumping from throwing).
   const savedBodySpeed = recognizerConfig.throw.maxBodySpeed;
+  const savedArmSpeed = recognizerConfig.throw.armSpeed;
+  const savedArmMs = recognizerConfig.throw.armMs;
   if (cfg.maxBodySpeedOverride > 0) recognizerConfig.throw.maxBodySpeed = cfg.maxBodySpeedOverride;
+  if (cfg.recognizerArmSpeed > 0) recognizerConfig.throw.armSpeed = cfg.recognizerArmSpeed;
+  if (cfg.recognizerArmMs > 0) recognizerConfig.throw.armMs = cfg.recognizerArmMs;
 
   // World.
   const stage = ctx.stage;
@@ -108,8 +129,17 @@ export const createJavelin: SportFactory = (ctx: SportContext): JavelinSport => 
   let started = false;
   let finished = false;
   let snapCamera = true;
+  let speedFrac = 0;
   let stickPitch = 0;
   let stickPhi = 0;
+
+  // Keyboard and mouse: a left click throws. Camera input has no click API.
+  const clicks = isClickInput(ctx.input) ? ctx.input : null;
+  let seenClicks = 0;
+  if (clicks) {
+    clicks.setPointerMode(true);
+    seenClicks = clicks.pointerClicks;
+  }
 
   // Events are queued by the input handlers and consumed in fixedUpdate, so every gesture is
   // processed against the same game clock as the rules.
@@ -121,14 +151,12 @@ export const createJavelin: SportFactory = (ctx: SportContext): JavelinSport => 
   };
   const onAny = ctx.input.onAny((e) => {
     switch (e.type) {
-      case 'ArmRaised':
-      case 'ArmLowered':
-      case 'FistClosed':
       case 'ThrowReleased':
         // Gestures made while the round is paused (player out of frame) do not count.
         if (!ctx.paused) pending.push(e);
         break;
       case 'Step':
+        if (!ctx.paused) pending.push(e);
         if (game.phase === 'run' && started) {
           ctx.audio.play('tick', {
             pitch: 0.85 + (game.speed / cfg.maxRunSpeed) * 0.5,
@@ -141,21 +169,10 @@ export const createJavelin: SportFactory = (ctx: SportContext): JavelinSport => 
     }
   });
 
-  const fistOf = (): FistKnowledge => {
-    const h = ctx.input.state.hands[hand];
-    if (!h.present || !h.known) return 'unknown';
-    return h.closed ? 'closed' : 'open';
-  };
-
   const drain = (nowMs: number): void => {
     for (const e of pending) {
-      if (e.type !== 'ThrowReleased') note(`${e.type} t=${e.t.toFixed(0)} ${game.phase}`);
-      if (e.type === 'ArmRaised') {
-        onArmRaised(game, cfg, nowMs, e.hand, e.both, fistOf(), hand);
-      } else if (e.type === 'ArmLowered') {
-        onArmLowered(game, cfg, nowMs, e.hand, hand);
-      } else if (e.type === 'FistClosed') {
-        onFistClosed(game, cfg, nowMs, e.hand, hand);
+      if (e.type === 'Step') {
+        onStep(game, cfg, e.t);
       } else if (e.type === 'ThrowReleased') {
         const taken = onThrow(
           game,
@@ -180,6 +197,10 @@ export const createJavelin: SportFactory = (ctx: SportContext): JavelinSport => 
   let shownLineRem = -1;
   let shownLineTone = '';
   let lineShown = false;
+  let shownSpeedPct = -1;
+  let shownSpeedTenths = -1;
+  let shownSpeedTone = '';
+  let speedShown = false;
   let shownHint: string | null = '';
 
   const setHint = (text: string | null): void => {
@@ -219,13 +240,32 @@ export const createJavelin: SportFactory = (ctx: SportContext): JavelinSport => 
       }
       if (game.idleHint) setHint('Lift your knees to run');
       else if (distanceToLine(game, cfg) <= cfg.throwZone) setHint('Throw!');
-      else setHint('Run on the spot: lift your knees');
+      else setHint('Run on the spot: faster is farther');
+      // Speed meter: fills with the run speed, so quicker feet are seen at once.
+      const sf = Math.max(0, Math.min(1, game.speed / cfg.maxRunSpeed));
+      const sPct = Math.round(sf * 50);
+      const sTenths = Math.round(game.speed * 10);
+      const sTone: MeterTone = sf < 0.4 ? 'warn' : 'good';
+      if (sPct !== shownSpeedPct || sTenths !== shownSpeedTenths || sTone !== shownSpeedTone) {
+        shownSpeedPct = sPct;
+        shownSpeedTenths = sTenths;
+        shownSpeedTone = sTone;
+        speedShown = true;
+        ctx.hud.setMeter('speed', sf, `Speed ${(sTenths / 10).toFixed(1)} m/s`, sTone);
+      }
     } else if (lineShown) {
       lineShown = false;
       shownLinePct = -1;
       shownLineRem = -1;
       shownLineTone = '';
       ctx.hud.setMeter('line', null);
+    }
+    if (!running && speedShown) {
+      speedShown = false;
+      shownSpeedPct = -1;
+      shownSpeedTenths = -1;
+      shownSpeedTone = '';
+      ctx.hud.setMeter('speed', null);
     }
   };
 
@@ -248,10 +288,6 @@ export const createJavelin: SportFactory = (ctx: SportContext): JavelinSport => 
       seenStart = game.startSeq;
       ctx.audio.play('select');
       ctx.hud.setBanner('Go!', 900);
-      // Hand state is unusable during a sprint: stop paying for hand crops.
-      void ctx.input
-        .setNeeds({ pose: true, handCrops: false, fullFrameHands: false })
-        .catch(() => undefined);
     }
     if (game.releaseSeq !== seenRelease) {
       seenRelease = game.releaseSeq;
@@ -313,11 +349,8 @@ export const createJavelin: SportFactory = (ctx: SportContext): JavelinSport => 
       holdJavelin();
       snapCamera = true;
       animator.stop();
-      ctx.hud.setBanner('Raise a fist to start');
-      setHint('Raise a fist above your head');
-      void ctx.input
-        .setNeeds({ pose: true, handCrops: true, fullFrameHands: false })
-        .catch(() => undefined);
+      ctx.hud.setBanner('Get ready');
+      setHint('Run on the spot to build speed');
     }
     if (game.doneSeq !== seenDone) {
       seenDone = game.doneSeq;
@@ -361,6 +394,14 @@ export const createJavelin: SportFactory = (ctx: SportContext): JavelinSport => 
   const updateCamera = (dt: number): void => {
     const phase = game.phase;
     const flight = game.flight;
+    // Speed feel: wider view and a longer chase distance the faster the athlete runs.
+    const goalFrac = phase === 'run' ? Math.max(0, Math.min(1, game.speed / cfg.maxRunSpeed)) : 0;
+    speedFrac += (goalFrac - speedFrac) * (1 - Math.exp(-6 * dt));
+    const fov = cfg.cameraFov + speedFrac * cfg.cameraSpeedFov;
+    if (Math.abs(fov - camera.fov) > 0.02) {
+      camera.fov = fov;
+      camera.updateProjectionMatrix();
+    }
     if (phase === 'flight' && !game.dropped) {
       camGoal.set(4.2, 2.4 + Math.min(flight.y, 10) * 0.25, -flight.x + 6.5);
       lookGoal.set(0, Math.max(1.2, flight.y), -flight.x - 4);
@@ -370,7 +411,7 @@ export const createJavelin: SportFactory = (ctx: SportContext): JavelinSport => 
       lookGoal.set(0, 0.8, landZ - 1);
     } else {
       const z = -game.position;
-      camGoal.set(0, cfg.cameraUp, z + cfg.cameraBack);
+      camGoal.set(0, cfg.cameraUp, z + cfg.cameraBack + speedFrac * cfg.cameraSpeedBack);
       lookGoal.set(0, cfg.cameraLookY, z - cfg.cameraLookAhead);
     }
     if (snapCamera) {
@@ -422,16 +463,29 @@ export const createJavelin: SportFactory = (ctx: SportContext): JavelinSport => 
 
     start(): void {
       started = true;
-      ctx.hud.setBanner('Raise a fist to start');
-      setHint('Raise a fist above your head');
+      ctx.hud.setBanner('Get ready');
+      setHint('Run on the spot to build speed');
       refreshHud();
     },
 
     fixedUpdate(dt: number, nowMs: number): void {
       if (finished) return;
       drain(nowMs);
-      const cad = ctx.input.state.cadence;
-      stepGame(game, cfg, dt, nowMs, cad.stepsPerSecond, cad.amplitude);
+      if (clicks) {
+        while (seenClicks < clicks.pointerClicks) {
+          seenClicks++;
+          if (ctx.paused) continue;
+          const taken = onThrow(
+            game,
+            cfg,
+            nowMs,
+            clickThrow(cfg, nowMs, hand, clicks.pointerY),
+            hand,
+          );
+          note(`click now=${nowMs.toFixed(0)} ${game.phase} taken=${taken}`);
+        }
+      }
+      stepGame(game, cfg, dt, nowMs, ctx.input.state.cadence.amplitude);
       react();
     },
 
@@ -477,13 +531,16 @@ export const createJavelin: SportFactory = (ctx: SportContext): JavelinSport => 
     },
 
     createBot(): SportBot {
-      return createJavelinBot(cfg, game, hand, ctx.random);
+      return createJavelinBot(cfg, game, hand, ctx.random, botVariant());
     },
 
     dispose(): void {
       onAny();
+      if (clicks) clicks.setPointerMode(false);
       unregister();
       recognizerConfig.throw.maxBodySpeed = savedBodySpeed;
+      recognizerConfig.throw.armSpeed = savedArmSpeed;
+      recognizerConfig.throw.armMs = savedArmMs;
       world.dispose();
       javelin.removeFromParent();
       marker.removeFromParent();

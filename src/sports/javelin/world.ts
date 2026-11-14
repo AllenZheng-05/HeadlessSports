@@ -171,6 +171,21 @@ export function buildWorld(cfg: JavelinConfig): World {
   flat.arc(0, -L + R, R, half, 0.32, 0.08, 18);
   flat.setColor(ACCENTS.javelin);
   flat.arc(0, -L + R + 0.6, R, half, 0.08, 0.075, 18);
+  // A straight bar across the whole runway at the line, and warning ticks in the lane before it.
+  flat.setColor(PALETTE.chalk);
+  flat.strip(-RUNWAY_HALF_WIDTH - 0.5, -L, RUNWAY_HALF_WIDTH + 0.5, -L, 0.5, 0.09);
+  flat.setColor(ACCENTS.javelin);
+  flat.strip(-RUNWAY_HALF_WIDTH - 0.5, -L + 0.45, RUNWAY_HALF_WIDTH + 0.5, -L + 0.45, 0.2, 0.09);
+  for (let k = 1; k <= 3; k++) {
+    flat.strip(
+      -RUNWAY_HALF_WIDTH,
+      -L + 0.45 + k * 1.2,
+      RUNWAY_HALF_WIDTH,
+      -L + 0.45 + k * 1.2,
+      0.1,
+      0.085,
+    );
+  }
 
   // Landing sector: lines fan out from the line centre, distance arcs every 10 m.
   flat.setColor(PALETTE.chalk);

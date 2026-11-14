@@ -1,6 +1,5 @@
 import type { SportBot } from '../../core/sport';
-import type { ScriptStep } from '../../tracking/synthetic/script';
-import { idle, overarmThrow, raiseArm, runInPlace } from '../../tracking/synthetic/scripts/moves';
+import { idle, overarmThrow, runInPlace } from '../../tracking/synthetic/scripts/moves';
 import type { JavelinConfig } from './config';
 import type { GameState } from './game';
 import { targetRunSpeed } from './runSpeed';
@@ -22,39 +21,37 @@ export function coastDistance(v: number, t: number, hold: number, decel: number)
 }
 
 /**
- * The closed-loop javelin player. In `ready` it raises a closed fist (and again, longer, if the
- * game did not start). In `run` it runs in short bursts, re-reading the athlete's position
- * between them, and throws when the distance left to the line is what the athlete will still
- * cover while the throw winds up and the recognizer reports (`coastDistance` over `botThrowLeadS`, plus a
- * margin). In every other phase it waits.
+ * The closed-loop javelin player. In `ready` it waits for the run to start by itself. In `run` it
+ * runs in short bursts, re-reading the athlete's position between them, and throws when the
+ * distance left to the line is what the athlete will still cover while the throw winds up and the
+ * step rate fades (`coastDistance` over `botThrowLeadS`, plus a margin). In every other phase it
+ * waits. The step rate is random in a normal range, or fixed by `variant`: 'slow' and 'fast' give
+ * a slower and a faster approach with the same throw, to show that quicker feet throw farther.
  *
  * `overarmThrow`'s loft argument is the angle of the wrist's *image* path, which is not the
  * javelin's loft: the release proxy reads vy / speed, and values around 95 to 110 here give the
- * 25 to 40 degree releases a good throw needs.
+ * 25 to 40 degree releases a good throw needs. Power and loft are drawn once, so the variants of
+ * one seed throw the same arm.
  */
 export function createJavelinBot(
   cfg: JavelinConfig,
   state: GameState,
   hand: 'left' | 'right',
   random: () => number,
+  variant: 'slow' | 'fast' | null = null,
 ): SportBot {
-  let readyTries = 0;
+  const power = 0.85 + 0.15 * random();
+  const loftDeg = 95 + 15 * random();
   return {
     next(enqueue): void {
-      if (state.phase !== 'ready') readyTries = 0;
       switch (state.phase) {
-        case 'ready': {
-          readyTries++;
-          const steps: ScriptStep[] = raiseArm(hand, {
-            fist: true,
-            holdMs: readyTries >= 2 ? 900 : 500,
-          });
-          steps.push(...idle(200));
-          enqueue(steps);
-          return;
-        }
         case 'run': {
-          const sps = 3.6 + 0.6 * random();
+          const sps =
+            variant === 'slow'
+              ? cfg.botSlowCadence
+              : variant === 'fast'
+                ? cfg.botFastCadence
+                : 3.6 + 0.6 * random();
           const remaining = cfg.runwayLength - state.position;
           const v = Math.max(state.speed, targetRunSpeed(sps, EXPECTED_AMPLITUDE, cfg));
           const need =
@@ -62,12 +59,7 @@ export function createJavelinBot(
           const slack = remaining - need;
           const burst = Math.min(4, Math.floor((slack / v) * sps));
           if (burst < 1) {
-            enqueue(
-              overarmThrow(hand, {
-                power: 0.8 + 0.2 * random(),
-                loftDeg: 95 + 15 * random(),
-              }),
-            );
+            enqueue(overarmThrow(hand, { power, loftDeg }));
             return;
           }
           enqueue(

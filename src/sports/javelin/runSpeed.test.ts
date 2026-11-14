@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { javelinConfig as cfg } from './config';
-import { amplitudeFactor, approachSpeed, softCap, targetRunSpeed } from './runSpeed';
+import {
+  amplitudeFactor,
+  approachSpeed,
+  effectiveCadence,
+  softCap,
+  targetRunSpeed,
+} from './runSpeed';
 
 describe('soft cap', () => {
   it('is the identity up to the knee', () => {
@@ -49,12 +55,27 @@ describe('target speed', () => {
 });
 
 describe('approach', () => {
-  it('accelerates at 6 and decelerates at 3 m/s^2', () => {
-    expect(approachSpeed(0, 9, 0.5, cfg)).toBeCloseTo(3, 5);
+  it('accelerates at 10 and decelerates at 3 m/s^2', () => {
+    expect(approachSpeed(0, 9, 0.5, cfg)).toBeCloseTo(5, 5);
     expect(approachSpeed(8, 0, 0.5, cfg)).toBeCloseTo(6.5, 5);
   });
   it('does not overshoot', () => {
     expect(approachSpeed(5, 5.1, 1, cfg)).toBe(5.1);
     expect(approachSpeed(5, 4.9, 1, cfg)).toBe(4.9);
+  });
+});
+
+describe('effective cadence', () => {
+  it('holds the rate until the next step is overdue, then fades to 0', () => {
+    expect(effectiveCadence(4, 300, cfg)).toBe(4);
+    expect(effectiveCadence(4, (1000 / 4) * cfg.cadenceHoldFactor, cfg)).toBe(4);
+    const mid = effectiveCadence(
+      4,
+      (1000 / 4) * cfg.cadenceHoldFactor + cfg.cadenceFadeMs / 2,
+      cfg,
+    );
+    expect(mid).toBeCloseTo(2, 5);
+    expect(effectiveCadence(4, 5000, cfg)).toBe(0);
+    expect(effectiveCadence(0, 0, cfg)).toBe(0);
   });
 });
