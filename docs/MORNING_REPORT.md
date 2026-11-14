@@ -6,7 +6,9 @@ Kept current through the unattended run that started 2026-11-14. Read this first
 
 - **Milestones 0 to 7 are built, pass every automated check, and are merged to `main`:** repo setup, tracking tech spike, foundation, and all five sports (rock climbing, bowling, batting, archery, javelin). Each sport plays a full round end to end under its closed-loop synthetic player and under keyboard and mouse, records a score, and has its tunables in the debug panel (`?debug=1`).
 - **Nothing has been verified with a real camera, a real person or a real GPU.** Every gesture threshold is tuned to a synthetic player. Expect the first playtest to need tuning, and possibly fixes inside `src/tracking/`.
-- **Milestone 8 (launch polish): in progress** on branch `m8-polish`. Done: deployment config, security headers (strict CSP), service worker, `docs/DEPLOY.md`. In progress: fixes from the second code review (accessibility items included) and the memory soak test.
+- **Bonus sport built:** baseball pitching (the sixth menu card), on branch `m8-polish`.
+- **Milestone 8 (launch polish)** on branch `m8-polish`. Done: deployment config, security headers (strict CSP), service worker, `docs/DEPLOY.md`, the 14 fixes from the second code review (accessibility items included), and the memory soak harness (`docs/SOAK.md`).
+- **The soak test found a real leak:** about 1 MB retained per round played (renderer vertex data for earlier rounds' scenes), roughly 60 to 100 MB per hour of play. DOM nodes, listeners and draw calls are flat; the idle lobby and the tracking page are flat. A fix is in progress; see "Parked" and `docs/SOAK.md` for where it ended up.
 - Checks at the merge to `main`: typecheck clean, lint clean, 850 unit tests pass, `pnpm build` succeeds, 34 of 34 Playwright end-to-end tests pass (plus the gate, UI and deploy suites under their own configs).
 - Nothing has been pushed. Nothing has been deployed. No account was logged in to.
 
@@ -98,6 +100,22 @@ The custom agent types in `.claude/agents/` could not be loaded mid-session, so 
 | 2.5 / 2.7 Animator, calibration, move queue | builder | sonnet |
 | 2.6 UI kit | builder | sonnet |
 | 2.9 Score store | helper | haiku |
+| Review fixes, batch 1 (tracking and input) | builder | sonnet |
+| Polish (banner, UI scaling, feet, gate canvas) | builder | sonnet |
+| 3 Rock climbing | builder | sonnet |
+| 4 Bowling | builder | sonnet |
+| 5 Batting | builder | sonnet |
+| 6 Archery | builder | sonnet |
+| 7 Javelin | builder | sonnet |
+| 8.2 / 2.10 Deployment, CSP, service worker | builder | sonnet |
+| Shared fixes found by the sports (batch 2) | builder | sonnet |
+| Review of sports, shell and UI | reviewer | opus |
+| Second-review fixes (batch 3), incl. 8.1 accessibility | builder | sonnet |
+| 8.3 Memory soak test | builder | sonnet |
+| Baseball pitching | builder | sonnet |
+| Renderer memory leak fix | builder | sonnet |
+
+The orchestrator (this session) wrote the docs, the type-only contract files, `playwright.sport.config.ts`, and a handful of one-line fix-ups (two config defaults, lint ignore patterns, wiring `?short=1`); everything else was written by the subagents above.
 
 ## Playtest checklists
 

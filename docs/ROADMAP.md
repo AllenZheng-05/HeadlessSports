@@ -65,9 +65,19 @@ Each sport: module under `src/sports/<name>/`, typed tunables, synthetic script,
 
 | Task | Agent | Status | Notes |
 |---|---|---|---|
-| 8.1 Accessibility pass and seated modes | B | doing | |
+| 8.1 Accessibility pass and seated modes | B | done | |
 | 8.2 Deployment config (`wrangler`, `_headers`, CSP) and full `docs/DEPLOY.md` | B / H | done | Deploy nothing |
-| 8.3 Memory soak test under the synthetic player | B | doing | |
+| 8.3 Memory soak test under the synthetic player | B | done | |
+
+## After the milestones
+
+| Task | Agent | Status | Notes |
+|---|---|---|---|
+| Whole-codebase review passes (two) and fixes | R / B | done | 8 + 14 defects fixed |
+| Baseball pitching | B | done | Sixth sport |
+| Fix the per-round renderer memory leak found by the soak test | B | doing | See docs/SOAK.md |
+| Replace synthetic recognizer tests with real recordings | owner + B | todo | Needs clips in tests/recordings/ (list in the morning report) |
+| Tune every sport on a real camera | owner | todo | Checklists in the morning report |
 
 ## If everything above is done
 
