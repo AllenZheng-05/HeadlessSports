@@ -8,7 +8,7 @@ default settings (`SOAK_MINUTES=4`, `SOAK_TIMESCALE=2`). The whole run took 34 m
     pnpm test:soak
 
 It builds the app into `dist-soak`, serves it on port 4230 and runs `e2e-soak/soak.spec.ts` with
-one worker. Eight scenarios of 4 minutes each (rotation up to 8): each of the five sports on
+one worker. Nine scenarios of 4 minutes each (rotation up to 8): each of the six sports on
 repeat, rotation through all sports, the idle lobby, and the tracking pipeline on `/debug.html`
 with Chromium's fake camera. Total about 35 minutes.
 
@@ -101,3 +101,61 @@ minutes of real play. Not dramatic for a one-hour session, but a measurable stea
 3. Worrying: GPU memory rising steadily on the debug page (the MediaPipe GPU-delegate leak), JS
    memory climbing more than about 50 MB over 30 minutes, or frame time getting worse with time.
    A sawtooth that returns to the same floor is fine.
+
+## After the fix (2026-11-14)
+
+Same machine and settings (4 minutes per scenario, `SOAK_TIMESCALE=2`), 37 minutes for nine
+scenarios (pitching added to the sport list). All nine pass, no `test.fail()` markers left.
+
+### Cause
+
+`src/core/shell/SportHost.ts` `teardown()` removed the round's meshes from the scene and disposed
+their geometries, but never released the objects themselves. three's renderer
+(`node_modules/three/src/renderers/common/RenderObject.js` lines 413 to 421) creates one render
+object per (mesh, material, render context, lights node) and registers `dispose` listeners on the
+mesh, its geometry, its material and the lights node. Every material here is a session-long shared
+toon material (`src/render/style/toon.ts`) and the blob shadow shares one geometry and material, so
+the shared material's listener list kept every dead round's render objects reachable. Each render
+object holds its node-builder state, pipeline and bindings, and the vertex buffers (the Float32Arrays
+in the heap snapshots), and through it the old mesh, geometry and lights node. A render object is
+only dropped on its own object's `dispose` event (`Object3D.dispose()`), a material or lights node
+dispose, or `renderer.dispose()`; geometry disposal only frees the attribute buffers
+(`renderer.info.memory.geometries` was flat all along, which is why it never showed the leak).
+
+### Fix
+
+- `src/render/dispose.ts` (new): `disposeObjectTree(root)` dispatches `dispose` on every object under
+  `root` (this is what releases the render objects; it also frees `InstancedMesh` matrix and colour
+  buffers), disposes each geometry exactly once and each material exactly once, and skips anything
+  registered with `markShared`. `toon.ts` (cached materials, vertex-colour material, gradient map)
+  and `blobShadow.ts` (shared disc geometry and material) register their session-long resources.
+- `SportHost.teardown()` runs it over the stage scene before the sport's own `dispose` (while the
+  meshes are still attached) and again after the stage is detached; the late-factory path
+  (round dismissed while loading) does the same. It is a host-level safety net, so future sports
+  that forget to dispose are still released. No sport code changed.
+- `rendererMemory: { geometries, textures }` on `window.__game` (from `renderer.info.memory`,
+  assigned in place per frame). The soak samples and summarises both columns and asserts they are
+  identical at the same point of every round (rotation: every sixth round).
+
+### Results (4 minutes per scenario)
+
+Growth per round is from the second to the second-to-last round boundary (the first round also
+builds the UI once, a one-off step of about 1.2 MB). Before figures are from the table above.
+
+| Scenario | Rounds | Heap slope MB/min (before, after) | Growth per round MB (before, after) | CDP heap per round MB (before, after) | Geometries / textures at results |
+| --- | ---: | --- | --- | --- | --- |
+| climbing | 14 | 1.46, 0.22 | 0.68, 0.09 | 0.26, 0.09 | 40 / 7 every round |
+| bowling | 7 | 1.14, 0.22 | 1.06, 0.18 | 0.33, 0.18 | 36 / 3 every round |
+| batting | 23 | 4.71, 0.18 | 1.00, 0.07 | 0.34, 0.07 | 51 / 3 every round |
+| archery | 25 | 9.43, 0.18 | 1.57, 0.07 | 0.24, 0.07 | 40 / 3 every round |
+| javelin | 28 | 5.16, 0.21 | 0.79, 0.06 | 0.21, 0.06 | 36 / 3 every round |
+| pitching | 22 | not measured, 0.19 | not measured, 0.08 | not measured, 0.08 | 49 / 3 every round |
+| rotation | 14 | 2.62, 0.44 | 1.09, 0.13 | 0.34, 0.15 | per sport, identical each cycle |
+| idle lobby | 0 | 0.05, 0.02 | n/a | n/a | n/a |
+| tracking (debug page) | 0 | 0.04, 0.03 | n/a | n/a | n/a |
+
+Every sport is now under the 0.35 MB per round target, and `performance.memory` growth equals the
+CDP V8 heap growth, so no ArrayBuffer retention is left. The remaining 0.06 to 0.18 MB per round
+is ordinary heap (per-round JS objects, score history); it was not shown to plateau within four
+minutes, so only that bound is claimed. A one-minute archery run before the fix gave 11.0 MB/min
+and 1.6 MB per round; after it, 1.3 MB/min and 0.15 MB per round.

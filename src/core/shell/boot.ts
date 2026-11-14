@@ -162,7 +162,10 @@ class Shell {
 
   // ---- per frame ----
 
-  private renderer!: { drawCalls(): number };
+  private renderer!: {
+    drawCalls(): number;
+    memory(): { geometries: number; textures: number };
+  };
 
   private onFrame(dt: number, now: number, alpha: number): void {
     const host = this.host;
@@ -170,6 +173,9 @@ class Shell {
     const hook = this.hook;
     hook.frames++;
     hook.drawCalls = this.renderer.drawCalls();
+    const mem = this.renderer.memory();
+    hook.rendererMemory.geometries = mem.geometries;
+    hook.rendererMemory.textures = mem.textures;
     hook.sport = host.sport;
     const p = host.phase;
     if (p === 'playing' || p === 'paused' || p === 'loading') hook.phase = p;

@@ -1,4 +1,5 @@
 import type { Calibration, InputProvider } from '../../input/types';
+import { disposeObjectTree } from '../../render/dispose';
 import { AvatarRig } from '../../render/avatar/AvatarRig';
 import type { RendererHandle } from '../../render/renderer';
 import { BlobShadow } from '../../render/style/blobShadow';
@@ -260,6 +261,7 @@ export class SportHost {
       const sport = await factory(ctx);
       if (gen !== this.generation) {
         sport.dispose();
+        disposeObjectTree(stage.scene);
         return;
       }
       this.sport = sport;
@@ -329,6 +331,11 @@ export class SportHost {
         // Not in director mode: nothing to undo.
       }
     }
+    // The renderer keeps a render object per mesh that only the object's own dispose event frees
+    // (shared materials never dispose). Release the whole stage while the meshes are still
+    // attached, then again after the sport's own dispose for anything it added on the way out.
+    const stage = this.stage;
+    if (stage !== null) disposeObjectTree(stage.scene);
     if (sport !== null) {
       try {
         sport.dispose();
@@ -341,6 +348,7 @@ export class SportHost {
     this.shadow?.dispose();
     this.avatar?.dispose();
     this.stage?.dispose();
+    if (stage !== null) disposeObjectTree(stage.scene);
     this.shadow = null;
     this.avatar = null;
     this.stage = null;

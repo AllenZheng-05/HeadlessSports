@@ -6,10 +6,10 @@ Kept current through the unattended run that started 2026-11-14. Read this first
 
 - **Milestones 0 to 7 are built, pass every automated check, and are merged to `main`:** repo setup, tracking tech spike, foundation, and all five sports (rock climbing, bowling, batting, archery, javelin). Each sport plays a full round end to end under its closed-loop synthetic player and under keyboard and mouse, records a score, and has its tunables in the debug panel (`?debug=1`).
 - **Nothing has been verified with a real camera, a real person or a real GPU.** Every gesture threshold is tuned to a synthetic player. Expect the first playtest to need tuning, and possibly fixes inside `src/tracking/`.
-- **Bonus sport built:** baseball pitching (the sixth menu card), on branch `m8-polish`.
-- **Milestone 8 (launch polish)** on branch `m8-polish`. Done: deployment config, security headers (strict CSP), service worker, `docs/DEPLOY.md`, the 14 fixes from the second code review (accessibility items included), and the memory soak harness (`docs/SOAK.md`).
-- **The soak test found a real leak:** about 1 MB retained per round played (renderer vertex data for earlier rounds' scenes), roughly 60 to 100 MB per hour of play. DOM nodes, listeners and draw calls are flat; the idle lobby and the tracking page are flat. A fix is in progress; see "Parked" and `docs/SOAK.md` for where it ended up.
-- Checks at the merge to `main`: typecheck clean, lint clean, 850 unit tests pass, `pnpm build` succeeds, 34 of 34 Playwright end-to-end tests pass (plus the gate, UI and deploy suites under their own configs).
+- **Milestone 8 (launch polish) is done and merged to `main`:** deployment config, security headers (strict CSP), service worker, `docs/DEPLOY.md`, the fixes from two code reviews (accessibility items included), and a memory soak harness (`docs/SOAK.md`).
+- **Bonus sport built and merged:** baseball pitching, the sixth menu card.
+- **The soak test found a real leak, and it is fixed.** About 1 MB was retained per round played (three.js render objects for earlier rounds' meshes, kept alive through the session-long shared materials). After the fix every sport retains 0.06 to 0.18 MB per round of ordinary heap, geometry and texture counts are identical round after round, and the full 37 minute soak passes.
+- Final checks on `main`: typecheck clean, lint clean, 944 unit tests pass, `pnpm build` succeeds, 38 of 38 Playwright end-to-end tests pass, soak 9 of 9, plus the gate (4), UI (35) and deploy (8) suites under their own configs.
 - Nothing has been pushed. Nothing has been deployed. No account was logged in to.
 
 **The single most important thing to check first** is the tracking debug page with your real camera (checklist below). Everything else is built on the assumption that it works.
@@ -49,14 +49,28 @@ Checks: `pnpm typecheck`, `pnpm lint`, `pnpm test`, `pnpm build`, then `pnpm tes
 
 ## Parked
 
-Nothing.
+Nothing was parked: no task failed three attempts. What is unfinished is unfinished because it needs you at a camera (see the checklists), not because it broke.
+
+## What I would do first tomorrow
+
+1. Run the milestone 1 checklist on the debug page. If tracking does not start, or runs far below 30 Hz, stop there and tell me the numbers and any error text: everything else depends on it.
+2. Record the clips listed in that checklist into `tests/recordings/`. They let the recognizers be retuned and tested against real motion without you standing at the camera each time.
+3. Play climbing (hands only, the simplest pipeline), then bowling (the riskiest gesture), and note what the checklists ask for.
+4. Decide the two open performance questions from the numbers: Pose lite or full, WebGPU or WebGL renderer.
 
 ## Things I noticed that need your eyes
 
-- In the headless screenshot the athlete's feet are hidden behind the shins from the default camera, so the coral feet are not visible from behind. Cosmetic; will be adjusted if time allows.
 - The synthetic bowling swing is a simplified diagonal sweep. A real underarm swing seen from the front reverses direction at the bottom, which the throw recognizer has not seen yet. Record real clips early (checklist below).
 - The throw recognizer suspends itself when the shoulders move faster than 3 sw/s, to stop sidesteps looking like throws. A real javelin run-up may trip this (`recognizerConfig.throw.maxBodySpeed`).
 - A fast arm raise can register as a throw. Sports ignore throws outside their throwing phase.
+- Fist detection at 2 m is the least proven signal. Bowling, archery, javelin and pitching each have a fallback that works without it (hold still, auto-nock, open-hand raise, default fastball), so no sport depends on it to be playable.
+- Javelin and pitching read the throw's height from how upward the wrist moves in the image, because the player throws into the screen. Both mappings were fitted to the synthetic player and will need retuning (`proxyLow`, `proxyHigh` in each sport's config).
+- Framing is weak in archery (the archer is mostly out of frame) and the catcher in pitching is small. The climber, bowler, batter and javelin thrower read well.
+- The gate's thresholds (25 Hz tracking, 50 fps rendering) are provisional and have only ever been evaluated on software rendering, where the gate correctly fails.
+- The headless tracker runs at about 3 Hz on software GL, so every automated check of the camera path proves only that the pipeline starts and delivers frames, nothing about speed or accuracy.
+- `docs/DEPLOY.md` flags a few Cloudflare details (dashboard menu names, rollback retention) as "check the current docs" rather than asserting them.
+- The CI workflow has never run, because nothing has been pushed.
+- Chunk sizes: the build warns about large chunks (three.js, and Rapier's 4.3 MB lazy chunk with inlined WASM). They load fine and are cached by the service worker; I did not split them.
 
 ## Decisions you might disagree with
 

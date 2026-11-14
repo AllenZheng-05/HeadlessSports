@@ -7,6 +7,7 @@ import {
   Vector3,
 } from 'three/webgpu';
 import type { BufferGeometry, Object3D } from 'three/webgpu';
+import { markShared } from '../dispose';
 import { PALETTE } from './palette';
 
 const MAX_HEIGHT = 6;
@@ -30,23 +31,25 @@ function geometry(): BufferGeometry {
       colors[i * 4 + 3] = i === 0 ? 1 : 0;
     }
     g.setAttribute('color', new Float32BufferAttribute(colors, 4));
-    sharedGeometry = g;
+    sharedGeometry = markShared(g);
   }
   return sharedGeometry;
 }
 
 function material(): MeshBasicMaterial {
   if (sharedMaterial === null) {
-    sharedMaterial = new MeshBasicMaterial({
-      vertexColors: true,
-      transparent: true,
-      opacity: 0.75,
-      depthWrite: false,
-      fog: false,
-      polygonOffset: true,
-      polygonOffsetFactor: -2,
-      polygonOffsetUnits: -2,
-    });
+    sharedMaterial = markShared(
+      new MeshBasicMaterial({
+        vertexColors: true,
+        transparent: true,
+        opacity: 0.75,
+        depthWrite: false,
+        fog: false,
+        polygonOffset: true,
+        polygonOffsetFactor: -2,
+        polygonOffsetUnits: -2,
+      }),
+    );
   }
   return sharedMaterial;
 }

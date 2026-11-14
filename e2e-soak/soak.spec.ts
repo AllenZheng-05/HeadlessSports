@@ -10,7 +10,7 @@ const TIMESCALE = positive(process.env.SOAK_TIMESCALE, 2);
 const MAX_HEAP_MB_PER_MIN = positive(process.env.SOAK_MAX_HEAP_MB_PER_MIN, 8);
 const SAMPLE_EVERY_MS = 10000;
 const ROUND_TIMEOUT_MS = 180000;
-const SPORTS = ['climbing', 'bowling', 'batting', 'archery', 'javelin'] as const;
+const SPORTS = ['climbing', 'bowling', 'batting', 'archery', 'javelin', 'pitching'] as const;
 
 function positive(raw: string | undefined, fallback: number): number {
   const n = Number(raw);
@@ -39,7 +39,7 @@ interface Sample {
   domListeners: number | null;
   frames: number | null;
   drawCalls: number | null;
-  /** three.js renderer.info.memory: not exposed by the app, always null. */
+  /** three.js renderer.info.memory, from the test hook. */
   geometries: number | null;
   textures: number | null;
   extra: Record<string, number | string | boolean | null>;
@@ -56,7 +56,9 @@ type NumKey =
   | 'domNodes'
   | 'domListeners'
   | 'frames'
-  | 'drawCalls';
+  | 'drawCalls'
+  | 'geometries'
+  | 'textures';
 
 const REPORTED: NumKey[] = [
   'usedJsMB',
@@ -68,6 +70,8 @@ const REPORTED: NumKey[] = [
   'domNodes',
   'domListeners',
   'drawCalls',
+  'geometries',
+  'textures',
 ];
 
 interface Page0 {
@@ -75,6 +79,8 @@ interface Page0 {
   total: number | null;
   frames: number | null;
   drawCalls: number | null;
+  geometries: number | null;
+  textures: number | null;
   phase: string;
   extra: Record<string, number | string | boolean | null>;
 }
@@ -109,7 +115,13 @@ function readPage(page: Page): Promise<Page0> {
     }
     const w = window as unknown as {
       gc?: () => void;
-      __game?: { phase: string; frames: number; drawCalls: number; inputKind: string | null };
+      __game?: {
+        phase: string;
+        frames: number;
+        drawCalls: number;
+        inputKind: string | null;
+        rendererMemory: { geometries: number; textures: number };
+      };
       __debug?: {
         frames: number;
         posedFrames: number;
@@ -131,10 +143,14 @@ function readPage(page: Page): Promise<Page0> {
     let phase = 'none';
     let frames: number | null = null;
     let drawCalls: number | null = null;
+    let geometries: number | null = null;
+    let textures: number | null = null;
     if (w.__game) {
       phase = w.__game.phase;
       frames = w.__game.frames;
       drawCalls = w.__game.drawCalls;
+      geometries = w.__game.rendererMemory.geometries;
+      textures = w.__game.rendererMemory.textures;
     }
     if (w.__debug) {
       const d = w.__debug;
@@ -155,6 +171,8 @@ function readPage(page: Page): Promise<Page0> {
       total: mem ? mem.totalJSHeapSize : null,
       frames,
       drawCalls,
+      geometries,
+      textures,
       phase,
       extra,
     };
@@ -234,8 +252,8 @@ class Recorder {
       domListeners: dom ? dom.jsEventListeners : null,
       frames: p.frames,
       drawCalls: p.drawCalls,
-      geometries: null,
-      textures: null,
+      geometries: p.geometries,
+      textures: p.textures,
       extra: p.extra,
     });
   }
@@ -327,21 +345,17 @@ function summaryFor(s: Scenario): string {
   const roundSamples = s.samples.filter((x) => x.kind === 'round');
   if (roundSamples.length > 0) {
     lines.push(
-      'Round boundaries (MB heap / nodes / listeners / draw calls):',
+      'Round boundaries (MB heap / nodes / listeners / draw calls / geometries / textures):',
       '',
       roundSamples
         .map(
           (r) =>
-            `${r.round}: ${f(r.usedJsMB ?? Number.NaN, 1)} / ${r.nodes ?? '-'} / ${r.listeners ?? '-'} / ${r.drawCalls ?? '-'}`,
+            `${r.round}: ${f(r.usedJsMB ?? Number.NaN, 1)} / ${r.nodes ?? '-'} / ${r.listeners ?? '-'} / ${r.drawCalls ?? '-'} / ${r.geometries ?? '-'} / ${r.textures ?? '-'}`,
         )
         .join('; '),
       '',
     );
   }
-  lines.push(
-    'three.js geometries and textures: not available (the app does not expose the renderer).',
-    '',
-  );
   const last = s.samples.at(-1);
   if (last && Object.keys(last.extra).length > 0) {
     lines.push(`Last tracking sample: \`${JSON.stringify(last.extra)}\``, '');
@@ -417,6 +431,25 @@ function assertRoundMetrics(s: Scenario): void {
   }
 }
 
+/**
+ * three's own counters must return to the same value at the same point of every round. `period`
+ * is the number of rounds between two rounds of the same sport (1 for a single sport); the first
+ * `skip` round samples are warm-up (shared caches fill on first use).
+ */
+function assertRendererCounts(s: Scenario, period: number, skip: number): void {
+  const rs = s.samples.filter((x) => x.kind === 'round');
+  for (const key of ['geometries', 'textures'] as const) {
+    for (let i = skip + period; i < rs.length; i++) {
+      const a = rs[i - period]![key];
+      const b = rs[i]![key];
+      if (a === null || b === null) continue;
+      expect(b, `renderer ${key} at round ${rs[i]!.round} vs round ${rs[i - period]!.round}`).toBe(
+        a,
+      );
+    }
+  }
+}
+
 function assertCommon(s: Scenario): void {
   expect(s.problems, 'console and page errors').toEqual([]);
   const slope = slopePerMinute(s.samples, 'usedJsMB');
@@ -462,9 +495,6 @@ async function runScenario(
 test.describe('memory soak', () => {
   SPORTS.forEach((id, index) => {
     test(`${id} on repeat`, async ({ page }) => {
-      // Known defect: every round leaks about 1.4 MB of ArrayBuffer backing stores (archery is the
-      // worst; see docs/SOAK.md). performance.memory counts them, so the heap slope trips the limit.
-      test.fail(id === 'archery', 'Per-round ArrayBuffer retention, see docs/SOAK.md');
       const deadline = MINUTES * 60000;
       const scenario = await runScenario(page, `sport-${id}`, MINUTES, async (rec) => {
         await page.goto(sportUrl(id, index + 1));
@@ -478,6 +508,7 @@ test.describe('memory soak', () => {
         }
       });
       assertRoundMetrics(scenario);
+      assertRendererCounts(scenario, 1, 1);
       assertCommon(scenario);
     });
   });
@@ -510,6 +541,7 @@ test.describe('memory soak', () => {
     });
     expect(scenario.rounds, 'two full cycles').toBeGreaterThanOrEqual(minRounds);
     assertRoundMetrics(scenario);
+    assertRendererCounts(scenario, SPORTS.length, 0);
     assertCommon(scenario);
   });
 

@@ -75,7 +75,7 @@ Each sport: module under `src/sports/<name>/`, typed tunables, synthetic script,
 |---|---|---|---|
 | Whole-codebase review passes (two) and fixes | R / B | done | 8 + 14 defects fixed |
 | Baseball pitching | B | done | Sixth sport |
-| Fix the per-round renderer memory leak found by the soak test | B | doing | See docs/SOAK.md |
+| Fix the per-round renderer memory leak found by the soak test | B | done | See docs/SOAK.md |
 | Replace synthetic recognizer tests with real recordings | owner + B | todo | Needs clips in tests/recordings/ (list in the morning report) |
 | Tune every sport on a real camera | owner | todo | Checklists in the morning report |
 

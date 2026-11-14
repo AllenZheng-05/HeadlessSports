@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { BoxGeometry, Mesh, MeshBasicMaterial } from 'three/webgpu';
 import { createInputState } from '../../input/state';
 import type { InputProvider } from '../../input/types';
 import type { RendererHandle } from '../../render/renderer';
@@ -114,6 +115,22 @@ function setup(options: { source?: unknown; sport?: Sport; throwInFactory?: bool
   };
 }
 
+/** Adds a mesh to the stage and returns what must be released when the round is over. */
+function probeStage(ctx: SportContext) {
+  const geometry = new BoxGeometry();
+  const material = new MeshBasicMaterial();
+  const mesh = new Mesh(geometry, material);
+  ctx.stage.scene.add(mesh);
+  const geoDisposed = vi.fn();
+  const objDisposed = vi.fn();
+  geometry.addEventListener('dispose', geoDisposed);
+  mesh.addEventListener('dispose', objDisposed);
+  const avatarMesh = ctx.avatar.root.getObjectByName('torso-mesh') as Mesh;
+  const avatarDisposed = vi.fn();
+  avatarMesh.addEventListener('dispose', avatarDisposed);
+  return { geoDisposed, objDisposed, avatarDisposed };
+}
+
 async function started(host: SportHost): Promise<void> {
   await vi.waitFor(() => expect(host.phase).toBe('playing'));
 }
@@ -154,6 +171,57 @@ describe('SportHost', () => {
     await expect(done).resolves.toBeNull();
     expect(sport.dispose).toHaveBeenCalledOnce();
     expect(host.phase).toBe('idle');
+  });
+
+  it('releases the whole stage when a round ends and is released', async () => {
+    const { host, entry, getCtx } = setup();
+    const done = host.play(entry, null);
+    await started(host);
+    const probe = probeStage(getCtx());
+    getCtx().finish(RESULT);
+    await done;
+    expect(probe.objDisposed).not.toHaveBeenCalled(); // still shown behind the results
+    host.release();
+    expect(probe.geoDisposed).toHaveBeenCalled();
+    expect(probe.objDisposed).toHaveBeenCalled();
+    expect(probe.avatarDisposed).toHaveBeenCalled();
+  });
+
+  it('releases the whole stage when a round is quit', async () => {
+    const { host, entry, getCtx } = setup();
+    const done = host.play(entry, null);
+    await started(host);
+    const probe = probeStage(getCtx());
+    host.quit();
+    await done;
+    expect(probe.geoDisposed).toHaveBeenCalled();
+    expect(probe.objDisposed).toHaveBeenCalled();
+    expect(probe.avatarDisposed).toHaveBeenCalled();
+  });
+
+  it('releases the whole stage when the sport factory throws', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { host, entry, getCtx, input } = setup({ throwInFactory: true });
+    // The factory throws after the stage exists; watch the avatar from inside setNeeds.
+    let probe: ReturnType<typeof probeStage> | null = null;
+    input.setNeeds.mockImplementation(() => Promise.resolve());
+    const origLoad = entry.load;
+    entry.load = async () => {
+      const mod = await origLoad();
+      return {
+        default: (c: SportContext): Sport | Promise<Sport> => {
+          probe = probeStage(c);
+          return mod.default(c);
+        },
+      };
+    };
+    await host.play(entry, null);
+    expect(getCtx()).toBeDefined();
+    expect(probe).not.toBeNull();
+    const p = probe as unknown as ReturnType<typeof probeStage>;
+    expect(p.geoDisposed).toHaveBeenCalled();
+    expect(p.objDisposed).toHaveBeenCalled();
+    expect(p.avatarDisposed).toHaveBeenCalled();
   });
 
   it('survives a throwing factory', async () => {
