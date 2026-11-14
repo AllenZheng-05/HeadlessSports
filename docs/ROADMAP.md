@@ -47,7 +47,7 @@ Contracts first (0.6), then three builders in parallel on disjoint directories, 
 | 2.8 Gate screen wired to the benchmark | B | done | |
 | 2.9 Scores: `ScoreStore` interface, IndexedDB implementation | B | done | |
 | 2.10 Service worker caching | B | done | |
-| 2.11 Review of milestone 2 | R | todo | |
+| 2.11 Review of milestone 2 | R | done | |
 
 ## Milestones 3 to 7: sports
 
@@ -65,9 +65,9 @@ Each sport: module under `src/sports/<name>/`, typed tunables, synthetic script,
 
 | Task | Agent | Status | Notes |
 |---|---|---|---|
-| 8.1 Accessibility pass and seated modes | B | todo | |
+| 8.1 Accessibility pass and seated modes | B | doing | |
 | 8.2 Deployment config (`wrangler`, `_headers`, CSP) and full `docs/DEPLOY.md` | B / H | done | Deploy nothing |
-| 8.3 Memory soak test under the synthetic player | B | todo | |
+| 8.3 Memory soak test under the synthetic player | B | doing | |
 
 ## If everything above is done
 

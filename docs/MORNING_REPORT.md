@@ -4,11 +4,11 @@ Kept current through the unattended run that started 2026-11-14. Read this first
 
 ## State of things
 
-- **Milestone 0 (repo setup): done**, merged to `main`.
-- **Milestone 1 (tech spike): built and passing headless**, on branch `m1-tech-spike`. Not yet verified with a real camera or a real GPU. Reviewer pass in progress.
-- **Milestone 2 (foundation): in progress.** Done: recognizers, `TrackedInput`, `DebugInput`, scores, calibration logic, avatar animator, device gate, closed-loop synthetic player. In progress: the DOM interface and the game shell.
-- **Sports: none yet.**
-- Nothing has been pushed. Nothing has been deployed.
+- **Milestones 0 to 7 are built, pass every automated check, and are merged to `main`:** repo setup, tracking tech spike, foundation, and all five sports (rock climbing, bowling, batting, archery, javelin). Each sport plays a full round end to end under its closed-loop synthetic player and under keyboard and mouse, records a score, and has its tunables in the debug panel (`?debug=1`).
+- **Nothing has been verified with a real camera, a real person or a real GPU.** Every gesture threshold is tuned to a synthetic player. Expect the first playtest to need tuning, and possibly fixes inside `src/tracking/`.
+- **Milestone 8 (launch polish): in progress** on branch `m8-polish`. Done: deployment config, security headers (strict CSP), service worker, `docs/DEPLOY.md`. In progress: fixes from the second code review (accessibility items included) and the memory soak test.
+- Checks at the merge to `main`: typecheck clean, lint clean, 850 unit tests pass, `pnpm build` succeeds, 34 of 34 Playwright end-to-end tests pass (plus the gate, UI and deploy suites under their own configs).
+- Nothing has been pushed. Nothing has been deployed. No account was logged in to.
 
 **The single most important thing to check first** is the tracking debug page with your real camera (checklist below). Everything else is built on the assumption that it works.
 
@@ -20,6 +20,9 @@ pnpm setup:assets     # once: copies MediaPipe WASM, downloads the three models 
 pnpm dev              # http://localhost:5173
 ```
 
+- The game: `http://localhost:5173/` (the device gate runs first; add `?skipGate=1` to bypass it while testing)
+- Watch a bot play a sport: `/?sport=bowling&source=synthetic&skipGate=1` (ids: `climbing`, `bowling`, `batting`, `archery`, `javelin`; add `&short=1` for a short round, `&timeScale=3` to fast-forward)
+- Play with keyboard and mouse: `/?input=debug&skipGate=1` (each sport's how-to screen lists its keys)
 - Tracking debug page: `http://localhost:5173/debug.html`
 - Without a camera: `debug.html?source=synthetic&script=wave` (other scripts: `idle`, `fists`, `bowl`, `throw`, `swing`, `run`, `hands`, `lost`, `all`)
 - Flags: `?renderer=webgl`, `?pose=full`, `?main=1` (main-thread tracking), `?skipGate=1`, `?input=debug`, `?timeScale=4` (synthetic and replay only), `?debug=1` (tunables panel)
@@ -37,6 +40,10 @@ Checks: `pnpm typecheck`, `pnpm lint`, `pnpm test`, `pnpm build`, then `pnpm tes
 - **1.6 / 2.8 Device gate** (`src/core/gate/`). Capability checks, then pose inference on a synthetic frame concurrently with a representative render load. Playwright confirms it runs, cleans up, and (correctly) fails headless software rendering.
 - **2.2 / 2.3 Recognizers and providers.** Arm raise, knee-lift cadence, throw (underarm and overarm, release stamped at the wrist-speed peak), two-handed swing, punch, squat, jump; `TrackedInput`; `DebugInput` (keyboard and mouse). 220 unit and integration tests against the synthetic player across five noise seeds. **All recognizer thresholds are tuned to synthetic motion and are placeholders.**
 - **2.7 (logic) Calibration session, 2.9 Scores, avatar animator, move queue.** Unit-tested.
+- **2.4 Game shell and 2.6 interface.** Boot, gate, title, camera intro, menu, how-to, calibration, play, pause when out of frame, results; hand cursor with hold-to-select, mouse and keyboard on every screen; HUD, corner mirror view, synthesised sounds, tunables panel. Verified by Playwright through the real UI with the fake camera, the bot and keyboard input, and by looking at screenshots of every screen at 720p and 1080p.
+- **Milestones 3 to 7, the five sports.** Each has pure, unit-tested rules and scoring (bowling's ten-frame scoring and Rapier pin physics run under Vitest), a bot, and Playwright rounds under the bot and under keyboard input. I looked at mid-round screenshots of each against the Field Day theme. Bot results in short rounds: climbing about 11 m; bowling 17 to 47 over two frames (139 in one full game); batting three hits of about 100 m; archery rings of 8 to 10; javelin 44 to 49 m.
+- **Two independent code reviews (opus)**, one of tracking and input, one of sports, shell and UI. The first found 8 defects (one high: a start/stop race that could leave the camera on), all fixed. The second found 14 (none high); fixes are in progress.
+- **8.2 Deployment.** `wrangler.jsonc`, `public/_headers`, service worker, `docs/DEPLOY.md` covering both DNS cases. Playwright confirms the whole game, the MediaPipe pipeline and Rapier run under the production CSP, that a cross-origin `fetch` is blocked, and that the shell loads offline after one visit. `wrangler deploy --dry-run` passes offline.
 
 ## Parked
 
