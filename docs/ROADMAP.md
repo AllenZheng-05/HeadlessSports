@@ -59,7 +59,7 @@ Each sport: module under `src/sports/<name>/`, typed tunables, synthetic script,
 | 4 | Bowling | B | done | Rapier, lazy-loaded |
 | 5 | Baseball batting | B | done | Can run in parallel with 4 in a worktree |
 | 6 | Archery | B | done | |
-| 7 | Javelin | B | doing | Can run in parallel with 6 in a worktree |
+| 7 | Javelin | B | done | Can run in parallel with 6 in a worktree |
 
 ## Milestone 8: launch polish
 

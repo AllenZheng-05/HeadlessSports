@@ -173,4 +173,17 @@ Pick Archery; sitting or standing, shoulders and both arms in view. Without a ca
 8. **Seated.** Play a round sitting down.
 9. Known issues: the camera sits close over the archer's shoulder, so the athlete is mostly out of frame and the target is small until the close-up after each shot (camera numbers are tunables: `camBack`, `camHeight`, `camSide`, `fovBase`, `fovDraw`).
 
-Checklists for the remaining sports are added as they are completed.
+### Milestone 7: javelin
+
+Pick Javelin; stand 2 to 3 m back with room to run on the spot and throw. Without a camera: `/?sport=javelin&input=debug&skipGate=1` (U starts, hold ArrowUp to run, Shift to sprint, hold and release T to throw) or the bot at `/?sport=javelin&source=synthetic&skipGate=1`.
+
+1. **Start.** Raise a fist above your head. "Go!" should appear within about half a second even if the game cannot see your fist. An open-hand raise starts after 0.6 s (`openHandHoldMs`).
+2. **Run.** Run on the spot for ten seconds. Does the speed readout rise smoothly toward 8 to 9 m/s, without stalls? Do your knees stay in frame? Tunables: `fullCadence` 4.0, `fullAmplitude` 0.45, `maxRunSpeed`, `accel`, `decel`, and `cadence.minLift` in the recognizer config.
+3. **False throws.** While running with arms pumping, does a throw ever fire by itself? (`__game.sport.log` in the console lists recent gesture events.) Tunable: `minThrowSpeed`.
+4. **Swallowed throws.** Throw overarm in the throw zone while still running. Is the throw ever ignored? The throw recognizer suspends when the shoulders move fast; synthetic running did not trip it but real shoulder bob is larger. If throws are swallowed, set `maxBodySpeedOverride` (for example 8).
+5. **Angle.** After each throw the hint shows the release angle the game read. The player throws into the screen, so the angle is a proxy from how upward the wrist was moving at release. Does a flat throw read lower than a lofted one? Tunables: `proxyLow` -0.7, `proxyHigh` 0.9, `angleCurve`.
+6. **Foul line.** Release just before the line (valid) and just after (foul). The game back-dates the release by the tracking delay and allows 0.45 s (`crossGraceS`) for a late-arriving throw before calling "You crossed the line".
+7. **Distances.** The bot throws 44 to 49 m at about 5 m/s run speed. What do you get, and does a faster run-up clearly help?
+8. Known issues: the held javelin sits low at the hip rather than above the shoulder; distance numerals past about 60 m are too small to read.
+
+Playtest checklists for milestone 8 follow once it is complete.
