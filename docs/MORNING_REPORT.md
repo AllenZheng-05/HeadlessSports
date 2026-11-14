@@ -193,4 +193,24 @@ Pick Javelin; stand 2 to 3 m back with room to run on the spot and throw. Withou
 7. **Distances.** The bot throws 44 to 49 m at about 5 m/s run speed. What do you get, and does a faster run-up clearly help?
 8. Known issues: the held javelin sits low at the hip rather than above the shoulder; distance numerals past about 60 m are too small to read.
 
-Playtest checklists for milestone 8 follow once it is complete.
+### Bonus: baseball pitching
+
+Pick Pitching; stand 2 to 2.5 m back, whole body in view. Without a camera: `/?sport=pitching&input=debug&skipGate=1` (E closes the fist for a fastball, otherwise a curve is picked after 0.7 s; hold and release T to throw; mouse x and y move the pitch) or the bot at `/?sport=pitching&source=synthetic&skipGate=1`.
+
+1. **Sign.** Hold your throwing hand still at your side with a fist: the meter should fill and say Fastball. Open hand: Curve. If the hand cannot be read it says so and picks a fastball after 2.5 s. Tunables: `signStillSpeed`, `signHoldMs`, `signFallbackMs`.
+2. **Aim.** Throw overarm at the lit tile. Release with your hand further out, then closer in: the pitch should move the same way. Throw higher and lower. The vertical aim is a proxy from how upward the wrist moves at release and **must be tuned on your recordings**: `proxyLow`, `proxyHigh`, `heightRange`; horizontal: `neutralLateral`, `aimGainX`; forgiveness: `assist`.
+3. **Speed cap.** Throw soft and hard: km/h rises, but the speed bonus stops growing at 95 km/h on purpose. Do not throw hard to test it.
+4. **Curve.** It should land lower and toward the glove side.
+5. **Pitch clock.** Wait 12 s without throwing: "Balk". A throw with the other hand is ignored.
+6. Known issues: the catcher is small and pale; the strike zone is drawn 2.8 times larger than the scored one so it can be read from the mound.
+
+### Milestone 8: launch polish
+
+1. **Menus by hand.** After Start and the camera prompt, raise a hand: a mitt cursor should appear. Hold it over a card for about a second to select. It should not select anything in the first 1.2 s of a new screen. Is the reach comfortable, and is the dwell time right?
+2. **Keyboard only.** Tab or arrow keys move focus, Enter selects, Escape goes back or quits a round. Try the whole flow without the mouse.
+3. **Camera indicator.** A "Camera on" pill with a "Turn camera off" button should be visible on every screen once the camera is running. Turning it off should stop the camera light and drop you to keyboard and mouse play.
+4. **Out of frame.** During a round, walk out of view: the game should pause with a large message and resume when you return.
+5. **Calibration.** Before each camera round: step into the outline, raise your throwing hand, hold your arms out. Try raising the left hand: the sport should then be left-handed. For climbing and archery, try the "Sitting" toggle.
+6. **Left-handed with keyboard and mouse.** The how-to screen has a "Throwing hand" toggle; `?hand=left` sets the default.
+7. **Device gate.** Open `/` without `?skipGate=1`. It should pass on your machine within a few seconds; write down the numbers behind "Details" if it fails. Thresholds (25 Hz tracking, 50 fps rendering) are provisional.
+8. **Deployment.** Follow `docs/DEPLOY.md`. First find out where the DNS for `allenzheng.com` lives (`nslookup -type=NS allenzheng.com`); the guide covers both cases. `pnpm deploy:dry` checks everything without touching your account.
