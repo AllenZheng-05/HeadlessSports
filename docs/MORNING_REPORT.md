@@ -134,4 +134,17 @@ Open `http://localhost:5173/`, pick Rock climbing. Sit or stand about 1 m from t
 5. **Comfort.** Is the top of the reach comfortable, and do your hands stay in frame? Does a 75 second round tire your arms too much?
 6. Known cosmetic issues: a hand held below shoulder height can hide behind the torso; the putty body picks up a slight green tint from the scene lighting.
 
+### Milestone 4: bowling
+
+Pick Bowling; stand about 2 to 2.5 m back, whole body in view. Without a camera: `/?sport=bowling&input=debug&skipGate=1` (E picks up, arrows move, hold and release B to bowl, mouse x steers, Z / C hook) or the bot at `/?sport=bowling&source=synthetic&skipGate=1`. `&short=1` plays two frames.
+
+1. **Pick up.** Close your throwing fist while standing still. Does the ball jump to your hand, and how long does it take? If the fist is not seen, hold the hand low and still: pick-up should happen after about 1.4 s (`pickupHoldMs`, `pickupHoldSpeed`). Tell me which path worked.
+2. **Release.** Swing back and forward as if bowling toward the screen. Does the ball release every time, at the moment that feels right? Does the Power meter match your effort across a soft, medium and hard swing? Tunables: `speedFloor`, `speedCeil`, `minReleaseSpeed`, and the throw thresholds in the recognizer config. **This is the riskiest gesture in the game:** a real underarm swing seen from the front reverses direction at the bottom, which the synthetic player does not do.
+3. **Direction.** Swing with your arm in its natural line: the ball should go roughly straight. If it drifts one way every time, adjust `neutralLateral` (0.62 sw) and `aimGain` (0.09).
+4. **Hook.** I lowered `hookGain` to 0.35 because the synthetic swing saturated the hook on every ball, and real wrist-path curvature is unknown. Do straight swings stay straight? Does a deliberate curved swing hook? Raise `hookGain` if you want more.
+5. **Position.** Step left and right: the bowler should move about 0.3 m per shoulder width (`lateralScale`).
+6. **Second ball.** After a first ball, does picking up again work with your hand still partly closed?
+7. **Pins.** Do they fall believably and settle in reasonable time? Any pins left wobbling or counted wrongly?
+8. Known issues: with keyboard and mouse, a straight ball needs the mouse about two thirds of the way across the screen (mouse centre aims left); `E` toggles, so the second pick-up needs two presses; the bowler's body hides the near half of the lane; the ball-return pedestal is partly behind the camera preview.
+
 Checklists for the remaining sports are added as they are completed.
