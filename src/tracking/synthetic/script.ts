@@ -21,7 +21,7 @@ export interface Script {
   loop?: boolean;
 }
 
-function applyEase(ease: Ease, p: number): number {
+export function applyEase(ease: Ease, p: number): number {
   switch (ease) {
     case 'linear':
       return p;

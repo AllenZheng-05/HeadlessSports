@@ -3,6 +3,7 @@ import { SyntheticBody, createEmptyFrame } from './body';
 import type { NoiseOptions } from './body';
 import { defaultControls } from './controls';
 import type { BodyControls } from './controls';
+import { MoveQueue } from './MoveQueue';
 import { ScriptPlayer } from './script';
 import type { Script } from './script';
 import { SteppedSource } from './stepped';
@@ -25,6 +26,17 @@ export interface SyntheticSource extends LandmarkSource {
   readonly finished: boolean;
   readonly scriptTimeMs: number;
   readonly currentLabel: string;
+  /**
+   * Closed-loop mode: whenever the move queue is idle at a frame, `director` is called and may
+   * enqueue steps (if it enqueues nothing the pose holds). Time restarts at the next pump. `null`
+   * leaves director mode (the current script, if any, restarts). `setScript` also leaves it.
+   */
+  setDirector(
+    director: ((queue: MoveQueue, tMs: number) => void) | null,
+    start?: Partial<BodyControls>,
+  ): void;
+  /** The director's queue, or null outside director mode. */
+  readonly queue: MoveQueue | null;
 }
 
 class SyntheticSourceImpl extends SteppedSource implements SyntheticSource {
@@ -32,6 +44,8 @@ class SyntheticSourceImpl extends SteppedSource implements SyntheticSource {
   finished = false;
   scriptTimeMs = 0;
   currentLabel = '';
+  queue: MoveQueue | null = null;
+  private director: ((queue: MoveQueue, tMs: number) => void) | null = null;
   private player: ScriptPlayer;
   private loop: boolean;
   private readonly body: SyntheticBody;
@@ -48,7 +62,21 @@ class SyntheticSourceImpl extends SteppedSource implements SyntheticSource {
     this.startDelayMs = options.startDelayMs ?? 0;
   }
 
+  setDirector(
+    director: ((queue: MoveQueue, tMs: number) => void) | null,
+    start?: Partial<BodyControls>,
+  ): void {
+    this.director = director;
+    this.queue = director ? new MoveQueue(start) : null;
+    this.finished = false;
+    this.scriptTimeMs = 0;
+    this.currentLabel = '';
+    this.restart();
+  }
+
   setScript(script: Script): void {
+    this.director = null;
+    this.queue = null;
     this.player = new ScriptPlayer(script);
     this.loop = script.loop === true;
     this.finished = false;
@@ -66,6 +94,15 @@ class SyntheticSourceImpl extends SteppedSource implements SyntheticSource {
   }
 
   protected fill(_k: number, rel: number, frame: LandmarkFrame): void {
+    const queue = this.queue;
+    if (queue !== null && this.director !== null) {
+      if (queue.idle) this.director(queue, rel);
+      queue.sample(rel, this.controls);
+      this.body.write(this.controls, frame);
+      this.scriptTimeMs = rel;
+      this.currentLabel = queue.label;
+      return;
+    }
     this.player.sample(rel, this.controls);
     this.body.write(this.controls, frame);
     this.scriptTimeMs = rel;
