@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createUi } from './createUi';
+import { NOTICE_MS } from './screens/menu';
 import { FAKE_BESTS, FAKE_GATE_REPORT, FAKE_RESULT, FAKE_SPORTS } from './harness/fakeData';
 import { createFakeInput } from './harness/fakeInput';
 import { detectBrowser } from './format';
@@ -256,6 +257,181 @@ describe('screen management', () => {
     obs.disconnect();
     cal.close();
     expect(root.querySelector('.screen-calibration')).toBeNull();
+  });
+});
+
+function indicatorVisible(): boolean {
+  return root.querySelector<HTMLElement>('.camera-indicator')?.hidden === false;
+}
+
+function offButtonVisible(): boolean {
+  return root.querySelector<HTMLElement>('.camera-off')?.hidden === false;
+}
+
+describe('camera indicator on every screen', () => {
+  const show: [string, () => void][] = [
+    ['loading', () => ui.showLoading('Loading')],
+    ['menu', () => void ui.showMenu(FAKE_SPORTS.slice(0, 5), FAKE_BESTS)],
+    ['how-to', () => void ui.showHowTo(bowling, false)],
+    ['results', () => void ui.showResults(bowling, FAKE_RESULT, { isBest: false, best: 1 })],
+    ['playing', () => ui.showPlaying(bowling)],
+  ];
+
+  it.each(show)('is shown with the off button on %s while the camera is active', (_n, open) => {
+    const off = vi.fn();
+    ui.onCameraOff(off);
+    ui.setCameraActive(true);
+    open();
+    expect(indicatorVisible()).toBe(true);
+    expect(offButtonVisible()).toBe(true);
+    expect(root.querySelector('.camera-pill')?.textContent).toBe('Camera on');
+    click('.camera-off');
+    expect(off).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(show.filter(([n]) => n !== 'playing'))(
+    'is absent on %s when the camera is not active',
+    (_n, open) => {
+      open();
+      expect(indicatorVisible()).toBe(false);
+    },
+  );
+
+  it('appears when the camera turns on under a screen, and goes when it turns off', () => {
+    void ui.showMenu(FAKE_SPORTS.slice(0, 5), FAKE_BESTS);
+    expect(indicatorVisible()).toBe(false);
+    ui.setCameraActive(true);
+    expect(indicatorVisible()).toBe(true);
+    expect(root.querySelector('.camera-indicator')?.classList.contains('corner')).toBe(true);
+    ui.setCameraActive(false);
+    expect(indicatorVisible()).toBe(false);
+  });
+
+  it('stays on screens that follow one another, and keeps calibration inline', () => {
+    ui.setCameraActive(true);
+    void ui.showMenu(FAKE_SPORTS.slice(0, 5), FAKE_BESTS);
+    void ui.showHowTo(bowling, false);
+    expect(indicatorVisible()).toBe(true);
+    ui.showCalibration(bowling);
+    expect(indicatorVisible()).toBe(true);
+    const el = root.querySelector('.camera-indicator') as HTMLElement;
+    expect(el.classList.contains('inline')).toBe(true);
+    expect(el.classList.contains('corner')).toBe(false);
+    void ui.showResults(bowling, FAKE_RESULT, { isBest: false, best: 1 });
+    expect(el.classList.contains('inline')).toBe(false);
+    expect(el.classList.contains('corner')).toBe(false);
+    // Cards that reach near the page edge carry the indicator inside, as a compact row.
+    expect(el.classList.contains('in-card')).toBe(true);
+    expect(el.parentElement?.classList.contains('card-results')).toBe(true);
+    void ui.showMenu(FAKE_SPORTS.slice(0, 5), FAKE_BESTS);
+    expect(el.classList.contains('in-card')).toBe(false);
+    expect(el.classList.contains('corner')).toBe(true);
+    expect(el.parentElement?.classList.contains('hs-ui')).toBe(true);
+  });
+});
+
+describe('menu notice', () => {
+  it('shows a polite live-region notice and drops it after a few seconds', () => {
+    vi.useFakeTimers();
+    try {
+      const text = 'That round broke. Pick a sport to try again.';
+      void ui.showMenu(FAKE_SPORTS.slice(0, 5), FAKE_BESTS, text);
+      const note = root.querySelector('.menu-notice');
+      expect(note?.textContent).toBe(text);
+      expect(note?.getAttribute('aria-live')).toBe('polite');
+      vi.advanceTimersByTime(NOTICE_MS + 10);
+      expect(root.querySelector('.menu-notice')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('is absent without a notice and does not carry into the next menu', () => {
+    void ui.showMenu(FAKE_SPORTS.slice(0, 5), FAKE_BESTS);
+    expect(root.querySelector('.menu-notice')).toBeNull();
+    void ui.showMenu(FAKE_SPORTS.slice(0, 5), FAKE_BESTS, 'x');
+    void ui.showMenu(FAKE_SPORTS.slice(0, 5), FAKE_BESTS);
+    expect(root.querySelector('.menu-notice')).toBeNull();
+  });
+});
+
+describe('loading screen Back', () => {
+  it('has no Back button during boot', () => {
+    ui.showLoading('Warming up', 0.3);
+    expect(root.querySelector('.loading-back')).toBeNull();
+  });
+
+  it('shows Back with a cancel handler, and Escape cancels too', () => {
+    const cancel = vi.fn();
+    ui.showLoading('Bowling', undefined, cancel);
+    click('.loading-back');
+    expect(cancel).toHaveBeenCalledTimes(1);
+    key('Escape');
+    expect(cancel).toHaveBeenCalledTimes(2);
+  });
+
+  it('rebuilds the screen when the cancel handler appears', () => {
+    ui.showLoading('One', 0.1);
+    const plain = root.querySelector('.screen-loading');
+    ui.showLoading('Two', undefined, vi.fn());
+    expect(root.querySelector('.screen-loading')).not.toBe(plain);
+    expect(root.querySelector('.loading-back')).not.toBeNull();
+  });
+});
+
+describe('throwing hand toggle', () => {
+  it('shows only when options are given, and reports the choice', () => {
+    void ui.showHowTo(bowling, true);
+    expect(root.querySelector('.hand-toggle')).toBeNull();
+    const chosen: string[] = [];
+    void ui.showHowTo(bowling, true, {
+      handedness: 'right',
+      onHandedness: (side) => chosen.push(side),
+    });
+    expect(root.querySelector('.hand-title')?.textContent).toBe('Throwing hand');
+    const right = root.querySelector<HTMLElement>('.hand-opt[data-hand="right"]')!;
+    const left = root.querySelector<HTMLElement>('.hand-opt[data-hand="left"]')!;
+    expect(right.getAttribute('aria-pressed')).toBe('true');
+    expect(right.textContent).toBe('✓ Right');
+    expect(left.getAttribute('aria-pressed')).toBe('false');
+    expect(left.textContent).toBe('Left');
+    left.click();
+    expect(chosen).toEqual(['left']);
+    expect(left.getAttribute('aria-pressed')).toBe('true');
+    expect(left.textContent).toBe('✓ Left');
+    expect(right.textContent).toBe('Right');
+  });
+
+  it('starts on the remembered side', () => {
+    void ui.showHowTo(bowling, true, { handedness: 'left', onHandedness: () => undefined });
+    const left = root.querySelector('.hand-opt[data-hand="left"]');
+    expect(left?.getAttribute('aria-pressed')).toBe('true');
+  });
+});
+
+describe('seated toggle on calibration', () => {
+  it('is offered only for sports that can be played sitting', () => {
+    const plain = ui.showCalibration(FAKE_SPORTS[2]!);
+    expect(plain.onSeated).toBeUndefined();
+    expect(root.querySelector('.cal-seat')).toBeNull();
+    plain.close();
+    const cal = ui.showCalibration(FAKE_SPORTS[3]!);
+    expect(cal.onSeated).toBeTypeOf('function');
+    expect(root.querySelector('.cal-seat')).not.toBeNull();
+  });
+
+  it('reports the new state and labels it with text', () => {
+    const cal = ui.showCalibration(FAKE_SPORTS[3]!);
+    const seen: boolean[] = [];
+    cal.onSeated?.((seated) => seen.push(seated));
+    const button = root.querySelector<HTMLElement>('.cal-seat')!;
+    expect(button.textContent).toBe('Sitting: off');
+    button.click();
+    expect(button.textContent).toBe('Sitting: on');
+    expect(button.getAttribute('aria-pressed')).toBe('true');
+    button.click();
+    expect(button.textContent).toBe('Sitting: off');
+    expect(seen).toEqual([true, false]);
   });
 });
 

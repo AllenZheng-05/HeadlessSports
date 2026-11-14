@@ -1,8 +1,13 @@
 import type { SportMeta } from '../../core/sport';
+import type { Side } from '../../input/types';
 import { h, selectButton } from '../dom';
 import { formatScore, hexColor } from '../format';
 import type { ScreenHost, ScreenSpec } from './shared';
 import { screenShell } from './shared';
+import type { HowToOptions } from '../types';
+
+/** How long the menu notice stays up. */
+export const NOTICE_MS = 6000;
 
 export function columnsFor(count: number): number {
   if (count <= 5) return Math.max(1, count);
@@ -14,8 +19,20 @@ export function buildMenu(
   sports: readonly SportMeta[],
   bests: ReadonlyMap<string, number>,
   resolve: (id: string) => void,
+  notice?: string,
 ): ScreenSpec {
   const { el, card } = screenShell('menu', 'card-menu');
+  let noticeTimer: ReturnType<typeof setTimeout> | null = null;
+  if (notice !== undefined && notice !== '') {
+    const note = h('p', 'menu-notice', notice);
+    note.setAttribute('role', 'status');
+    note.setAttribute('aria-live', 'polite');
+    el.append(note);
+    noticeTimer = setTimeout(() => {
+      noticeTimer = null;
+      note.remove();
+    }, NOTICE_MS);
+  }
   el.style.setProperty('--cols', String(columnsFor(sports.length)));
   el.dataset.count = String(sports.length);
   card.append(h('h1', 'heading', 'Pick a sport'));
@@ -43,7 +60,44 @@ export function buildMenu(
     first ??= b;
   }
   card.append(grid);
-  return { el, primary: first };
+  return {
+    el,
+    primary: first,
+    dispose: () => {
+      if (noticeTimer !== null) clearTimeout(noticeTimer);
+    },
+  };
+}
+
+/** "Throwing hand: Right / Left" for keyboard and mouse play. Text and a check mark, not colour alone. */
+function handednessToggle(options: HowToOptions): HTMLElement {
+  const wrap = h('div', 'hand-toggle');
+  wrap.setAttribute('role', 'group');
+  wrap.setAttribute('aria-label', 'Throwing hand');
+  wrap.append(h('p', 'hand-title', 'Throwing hand'));
+  const row = h('div', 'hand-row');
+  const buttons = new Map<Side, HTMLButtonElement>();
+  const refresh = (current: Side): void => {
+    for (const [side, b] of buttons) {
+      const on = side === current;
+      b.setAttribute('aria-pressed', String(on));
+      b.classList.toggle('on', on);
+      b.textContent = `${on ? '✓ ' : ''}${side === 'right' ? 'Right' : 'Left'}`;
+    }
+  };
+  for (const side of ['right', 'left'] as const) {
+    const b = selectButton('', 'btn btn-small btn-secondary hand-opt');
+    b.dataset.hand = side;
+    b.addEventListener('click', () => {
+      options.onHandedness(side);
+      refresh(side);
+    });
+    buttons.set(side, b);
+    row.append(b);
+  }
+  refresh(options.handedness);
+  wrap.append(row);
+  return wrap;
 }
 
 export function buildHowTo(
@@ -51,6 +105,7 @@ export function buildHowTo(
   debugInput: boolean,
   resolve: (choice: 'start' | 'back') => void,
   host: ScreenHost,
+  options?: HowToOptions,
 ): ScreenSpec {
   const { el, card } = screenShell('howto', 'card-howto');
   el.style.setProperty('--accent', hexColor(meta.accent));
@@ -66,6 +121,7 @@ export function buildHowTo(
   cols.append(steps);
 
   const side = h('div', 'howto-side');
+  if (options) side.append(handednessToggle(options));
   if (meta.needsSpace) {
     side.append(h('p', 'note note-space', 'Clear a 2 by 2 metre space around you.'));
   }
@@ -96,6 +152,7 @@ export function buildHowTo(
   return {
     el,
     primary: start,
+    cameraInCard: true,
     onEscape: () => resolve('back'),
     dispose: stopWatching,
   };

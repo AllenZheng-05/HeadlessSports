@@ -13,12 +13,14 @@ interface Rig {
   results: PitchResult[];
   finished: RoundSummary[];
   log: string[];
+  shifts: number[];
 }
 
 function makeRound(short = false, over: Partial<typeof cfg> = {}, realtime = false): Rig {
   const results: PitchResult[] = [];
   const finished: RoundSummary[] = [];
   const log: string[] = [];
+  const shifts: number[] = [];
   const c = { ...cfg, ...over };
   const round = new BattingRound({
     cfg: c,
@@ -37,9 +39,10 @@ function makeRound(short = false, over: Partial<typeof cfg> = {}, realtime = fal
       },
       ending: () => log.push('ending'),
       finish: (s) => finished.push(s),
+      shifted: (by) => shifts.push(by),
     },
   });
-  return { round, results, finished, log };
+  return { round, results, finished, log, shifts };
 }
 
 /** Height (sw) that puts the bat level with the ball for the current pitch. */
@@ -318,5 +321,39 @@ describe('pauses', () => {
     rig.round.update(t + 3000); // the camera paused for 3 s
     expect(rig.round.pitch!.arrivalMs).toBeCloseTo(arrival + 3000 - 0, -1);
     expect(rig.results).toHaveLength(0);
+  });
+
+  it('pausing with a hit ball in the air keeps the ball where it was', () => {
+    const rig = makeRound(false, {}, true);
+    let t = runTo(rig, 0, cfg.firstPitchDelayMs + 10);
+    const p = rig.round.pitch!;
+    const swingT = p.arrivalMs - cfg.batTravelMs;
+    t = runTo(rig, t, swingT + 100);
+    rig.round.onSwingStarted({ t: swingT, speed: 6, height: levelHeight(p.ty, -0.1) }, t);
+    t = runTo(rig, t, t + 40);
+    rig.round.onSwingPeak({ speed: 9 }, t);
+    t = runTo(rig, t, p.arrivalMs + 400);
+    const res = rig.round.result!;
+    expect(res.kind).toBe('hit');
+    const j = rig.round.judgement!;
+    expect(rig.round.resolved).toBe(true);
+    const sinceBefore = t - res.contactMs;
+    expect(sinceBefore).toBeGreaterThan(0);
+    const contactBefore = res.contactMs;
+    const judgedBefore = j.contactMs;
+    const before = { x: 0, y: 0, z: 0 };
+    hitWorldPosition(res.trajectory!, res.headingDeg, cfg.plateZ, sinceBefore, before);
+
+    // The camera paused for 2 s: the clock jumps, the ball must not.
+    const resume = t + 2000;
+    rig.round.update(resume);
+    expect(rig.shifts).toEqual([resume - t]);
+    expect(res.contactMs).toBeCloseTo(contactBefore + 2000, 0);
+    expect(j.contactMs).toBeCloseTo(judgedBefore + 2000, 0);
+    const after = { x: 0, y: 0, z: 0 };
+    hitWorldPosition(res.trajectory!, res.headingDeg, cfg.plateZ, resume - res.contactMs, after);
+    expect(after.x).toBeCloseTo(before.x, 5);
+    expect(after.y).toBeCloseTo(before.y, 5);
+    expect(after.z).toBeCloseTo(before.z, 5);
   });
 });

@@ -9,6 +9,8 @@ import {
   UnsignedByteType,
 } from 'three/webgpu';
 
+import { markShared } from '../dispose';
+
 let gradient: DataTexture | null = null;
 let vertexColored: MeshToonMaterial | null = null;
 const cache = new Map<number, MeshToonMaterial>();
@@ -23,6 +25,7 @@ export function toonGradientMap(): DataTexture {
     gradient.magFilter = NearestFilter;
     gradient.generateMipmaps = false;
     gradient.needsUpdate = true;
+    markShared(gradient);
   }
   return gradient;
 }
@@ -32,7 +35,7 @@ export function toonMaterial(color: number): MeshToonMaterial {
   let m = cache.get(color);
   if (m === undefined) {
     m = new MeshToonMaterial({ color, gradientMap: toonGradientMap() });
-    cache.set(color, m);
+    cache.set(color, markShared(m));
   }
   return m;
 }
@@ -40,7 +43,9 @@ export function toonMaterial(color: number): MeshToonMaterial {
 /** Shared toon material that reads flat colours from a geometry's `color` attribute. */
 export function vertexColorToonMaterial(): MeshToonMaterial {
   if (vertexColored === null) {
-    vertexColored = new MeshToonMaterial({ vertexColors: true, gradientMap: toonGradientMap() });
+    vertexColored = markShared(
+      new MeshToonMaterial({ vertexColors: true, gradientMap: toonGradientMap() }),
+    );
   }
   return vertexColored;
 }

@@ -9,7 +9,7 @@ import {
   swayOffset,
   targetPitch,
   targetYaw,
-  wristDistance,
+  wristDistanceRawException,
 } from './aim';
 import type { Sway } from './aim';
 import { archeryConfig } from './config';
@@ -132,13 +132,13 @@ describe('draw', () => {
   it('measures the wrist distance in shoulder widths with aspect correction', () => {
     const aspect = 16 / 9;
     const sw = 0.13;
-    const d = wristDistance(poseWith(0.3, 0.3, 0.4, 0.35), aspect, sw);
+    const d = wristDistanceRawException(poseWith(0.3, 0.3, 0.4, 0.35), aspect, sw);
     expect(d).toBeCloseTo(Math.hypot(0.1 * aspect, 0.05) / sw, 4);
   });
 
   it('refuses when the wrists are not visible or the shoulders are unknown', () => {
-    expect(wristDistance(poseWith(0.3, 0.3, 0.4, 0.3, 0.1), 1.7, 0.13)).toBe(-1);
-    expect(wristDistance(poseWith(0.3, 0.3, 0.4, 0.3), 1.7, 0)).toBe(-1);
+    expect(wristDistanceRawException(poseWith(0.3, 0.3, 0.4, 0.3, 0.1), 1.7, 0.13)).toBe(-1);
+    expect(wristDistanceRawException(poseWith(0.3, 0.3, 0.4, 0.3), 1.7, 0)).toBe(-1);
   });
 
   it('maps distance to 0..1 between drawStart and drawFull', () => {

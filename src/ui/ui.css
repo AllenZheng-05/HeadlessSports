@@ -786,11 +786,48 @@
   pointer-events: none;
 }
 
-.hs-ui:has(.mirror[data-mode='corner']:not([hidden])) .camera-indicator {
+.hs-ui:has(.mirror[data-mode='corner']:not([hidden])) .camera-indicator:not(.corner) {
   bottom: calc(
     calc(20 * var(--u)) + calc(240 * var(--u)) / var(--mirror-aspect, 1.7778) + calc(8 * var(--u)) +
       calc(14 * var(--u))
   );
+}
+
+.camera-indicator.corner {
+  right: auto;
+  bottom: auto;
+  top: calc(20 * var(--u));
+  left: calc(24 * var(--u));
+  z-index: 35;
+  align-items: flex-start;
+}
+
+.card-howto,
+.card-results {
+  position: relative;
+}
+
+.camera-indicator.in-card {
+  position: absolute;
+  top: calc(18 * var(--u));
+  left: calc(24 * var(--u));
+  right: auto;
+  bottom: auto;
+  z-index: 2;
+  flex-direction: row;
+  align-items: center;
+  gap: calc(10 * var(--u));
+}
+
+.camera-indicator.in-card .camera-pill {
+  padding: calc(3 * var(--u)) calc(14 * var(--u)) calc(3 * var(--u)) calc(12 * var(--u));
+  font-size: calc(18 * var(--u));
+}
+
+.camera-indicator.in-card .camera-off {
+  min-height: calc(38 * var(--u));
+  padding: 0 calc(16 * var(--u));
+  font-size: calc(18 * var(--u));
 }
 
 .camera-indicator.inline {
@@ -1468,4 +1505,63 @@
 
 .hs-ui[data-reduced-motion='true'] .confetti {
   display: none;
+}
+
+/* ---------- notice, handedness, seated, loading back ---------- */
+
+.menu-notice {
+  position: absolute;
+  top: calc(24 * var(--u));
+  left: 50%;
+  z-index: 2;
+  max-width: calc(760 * var(--u));
+  margin: 0;
+  padding: calc(10 * var(--u)) calc(28 * var(--u));
+  transform: translateX(-50%);
+  border: calc(4 * var(--u)) solid var(--ink);
+  border-radius: calc(999 * var(--u));
+  background: var(--chalk);
+  font-family: 'Fredoka', system-ui, sans-serif;
+  font-weight: 500;
+  font-size: calc(26 * var(--u));
+  text-align: center;
+}
+
+.hand-toggle {
+  display: flex;
+  flex-direction: column;
+  gap: calc(8 * var(--u));
+  padding: calc(12 * var(--u)) calc(20 * var(--u));
+  border-radius: calc(24 * var(--u));
+  background: var(--putty);
+}
+
+.hand-title {
+  margin: 0;
+  font-family: 'Fredoka', system-ui, sans-serif;
+  font-weight: 600;
+  font-size: calc(24 * var(--u));
+}
+
+.hand-row {
+  display: flex;
+  gap: calc(12 * var(--u));
+}
+
+.hand-opt {
+  flex: 1 1 0;
+  padding: 0 calc(16 * var(--u));
+}
+
+.hand-opt.on {
+  background: var(--whistle);
+  box-shadow: inset 0 0 0 calc(4 * var(--u)) var(--ink);
+}
+
+.cal-seat {
+  align-self: center;
+}
+
+.loading-back {
+  align-self: center;
 }

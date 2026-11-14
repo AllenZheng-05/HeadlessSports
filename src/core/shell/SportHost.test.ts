@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { BoxGeometry, Mesh, MeshBasicMaterial } from 'three/webgpu';
 import { createInputState } from '../../input/state';
 import type { InputProvider } from '../../input/types';
 import type { RendererHandle } from '../../render/renderer';
@@ -35,7 +36,7 @@ function fakeUi(): Ui {
     tunables: { register: () => noop },
     update: noop,
     setInput: noop,
-    showLoading: noop,
+    showLoading: vi.fn(),
     showPlaying: noop,
     showPause: vi.fn(),
     onQuit: noop,
@@ -114,6 +115,22 @@ function setup(options: { source?: unknown; sport?: Sport; throwInFactory?: bool
   };
 }
 
+/** Adds a mesh to the stage and returns what must be released when the round is over. */
+function probeStage(ctx: SportContext) {
+  const geometry = new BoxGeometry();
+  const material = new MeshBasicMaterial();
+  const mesh = new Mesh(geometry, material);
+  ctx.stage.scene.add(mesh);
+  const geoDisposed = vi.fn();
+  const objDisposed = vi.fn();
+  geometry.addEventListener('dispose', geoDisposed);
+  mesh.addEventListener('dispose', objDisposed);
+  const avatarMesh = ctx.avatar.root.getObjectByName('torso-mesh') as Mesh;
+  const avatarDisposed = vi.fn();
+  avatarMesh.addEventListener('dispose', avatarDisposed);
+  return { geoDisposed, objDisposed, avatarDisposed };
+}
+
 async function started(host: SportHost): Promise<void> {
   await vi.waitFor(() => expect(host.phase).toBe('playing'));
 }
@@ -156,13 +173,187 @@ describe('SportHost', () => {
     expect(host.phase).toBe('idle');
   });
 
+  it('releases the whole stage when a round ends and is released', async () => {
+    const { host, entry, getCtx } = setup();
+    const done = host.play(entry, null);
+    await started(host);
+    const probe = probeStage(getCtx());
+    getCtx().finish(RESULT);
+    await done;
+    expect(probe.objDisposed).not.toHaveBeenCalled(); // still shown behind the results
+    host.release();
+    expect(probe.geoDisposed).toHaveBeenCalled();
+    expect(probe.objDisposed).toHaveBeenCalled();
+    expect(probe.avatarDisposed).toHaveBeenCalled();
+  });
+
+  it('releases the whole stage when a round is quit', async () => {
+    const { host, entry, getCtx } = setup();
+    const done = host.play(entry, null);
+    await started(host);
+    const probe = probeStage(getCtx());
+    host.quit();
+    await done;
+    expect(probe.geoDisposed).toHaveBeenCalled();
+    expect(probe.objDisposed).toHaveBeenCalled();
+    expect(probe.avatarDisposed).toHaveBeenCalled();
+  });
+
+  it('releases the whole stage when the sport factory throws', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { host, entry, getCtx, input } = setup({ throwInFactory: true });
+    // The factory throws after the stage exists; watch the avatar from inside setNeeds.
+    let probe: ReturnType<typeof probeStage> | null = null;
+    input.setNeeds.mockImplementation(() => Promise.resolve());
+    const origLoad = entry.load;
+    entry.load = async () => {
+      const mod = await origLoad();
+      return {
+        default: (c: SportContext): Sport | Promise<Sport> => {
+          probe = probeStage(c);
+          return mod.default(c);
+        },
+      };
+    };
+    await host.play(entry, null);
+    expect(getCtx()).toBeDefined();
+    expect(probe).not.toBeNull();
+    const p = probe as unknown as ReturnType<typeof probeStage>;
+    expect(p.geoDisposed).toHaveBeenCalled();
+    expect(p.objDisposed).toHaveBeenCalled();
+    expect(p.avatarDisposed).toHaveBeenCalled();
+  });
+
   it('survives a throwing factory', async () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const { host, ui, entry } = setup({ throwInFactory: true });
     await expect(host.play(entry, null)).resolves.toBeNull();
     expect(error).toHaveBeenCalled();
-    expect(ui.hud.setBanner).toHaveBeenCalledWith('That round broke. Back to the menu.', 2500);
+    // The shell reports the failure on the menu; no HUD banner is left behind.
+    expect(host.lastRoundFailed).toBe(true);
+    expect(ui.hud.setBanner).not.toHaveBeenCalled();
+    expect(ui.hud.clear).toHaveBeenCalled();
     expect(host.phase).toBe('idle');
+  });
+
+  it('flags a throwing sport method, and resets the flag on the next play', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const broken = fakeSport({
+      frame: () => {
+        throw new Error('bad frame');
+      },
+    }).sport;
+    const { host, entry, ui } = setup({ sport: broken });
+    const done = host.play(entry, null);
+    await started(host);
+    host.frame(0.016, 0, 0);
+    await expect(done).resolves.toBeNull();
+    expect(host.lastRoundFailed).toBe(true);
+    expect(ui.hud.setBanner).not.toHaveBeenCalled();
+    const second = host.play(entry, null);
+    expect(host.lastRoundFailed).toBe(false);
+    host.quit();
+    await second;
+    expect(host.lastRoundFailed).toBe(false);
+  });
+
+  it('a plain quit is not a failure', async () => {
+    const { host, entry } = setup();
+    const done = host.play(entry, null);
+    await started(host);
+    host.quit();
+    await done;
+    expect(host.lastRoundFailed).toBe(false);
+  });
+
+  it('quit after the round finished tears the finished sport down', async () => {
+    const { host, sport, entry, getCtx } = setup();
+    const done = host.play(entry, null);
+    await started(host);
+    getCtx().finish(RESULT);
+    await done;
+    expect(host.phase).toBe('finished');
+    host.quit();
+    expect(sport.dispose).toHaveBeenCalledOnce();
+    expect(host.phase).toBe('idle');
+    expect(host.sport).toBeNull();
+  });
+
+  it('shows a cancellable loading screen and quit abandons a load that never resolves', async () => {
+    const { host, ui, entry } = setup();
+    entry.load = () => new Promise(() => undefined);
+    const done = host.play(entry, null);
+    expect(host.phase).toBe('loading');
+    const showLoading = ui.showLoading as ReturnType<typeof vi.fn>;
+    const onCancel = showLoading.mock.calls[0]![2] as () => void;
+    expect(typeof onCancel).toBe('function');
+    onCancel();
+    await expect(done).resolves.toBeNull();
+    expect(host.phase).toBe('idle');
+    expect(host.lastRoundFailed).toBe(false);
+  });
+
+  it('disposes a sport whose factory resolves after the player quit the load', async () => {
+    const { host, entry, sport } = setup();
+    let release: (s: Sport) => void = () => undefined;
+    const late = new Promise<Sport>((resolve) => {
+      release = resolve;
+    });
+    const factoryEntered = vi.fn();
+    entry.load = () =>
+      Promise.resolve({
+        default: () => {
+          factoryEntered();
+          return late;
+        },
+      });
+    const done = host.play(entry, null);
+    await vi.waitFor(() => expect(factoryEntered).toHaveBeenCalled());
+    host.quit();
+    await expect(done).resolves.toBeNull();
+    expect(sport.dispose).not.toHaveBeenCalled();
+    release(sport);
+    await vi.waitFor(() => expect(sport.dispose).toHaveBeenCalledOnce());
+    expect(sport.start).not.toHaveBeenCalled();
+    expect(host.phase).toBe('idle');
+    expect(host.sport).toBeNull();
+  });
+
+  it('never calls the factory when the module loads after the player quit', async () => {
+    const { host, entry, getCtx } = setup();
+    let loaded: (m: { default: () => Sport }) => void = () => undefined;
+    const factory = vi.fn();
+    entry.load = () =>
+      new Promise((resolve) => {
+        loaded = resolve as typeof loaded;
+      });
+    const done = host.play(entry, null);
+    host.quit();
+    await done;
+    loaded({ default: factory as unknown as () => Sport });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(factory).not.toHaveBeenCalled();
+    expect(getCtx()).toBeNull();
+    expect(host.phase).toBe('idle');
+  });
+
+  it('ctx.paused follows the pause phase', async () => {
+    const source = { kind: 'camera' } as unknown as LandmarkSource;
+    const { host, input, entry, getCtx } = setup({ source });
+    void host.play(entry, null);
+    await started(host);
+    expect(getCtx().paused).toBe(false);
+    input.state.problem = 'lost';
+    host.begin(1000, 0.016);
+    host.begin(1000 + PAUSE_AFTER_MS + 1, 0.016);
+    expect(host.phase).toBe('paused');
+    expect(getCtx().paused).toBe(true);
+    input.state.problem = 'none';
+    host.begin(3000, 0);
+    host.begin(3000 + RESUME_AFTER_MS, 0);
+    expect(host.phase).toBe('playing');
+    expect(getCtx().paused).toBe(false);
   });
 
   it('survives a throwing fixedUpdate', async () => {

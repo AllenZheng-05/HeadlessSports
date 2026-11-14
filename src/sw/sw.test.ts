@@ -4,6 +4,7 @@ import {
   buildIdFromFiles,
   cacheForPath,
   staleCaches,
+  staleWasmEntries,
   versionedCacheName,
 } from './cacheNames';
 import { buildPrecacheList } from './precache';
@@ -72,6 +73,27 @@ describe('cache names', () => {
   it('deletes old versions and nothing foreign', () => {
     const all = ['hs-old', 'hs-abc', BIG_CACHE, 'other-app'];
     expect(staleCaches(all, 'abc')).toEqual(['hs-old']);
+  });
+  it('prunes WASM from other MediaPipe versions only', () => {
+    const urls = [
+      `${ORIGIN}/wasm/tasks-vision-1.2.2/vision_wasm_internal.wasm`,
+      `${ORIGIN}/wasm/tasks-vision-1.2.3/vision_wasm_internal.wasm`,
+      `${ORIGIN}/wasm/tasks-vision-1.2.3/vision_wasm_internal.js?x=1`,
+      `${ORIGIN}/wasm/tasks-vision-0.10.0/a.js`,
+      `${ORIGIN}/models/pose_landmarker_lite.task`,
+      `${ORIGIN}/wasm/other/a.js`,
+      '/wasm/tasks-vision-9/b.wasm',
+      'not a url at all %%',
+    ];
+    expect(staleWasmEntries(urls, '1.2.3')).toEqual([
+      `${ORIGIN}/wasm/tasks-vision-1.2.2/vision_wasm_internal.wasm`,
+      `${ORIGIN}/wasm/tasks-vision-0.10.0/a.js`,
+      '/wasm/tasks-vision-9/b.wasm',
+    ]);
+    expect(staleWasmEntries(urls, '9')).toContain(
+      `${ORIGIN}/wasm/tasks-vision-1.2.3/vision_wasm_internal.wasm`,
+    );
+    expect(staleWasmEntries([], '1.2.3')).toEqual([]);
   });
   it('derives a stable, order-independent, content-sensitive build id', () => {
     expect(buildIdFromFiles(['/a', '/b'])).toBe(buildIdFromFiles(['/b', '/a']));

@@ -4,11 +4,13 @@ Kept current through the unattended run that started 2026-11-14. Read this first
 
 ## State of things
 
-- **Milestone 0 (repo setup): done**, merged to `main`.
-- **Milestone 1 (tech spike): built and passing headless**, on branch `m1-tech-spike`. Not yet verified with a real camera or a real GPU. Reviewer pass in progress.
-- **Milestone 2 (foundation): in progress.** Done: recognizers, `TrackedInput`, `DebugInput`, scores, calibration logic, avatar animator, device gate, closed-loop synthetic player. In progress: the DOM interface and the game shell.
-- **Sports: none yet.**
-- Nothing has been pushed. Nothing has been deployed.
+- **Milestones 0 to 7 are built, pass every automated check, and are merged to `main`:** repo setup, tracking tech spike, foundation, and all five sports (rock climbing, bowling, batting, archery, javelin). Each sport plays a full round end to end under its closed-loop synthetic player and under keyboard and mouse, records a score, and has its tunables in the debug panel (`?debug=1`).
+- **Nothing has been verified with a real camera, a real person or a real GPU.** Every gesture threshold is tuned to a synthetic player. Expect the first playtest to need tuning, and possibly fixes inside `src/tracking/`.
+- **Milestone 8 (launch polish) is done and merged to `main`:** deployment config, security headers (strict CSP), service worker, `docs/DEPLOY.md`, the fixes from two code reviews (accessibility items included), and a memory soak harness (`docs/SOAK.md`).
+- **Bonus sport built and merged:** baseball pitching, the sixth menu card.
+- **The soak test found a real leak, and it is fixed.** About 1 MB was retained per round played (three.js render objects for earlier rounds' meshes, kept alive through the session-long shared materials). After the fix every sport retains 0.06 to 0.18 MB per round of ordinary heap, geometry and texture counts are identical round after round, and the full 37 minute soak passes.
+- Final checks on `main`: typecheck clean, lint clean, 944 unit tests pass, `pnpm build` succeeds, 38 of 38 Playwright end-to-end tests pass, soak 9 of 9, plus the gate (4), UI (35) and deploy (8) suites under their own configs.
+- Nothing has been pushed. Nothing has been deployed. No account was logged in to.
 
 **The single most important thing to check first** is the tracking debug page with your real camera (checklist below). Everything else is built on the assumption that it works.
 
@@ -20,6 +22,9 @@ pnpm setup:assets     # once: copies MediaPipe WASM, downloads the three models 
 pnpm dev              # http://localhost:5173
 ```
 
+- The game: `http://localhost:5173/` (the device gate runs first; add `?skipGate=1` to bypass it while testing)
+- Watch a bot play a sport: `/?sport=bowling&source=synthetic&skipGate=1` (ids: `climbing`, `bowling`, `batting`, `archery`, `javelin`; add `&short=1` for a short round, `&timeScale=3` to fast-forward)
+- Play with keyboard and mouse: `/?input=debug&skipGate=1` (each sport's how-to screen lists its keys)
 - Tracking debug page: `http://localhost:5173/debug.html`
 - Without a camera: `debug.html?source=synthetic&script=wave` (other scripts: `idle`, `fists`, `bowl`, `throw`, `swing`, `run`, `hands`, `lost`, `all`)
 - Flags: `?renderer=webgl`, `?pose=full`, `?main=1` (main-thread tracking), `?skipGate=1`, `?input=debug`, `?timeScale=4` (synthetic and replay only), `?debug=1` (tunables panel)
@@ -37,17 +42,35 @@ Checks: `pnpm typecheck`, `pnpm lint`, `pnpm test`, `pnpm build`, then `pnpm tes
 - **1.6 / 2.8 Device gate** (`src/core/gate/`). Capability checks, then pose inference on a synthetic frame concurrently with a representative render load. Playwright confirms it runs, cleans up, and (correctly) fails headless software rendering.
 - **2.2 / 2.3 Recognizers and providers.** Arm raise, knee-lift cadence, throw (underarm and overarm, release stamped at the wrist-speed peak), two-handed swing, punch, squat, jump; `TrackedInput`; `DebugInput` (keyboard and mouse). 220 unit and integration tests against the synthetic player across five noise seeds. **All recognizer thresholds are tuned to synthetic motion and are placeholders.**
 - **2.7 (logic) Calibration session, 2.9 Scores, avatar animator, move queue.** Unit-tested.
+- **2.4 Game shell and 2.6 interface.** Boot, gate, title, camera intro, menu, how-to, calibration, play, pause when out of frame, results; hand cursor with hold-to-select, mouse and keyboard on every screen; HUD, corner mirror view, synthesised sounds, tunables panel. Verified by Playwright through the real UI with the fake camera, the bot and keyboard input, and by looking at screenshots of every screen at 720p and 1080p.
+- **Milestones 3 to 7, the five sports.** Each has pure, unit-tested rules and scoring (bowling's ten-frame scoring and Rapier pin physics run under Vitest), a bot, and Playwright rounds under the bot and under keyboard input. I looked at mid-round screenshots of each against the Field Day theme. Bot results in short rounds: climbing about 11 m; bowling 17 to 47 over two frames (139 in one full game); batting three hits of about 100 m; archery rings of 8 to 10; javelin 44 to 49 m.
+- **Two independent code reviews (opus)**, one of tracking and input, one of sports, shell and UI. The first found 8 defects (one high: a start/stop race that could leave the camera on), all fixed. The second found 14 (none high); fixes are in progress.
+- **8.2 Deployment.** `wrangler.jsonc`, `public/_headers`, service worker, `docs/DEPLOY.md` covering both DNS cases. Playwright confirms the whole game, the MediaPipe pipeline and Rapier run under the production CSP, that a cross-origin `fetch` is blocked, and that the shell loads offline after one visit. `wrangler deploy --dry-run` passes offline.
 
 ## Parked
 
-Nothing.
+Nothing was parked: no task failed three attempts. What is unfinished is unfinished because it needs you at a camera (see the checklists), not because it broke.
+
+## What I would do first tomorrow
+
+1. Run the milestone 1 checklist on the debug page. If tracking does not start, or runs far below 30 Hz, stop there and tell me the numbers and any error text: everything else depends on it.
+2. Record the clips listed in that checklist into `tests/recordings/`. They let the recognizers be retuned and tested against real motion without you standing at the camera each time.
+3. Play climbing (hands only, the simplest pipeline), then bowling (the riskiest gesture), and note what the checklists ask for.
+4. Decide the two open performance questions from the numbers: Pose lite or full, WebGPU or WebGL renderer.
 
 ## Things I noticed that need your eyes
 
-- In the headless screenshot the athlete's feet are hidden behind the shins from the default camera, so the coral feet are not visible from behind. Cosmetic; will be adjusted if time allows.
 - The synthetic bowling swing is a simplified diagonal sweep. A real underarm swing seen from the front reverses direction at the bottom, which the throw recognizer has not seen yet. Record real clips early (checklist below).
 - The throw recognizer suspends itself when the shoulders move faster than 3 sw/s, to stop sidesteps looking like throws. A real javelin run-up may trip this (`recognizerConfig.throw.maxBodySpeed`).
 - A fast arm raise can register as a throw. Sports ignore throws outside their throwing phase.
+- Fist detection at 2 m is the least proven signal. Bowling, archery, javelin and pitching each have a fallback that works without it (hold still, auto-nock, open-hand raise, default fastball), so no sport depends on it to be playable.
+- Javelin and pitching read the throw's height from how upward the wrist moves in the image, because the player throws into the screen. Both mappings were fitted to the synthetic player and will need retuning (`proxyLow`, `proxyHigh` in each sport's config).
+- Framing is weak in archery (the archer is mostly out of frame) and the catcher in pitching is small. The climber, bowler, batter and javelin thrower read well.
+- The gate's thresholds (25 Hz tracking, 50 fps rendering) are provisional and have only ever been evaluated on software rendering, where the gate correctly fails.
+- The headless tracker runs at about 3 Hz on software GL, so every automated check of the camera path proves only that the pipeline starts and delivers frames, nothing about speed or accuracy.
+- `docs/DEPLOY.md` flags a few Cloudflare details (dashboard menu names, rollback retention) as "check the current docs" rather than asserting them.
+- The CI workflow has never run, because nothing has been pushed.
+- Chunk sizes: the build warns about large chunks (three.js, and Rapier's 4.3 MB lazy chunk with inlined WASM). They load fine and are cached by the service worker; I did not split them.
 
 ## Decisions you might disagree with
 
@@ -91,6 +114,22 @@ The custom agent types in `.claude/agents/` could not be loaded mid-session, so 
 | 2.5 / 2.7 Animator, calibration, move queue | builder | sonnet |
 | 2.6 UI kit | builder | sonnet |
 | 2.9 Score store | helper | haiku |
+| Review fixes, batch 1 (tracking and input) | builder | sonnet |
+| Polish (banner, UI scaling, feet, gate canvas) | builder | sonnet |
+| 3 Rock climbing | builder | sonnet |
+| 4 Bowling | builder | sonnet |
+| 5 Batting | builder | sonnet |
+| 6 Archery | builder | sonnet |
+| 7 Javelin | builder | sonnet |
+| 8.2 / 2.10 Deployment, CSP, service worker | builder | sonnet |
+| Shared fixes found by the sports (batch 2) | builder | sonnet |
+| Review of sports, shell and UI | reviewer | opus |
+| Second-review fixes (batch 3), incl. 8.1 accessibility | builder | sonnet |
+| 8.3 Memory soak test | builder | sonnet |
+| Baseball pitching | builder | sonnet |
+| Renderer memory leak fix | builder | sonnet |
+
+The orchestrator (this session) wrote the docs, the type-only contract files, `playwright.sport.config.ts`, and a handful of one-line fix-ups (two config defaults, lint ignore patterns, wiring `?short=1`); everything else was written by the subagents above.
 
 ## Playtest checklists
 
@@ -186,4 +225,24 @@ Pick Javelin; stand 2 to 3 m back with room to run on the spot and throw. Withou
 7. **Distances.** The bot throws 44 to 49 m at about 5 m/s run speed. What do you get, and does a faster run-up clearly help?
 8. Known issues: the held javelin sits low at the hip rather than above the shoulder; distance numerals past about 60 m are too small to read.
 
-Playtest checklists for milestone 8 follow once it is complete.
+### Bonus: baseball pitching
+
+Pick Pitching; stand 2 to 2.5 m back, whole body in view. Without a camera: `/?sport=pitching&input=debug&skipGate=1` (E closes the fist for a fastball, otherwise a curve is picked after 0.7 s; hold and release T to throw; mouse x and y move the pitch) or the bot at `/?sport=pitching&source=synthetic&skipGate=1`.
+
+1. **Sign.** Hold your throwing hand still at your side with a fist: the meter should fill and say Fastball. Open hand: Curve. If the hand cannot be read it says so and picks a fastball after 2.5 s. Tunables: `signStillSpeed`, `signHoldMs`, `signFallbackMs`.
+2. **Aim.** Throw overarm at the lit tile. Release with your hand further out, then closer in: the pitch should move the same way. Throw higher and lower. The vertical aim is a proxy from how upward the wrist moves at release and **must be tuned on your recordings**: `proxyLow`, `proxyHigh`, `heightRange`; horizontal: `neutralLateral`, `aimGainX`; forgiveness: `assist`.
+3. **Speed cap.** Throw soft and hard: km/h rises, but the speed bonus stops growing at 95 km/h on purpose. Do not throw hard to test it.
+4. **Curve.** It should land lower and toward the glove side.
+5. **Pitch clock.** Wait 12 s without throwing: "Balk". A throw with the other hand is ignored.
+6. Known issues: the catcher is small and pale; the strike zone is drawn 2.8 times larger than the scored one so it can be read from the mound.
+
+### Milestone 8: launch polish
+
+1. **Menus by hand.** After Start and the camera prompt, raise a hand: a mitt cursor should appear. Hold it over a card for about a second to select. It should not select anything in the first 1.2 s of a new screen. Is the reach comfortable, and is the dwell time right?
+2. **Keyboard only.** Tab or arrow keys move focus, Enter selects, Escape goes back or quits a round. Try the whole flow without the mouse.
+3. **Camera indicator.** A "Camera on" pill with a "Turn camera off" button should be visible on every screen once the camera is running. Turning it off should stop the camera light and drop you to keyboard and mouse play.
+4. **Out of frame.** During a round, walk out of view: the game should pause with a large message and resume when you return.
+5. **Calibration.** Before each camera round: step into the outline, raise your throwing hand, hold your arms out. Try raising the left hand: the sport should then be left-handed. For climbing and archery, try the "Sitting" toggle.
+6. **Left-handed with keyboard and mouse.** The how-to screen has a "Throwing hand" toggle; `?hand=left` sets the default.
+7. **Device gate.** Open `/` without `?skipGate=1`. It should pass on your machine within a few seconds; write down the numbers behind "Details" if it fails. Thresholds (25 Hz tracking, 50 fps rendering) are provisional.
+8. **Deployment.** Follow `docs/DEPLOY.md`. First find out where the DNS for `allenzheng.com` lives (`nslookup -type=NS allenzheng.com`); the guide covers both cases. `pnpm deploy:dry` checks everything without touching your account.

@@ -53,6 +53,11 @@ export interface RoundHooks {
   ending?(summary: RoundSummary): void;
   /** Call ctx.finish here. Fires exactly once. */
   finish?(summary: RoundSummary): void;
+  /**
+   * The game clock jumped by `by` ms (the round was paused) and the round moved its own timeline.
+   * The sport shifts any contact time it keeps itself.
+   */
+  shifted?(by: number): void;
 }
 
 export type RoundPhase = 'idle' | 'pitch' | 'ending' | 'done';
@@ -321,7 +326,12 @@ export class BattingRound {
       p.arrivalMs += by;
     }
     if (this.swing !== null && !this.resolved) this.swing.t += by;
-    const r = this.pendingResult;
+    // A hit ball is placed by the time since contact, so a resolved hit moves too: otherwise the
+    // ball jumps to the end of its flight on resume. The judgement object is shared with the
+    // result, so it is shifted once, here.
+    const r = this.pendingResult ?? this.result;
     if (r !== null) r.contactMs += by;
+    if (this.judgement !== null) this.judgement.contactMs += by;
+    this.hooks.shifted?.(by);
   }
 }

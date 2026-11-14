@@ -9,3 +9,4 @@ Claude outputs
 .claude
 tests/recordings
 *.md
+e2e-soak/results

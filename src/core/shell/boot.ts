@@ -1,6 +1,6 @@
 import { DebugInput } from '../../input/debug/DebugInput';
 import { TrackedInput } from '../../input/TrackedInput';
-import type { Calibration, InputProvider } from '../../input/types';
+import type { Calibration, InputProvider, Side } from '../../input/types';
 import { createRenderer } from '../../render/renderer';
 import { createFieldDayScene } from '../../render/style/scene';
 import { SPORTS, findSport } from '../../sports/registry';
@@ -25,6 +25,7 @@ import type { SportEntry, SportMeta, Stance } from '../sport';
 import { IdleInput } from './IdleInput';
 import { SportHost } from './SportHost';
 import { createHook } from './hook';
+import { recordRound } from './recordRound';
 import type { GameHook } from './hook';
 
 const POSE_ONLY: TrackerNeeds = { pose: true, handCrops: false, fullFrameHands: false };
@@ -32,6 +33,8 @@ const HANDS_ONLY: TrackerNeeds = { pose: false, handCrops: false, fullFrameHands
 const BRIGHTNESS_EVERY_MS = 500;
 /** How long the calibration screen keeps showing "All set". */
 const CALIBRATION_DONE_MS = 600;
+/** Shown on the menu after a sport threw. */
+const ROUND_BROKE_NOTICE = 'That round broke. Pick a sport to try again.';
 
 function message(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -60,8 +63,13 @@ class Shell {
   private perFrame: ((nowMs: number) => void) | null = null;
   /** Bumped when the flow restarts (camera switched off); older chains stop. */
   private epoch = 0;
+  /** One-shot message for the next menu (a round broke). */
+  private notice: string | null = null;
+  /** Throwing hand for keyboard and mouse play; remembered for the session. */
+  private hand: Side;
 
   constructor(private readonly flags: Flags) {
+    this.hand = flags.hand ?? 'right';
     this.hook = createHook(flags);
     window.__game = this.hook;
   }
@@ -127,7 +135,7 @@ class Shell {
       if (entry === null) throw new Error(`Unknown sport "${flags.sport}".`);
       await this.attachInput(await this.makeInput());
       const epoch = this.epoch;
-      await this.playSport(entry, defaultCalibration(entry.meta.stance), epoch);
+      await this.playSport(entry, defaultCalibration(entry.meta.stance, this.hand), epoch);
       if (epoch === this.epoch) await this.menuLoop(epoch);
       return;
     }
@@ -154,7 +162,10 @@ class Shell {
 
   // ---- per frame ----
 
-  private renderer!: { drawCalls(): number };
+  private renderer!: {
+    drawCalls(): number;
+    memory(): { geometries: number; textures: number };
+  };
 
   private onFrame(dt: number, now: number, alpha: number): void {
     const host = this.host;
@@ -162,6 +173,9 @@ class Shell {
     const hook = this.hook;
     hook.frames++;
     hook.drawCalls = this.renderer.drawCalls();
+    const mem = this.renderer.memory();
+    hook.rendererMemory.geometries = mem.geometries;
+    hook.rendererMemory.textures = mem.textures;
     hook.sport = host.sport;
     const p = host.phase;
     if (p === 'playing' || p === 'paused' || p === 'loading') hook.phase = p;
@@ -216,8 +230,10 @@ class Shell {
   /** The one-click camera-off control: stop tracking, keyboard and mouse from here, back to the menu. */
   private onCameraOff(): void {
     const epoch = ++this.epoch;
+    // Tears down a loading, running, paused or finished round. A pending calibration is NOT
+    // cancelled by clearing perFrame: its next tick sees the new epoch and resolves, so the old
+    // menu chain unwinds instead of leaking.
     this.host.quit();
-    this.perFrame = null;
     void (async () => {
       await this.attachInput(await this.startDebugInput());
       await this.menuLoop(epoch);
@@ -247,13 +263,26 @@ class Shell {
       const bests = await this.bests(metas);
       this.hook.phase = 'menu';
       this.hook.sportId = null;
-      const id = await this.ui.showMenu(metas, bests);
+      const notice = this.notice ?? undefined;
+      this.notice = null;
+      const id = await this.ui.showMenu(metas, bests, notice);
       if (epoch !== this.epoch) return;
       const entry = entries.find((e) => e.meta.id === id);
       if (entry === undefined) continue;
 
       this.hook.phase = 'howto';
-      const choice = await this.ui.showHowTo(entry.meta, this.input.source === null);
+      const choice = await this.ui.showHowTo(
+        entry.meta,
+        this.input.source === null,
+        this.input.source?.kind === 'camera'
+          ? undefined
+          : {
+              handedness: this.hand,
+              onHandedness: (side) => {
+                this.hand = side;
+              },
+            },
+      );
       if (epoch !== this.epoch) return;
       if (choice === 'back') continue;
 
@@ -267,18 +296,25 @@ class Shell {
   private async calibrate(meta: SportMeta, epoch: number): Promise<Calibration> {
     const input = this.input;
     const video = input.source?.kind === 'camera' ? input.source.video : null;
-    if (input.source?.kind !== 'camera') return defaultCalibration(meta.stance);
+    if (input.source?.kind !== 'camera') return defaultCalibration(meta.stance, this.hand);
 
     await input.setNeeds(calibrationNeeds(meta.stance));
     if (epoch !== this.epoch) return defaultCalibration(meta.stance);
     this.hook.phase = 'calibration';
-    const session = new CalibrationSession(meta.stance);
+    let session = new CalibrationSession(meta.stance);
     const screen = this.ui.showCalibration(meta);
+    if (meta.seatedOk) {
+      screen.onSeated?.((seated) => {
+        // The seated flag is fixed at construction: start the measurement again with it.
+        if (!session.done) session = new CalibrationSession(meta.stance, { seated });
+      });
+    }
     const scratch = document.createElement('canvas');
     scratch.width = 32;
     scratch.height = 18;
     const context = scratch.getContext('2d', { willReadFrequently: true });
     let skipped = false;
+    let pending: ((nowMs: number) => void) | null = null;
     void screen.skipped.then(() => {
       skipped = true;
     });
@@ -286,7 +322,7 @@ class Shell {
     const calibration = await new Promise<Calibration>((resolve) => {
       let lastBrightness = Number.NEGATIVE_INFINITY;
       let doneAt = -1;
-      this.perFrame = (now: number): void => {
+      const tick = (now: number): void => {
         if (epoch !== this.epoch) {
           resolve(defaultCalibration(meta.stance));
           return;
@@ -306,8 +342,10 @@ class Shell {
           resolve(session.result() ?? defaultCalibration(meta.stance));
         }
       };
+      this.perFrame = tick;
+      pending = tick;
     });
-    this.perFrame = null;
+    if (this.perFrame === pending) this.perFrame = null;
     screen.close();
     return calibration;
   }
@@ -328,20 +366,15 @@ class Shell {
       hook.isBest = null;
       const result = await this.host.play(entry, calibration);
       if (epoch !== this.epoch) return;
-      if (result === null) break;
-      const { isBest, best } = await this.scores.add(
-        {
-          sportId: meta.id,
-          score: result.score,
-          at: new Date().toISOString(),
-          detail: result.detail,
-        },
-        meta.score.higherIsBetter,
-      );
+      if (result === null) {
+        if (this.host.lastRoundFailed) this.notice = ROUND_BROKE_NOTICE;
+        break;
+      }
+      const { isBest, best } = await recordRound(this.scores, meta, result);
       hook.result = result;
       hook.isBest = isBest;
       hook.phase = 'results';
-      const next = await this.ui.showResults(meta, result, { isBest, best: best.score });
+      const next = await this.ui.showResults(meta, result, { isBest, best });
       if (epoch !== this.epoch) return;
       if (next === 'menu') break;
     }

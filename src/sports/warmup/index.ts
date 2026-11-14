@@ -90,6 +90,8 @@ export const createWarmup: SportFactory = (ctx: SportContext): Sport => {
             headline: won ? `${score.toFixed(1)} s` : "Time's up",
             lines: [`${state.count} of ${cfg.fistsToWin} fists`],
             detail: { fists: state.count, seconds: score },
+            // A timed-out round is not a time to beat (lower is better).
+            saveScore: won,
           });
         }
       }

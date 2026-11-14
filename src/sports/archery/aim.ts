@@ -92,10 +92,15 @@ export function swayOffset(t: number, amp: number, phases: ArrayLike<number>, ou
 }
 
 /**
- * 2D distance between the two wrists in shoulder widths, from pose landmarks 15 and 16 with aspect
- * correction. Returns -1 when the wrists are not both visible or the shoulder width is unknown.
+ * DOCUMENTED EXCEPTION to "sports never read raw landmarks" (docs/DECISIONS.md #31): the one place
+ * archery touches the pose array. It is the 2D distance between the two wrists in shoulder widths,
+ * from landmarks 15 and 16 with aspect correction. The same number cannot come from
+ * `state.arms.*.wristX/wristY` (each relative to its own shoulder) without assuming level
+ * shoulders, and a raised bow arm tilts them; the error would be about the tilt angle in radians,
+ * well over 0.05 sw. Returns -1 when the wrists are not both visible or the shoulder width is
+ * unknown.
  */
-export function wristDistance(
+export function wristDistanceRawException(
   pose: Float32Array,
   aspect: number,
   shoulderWidth: number,

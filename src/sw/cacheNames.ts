@@ -26,6 +26,26 @@ export function staleCaches(allNames: readonly string[], buildId: string): strin
   return allNames.filter((n) => n.startsWith(CACHE_PREFIX) && !keep.has(n));
 }
 
+const WASM_FOLDER = /^\/wasm\/tasks-vision-([^/]+)\//;
+
+/**
+ * Entries of the persistent cache to delete on activate: MediaPipe WASM files from a version
+ * folder (`/wasm/tasks-vision-<version>/`) other than the current one. Models and anything that
+ * does not look like a versioned WASM path are kept. `urls` are absolute URLs or paths.
+ */
+export function staleWasmEntries(urls: readonly string[], currentVersion: string): string[] {
+  return urls.filter((u) => {
+    let pathname: string;
+    try {
+      pathname = new URL(u, 'https://x.invalid').pathname;
+    } catch {
+      return false;
+    }
+    const m = WASM_FOLDER.exec(pathname);
+    return m !== null && m[1] !== currentVersion;
+  });
+}
+
 /** Short stable id from a list of file names (FNV-1a, base 36). */
 export function buildIdFromFiles(files: readonly string[]): string {
   let h = 0x811c9dc5;

@@ -1,4 +1,5 @@
 import '../styles/base.css';
+import './harness.css';
 import { createUi } from './createUi';
 import { FAKE_BESTS, FAKE_GATE_REPORT, FAKE_RESULT, FAKE_SPORTS } from './harness/fakeData';
 import { createFakeInput } from './harness/fakeInput';
@@ -63,9 +64,18 @@ function track(p: Promise<unknown>): void {
 const sportIndex = Number(params.get('sport') ?? 1);
 const meta = FAKE_SPORTS[sportIndex] ?? FAKE_SPORTS[1]!;
 
+// ?cam=1 turns the camera indicator on, as it is while the camera runs behind a menu.
+if (params.has('cam')) ui.setCameraActive(true);
+
 switch (screen) {
   case 'loading':
-    ui.showLoading('Loading the tracker...', 0.6);
+    if (params.has('cancel')) {
+      ui.showLoading('Bowling', undefined, () => {
+        hub.resolved = 'cancelled';
+      });
+    } else {
+      ui.showLoading('Loading the tracker...', 0.6);
+    }
     break;
   case 'gatefail':
     ui.showGateFail(FAKE_GATE_REPORT);
@@ -80,14 +90,36 @@ switch (screen) {
     track(ui.showCameraError((params.get('code') ?? 'camera-denied') as TrackingErrorCode));
     break;
   case 'menu':
-    track(ui.showMenu(sports, FAKE_BESTS));
+    track(
+      ui.showMenu(
+        sports,
+        FAKE_BESTS,
+        params.has('notice') ? 'That round broke. Pick a sport to try again.' : undefined,
+      ),
+    );
     break;
   case 'howto':
-    track(ui.showHowTo(meta, params.has('debugkeys')));
+    track(
+      ui.showHowTo(
+        meta,
+        params.has('debugkeys'),
+        params.has('toggle')
+          ? {
+              handedness: params.get('toggle') === 'left' ? 'left' : 'right',
+              onHandedness: (side) => {
+                hub.resolved = `hand:${side}`;
+              },
+            }
+          : undefined,
+      ),
+    );
     break;
   case 'calibration': {
     const cal = ui.showCalibration(meta);
     ui.setCameraActive(true);
+    cal.onSeated?.((seated) => {
+      hub.resolved = `seated:${seated}`;
+    });
     void cal.skipped.then(() => {
       hub.resolved = 'skipped';
     });

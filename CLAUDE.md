@@ -19,7 +19,7 @@ pnpm test:e2e         # Playwright, fake camera, against `pnpm preview` (run pnp
 
 `pnpm typecheck`, `pnpm lint` and `pnpm test` must pass before any commit. A milestone is done only when those plus `pnpm build` and `pnpm test:e2e` pass. Never weaken or delete a test to get there.
 
-Query flags: `?input=debug` (keyboard and mouse instead of camera), `?source=synthetic&script=<name>` / `?source=replay&clip=<name>` (landmark source), `?renderer=webgl`, `?pose=full`, `?skipGate=1`, `?timeScale=<n>` (synthetic and replay only), `?debug=1` (tunables panel).
+Query flags: `?input=debug` (keyboard and mouse instead of camera), `?source=synthetic&script=<name>` / `?source=replay&clip=<name>` (landmark source), `?renderer=webgl`, `?pose=full`, `?skipGate=1`, `?timeScale=<n>` (synthetic and replay only), `?debug=1` (tunables panel), `?hand=left|right` (default throwing hand for keyboard and mouse play).
 
 ## Hard constraints
 

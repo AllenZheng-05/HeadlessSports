@@ -24,6 +24,11 @@ describe('palette', () => {
       expect(design, key).toContain(hex(ACCENTS[key]));
     }
   });
+  it('gives every venue its own accent', () => {
+    const values = Object.values(ACCENTS);
+    expect(new Set(values).size).toBe(values.length);
+    expect(ACCENTS.pitching).toBe(0x5fc1b0);
+  });
   it('has the exact brief values', () => {
     expect(PALETTE.sky).toBe(0xbfe3f7);
     expect(PALETTE.whistle).toBe(0xff7a59);

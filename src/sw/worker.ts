@@ -1,10 +1,17 @@
 // Service worker source, built to /sw.js by the plugin in plugin.ts.
 // It must not import app code or three.js.
-import { BIG_CACHE, cacheForPath, staleCaches, versionedCacheName } from './cacheNames';
+import {
+  BIG_CACHE,
+  cacheForPath,
+  staleCaches,
+  staleWasmEntries,
+  versionedCacheName,
+} from './cacheNames';
 import { NAVIGATION_TIMEOUT_MS, decideStrategy, isCacheable } from './routing';
 
 declare const __BUILD_ID__: string;
 declare const __PRECACHE__: string[];
+declare const __WASM_VERSION__: string;
 
 interface ExtendableEventLike extends Event {
   waitUntil(p: Promise<unknown>): void;
@@ -43,6 +50,10 @@ sw.addEventListener('activate', (e: ExtendableEventLike) => {
   e.waitUntil(
     (async () => {
       for (const name of staleCaches(await caches.keys(), buildId)) await caches.delete(name);
+      // The big-file cache outlives deploys; drop WASM from MediaPipe versions no longer in use.
+      const big = await caches.open(BIG_CACHE);
+      const urls = (await big.keys()).map((r) => r.url);
+      for (const url of staleWasmEntries(urls, __WASM_VERSION__)) await big.delete(url);
       await sw.clients.claim();
     })(),
   );

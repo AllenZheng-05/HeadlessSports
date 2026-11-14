@@ -197,5 +197,5 @@ export function buildResults(
   menu.addEventListener('click', () => resolve('menu'));
   actions.append(again, menu);
   card.append(actions);
-  return { el, primary: again, onEscape: () => resolve('menu') };
+  return { el, primary: again, cameraInCard: true, onEscape: () => resolve('menu') };
 }

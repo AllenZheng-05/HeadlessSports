@@ -26,7 +26,7 @@ import { buildHowTo, buildMenu } from './screens/menu';
 import { buildPlaying, buildResults, createPause } from './screens/playing';
 import type { ScreenHost, ScreenSpec } from './screens/shared';
 import { createTunables } from './tunablesPanel';
-import type { CalibrationScreen, ResultsOutcome, Ui } from './types';
+import type { CalibrationScreen, HowToOptions, ResultsOutcome, Ui } from './types';
 
 export interface UiOptions {
   /** Show the tunables panel. */
@@ -102,11 +102,25 @@ export function createUi(root: HTMLElement, options: UiOptions = {}): Ui {
     mirror.setGuide(null);
     container.append(mirror.el);
     container.append(camera.el);
-    camera.el.classList.remove('inline');
+    camera.el.classList.remove('inline', 'corner', 'in-card');
     hud.setVisible(false);
     camera.setVisible(false);
     buttons = [];
     cursor.setButtons(buttons);
+  }
+
+  /**
+   * The camera-on indicator and its off button show on every screen while the camera is active
+   * (the camera runs on the menu, how-to and results screens too). Screens that do not lay it out
+   * themselves (play, calibration) get it in the top-left corner.
+   */
+  function syncCamera(): void {
+    const own = current?.camera === true;
+    const card = current?.cameraInCard === true ? current.el.querySelector('.card') : null;
+    if (card !== null && camera.el.parentElement !== card) card.append(camera.el);
+    camera.el.classList.toggle('in-card', card !== null);
+    camera.el.classList.toggle('corner', !own && card === null);
+    camera.setVisible(own || (current !== null && camera.isActive));
   }
 
   function mount(spec: ScreenSpec): void {
@@ -114,9 +128,11 @@ export function createUi(root: HTMLElement, options: UiOptions = {}): Ui {
     pause.show(null);
     current = spec;
     layer.append(spec.el);
-    camera.setVisible(spec.camera === true);
     spec.onMount?.();
+    // Collected before the camera indicator moves into a card: the hand cursor must not be able
+    // to switch the camera off by dwelling on it.
     buttons = Array.from(spec.el.querySelectorAll<HTMLElement>('[data-select]'));
+    syncCamera();
     cursor.setButtons(spec.noCursor ? [] : buttons);
     refreshTimer = setTimeout(() => cursor.refresh(), REFRESH_AFTER_ENTRANCE_MS);
     const focus = spec.primary ?? buttons[0];
@@ -201,12 +217,12 @@ export function createUi(root: HTMLElement, options: UiOptions = {}): Ui {
       }
     },
 
-    showLoading(text: string, progress?: number): void {
-      if (loading && current === loading) {
+    showLoading(text: string, progress?: number, onCancel?: () => void): void {
+      if (loading && current === loading && loading.cancellable === (onCancel !== undefined)) {
         loading.update(text, progress);
         return;
       }
-      loading = buildLoading(text, progress);
+      loading = buildLoading(text, progress, onCancel);
       mount(loading);
     },
 
@@ -227,12 +243,22 @@ export function createUi(root: HTMLElement, options: UiOptions = {}): Ui {
       return prompt<'retry' | 'debug'>((resolve) => buildCameraError(code, browser, resolve));
     },
 
-    showMenu(sports: readonly SportMeta[], bests: ReadonlyMap<string, number>): Promise<string> {
-      return prompt<string>((resolve) => buildMenu(sports, bests, resolve));
+    showMenu(
+      sports: readonly SportMeta[],
+      bests: ReadonlyMap<string, number>,
+      notice?: string,
+    ): Promise<string> {
+      return prompt<string>((resolve) => buildMenu(sports, bests, resolve, notice));
     },
 
-    showHowTo(meta: SportMeta, debugInput: boolean): Promise<'start' | 'back'> {
-      return prompt<'start' | 'back'>((resolve) => buildHowTo(meta, debugInput, resolve, host));
+    showHowTo(
+      meta: SportMeta,
+      debugInput: boolean,
+      options?: HowToOptions,
+    ): Promise<'start' | 'back'> {
+      return prompt<'start' | 'back'>((resolve) =>
+        buildHowTo(meta, debugInput, resolve, host, options),
+      );
     },
 
     showCalibration(meta: SportMeta): CalibrationScreen {
@@ -276,6 +302,7 @@ export function createUi(root: HTMLElement, options: UiOptions = {}): Ui {
 
     setCameraActive(active: boolean): void {
       camera.setActive(active);
+      syncCamera();
     },
 
     dispose(): void {

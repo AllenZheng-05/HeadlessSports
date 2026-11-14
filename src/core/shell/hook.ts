@@ -27,6 +27,8 @@ export interface GameHook {
   frames: number;
   inputKind: 'camera' | 'synthetic' | 'replay' | 'debug' | null;
   drawCalls: number;
+  /** renderer.info.memory, assigned in place each frame. */
+  rendererMemory: { geometries: number; textures: number };
   error: string | null;
   /** For Playwright to call press / release / moveTo. */
   debugInput: DebugInput | null;
@@ -50,6 +52,7 @@ export function createHook(flags: Flags): GameHook {
     frames: 0,
     inputKind: null,
     drawCalls: 0,
+    rendererMemory: { geometries: 0, textures: 0 },
     error: null,
     debugInput: null,
     sport: null,

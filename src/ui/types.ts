@@ -32,7 +32,17 @@ export interface CalibrationScreen {
   set(view: CalibrationView): void;
   /** Resolves if the player presses "Skip" (mouse or keyboard only). */
   readonly skipped: Promise<void>;
+  /**
+   * Registers the handler for the "I'm sitting down" toggle (shown only when the sport allows
+   * sitting). Called with the new state each time the player flips it.
+   */
+  onSeated?(handler: (seated: boolean) => void): void;
   close(): void;
+}
+
+export interface HowToOptions {
+  handedness: Side;
+  onHandedness(side: Side): void;
 }
 
 export interface ResultsOutcome {
@@ -58,8 +68,11 @@ export interface Ui {
    */
   setInput(input: InputProvider | null): void;
 
-  /** Full-screen loading state with optional progress 0..1. */
-  showLoading(text: string, progress?: number): void;
+  /**
+   * Full-screen loading state with optional progress 0..1. With `onCancel` the screen shows a
+   * "Back" button (and Escape) that calls it, so a stalled sport load can be abandoned.
+   */
+  showLoading(text: string, progress?: number, onCancel?: () => void): void;
 
   /** Terminal screen: this device cannot run the game. Measured numbers sit behind "details". */
   showGateFail(report: GateReport): void;
@@ -73,16 +86,30 @@ export interface Ui {
   /** Camera could not start. Per-browser instructions for 'camera-denied'. */
   showCameraError(code: TrackingErrorCode): Promise<'retry' | 'debug'>;
 
-  /** Sport picker. Resolves with the chosen sport id. */
-  showMenu(sports: readonly SportMeta[], bests: ReadonlyMap<string, number>): Promise<string>;
+  /**
+   * Sport picker. Resolves with the chosen sport id. `notice` is a short message shown for a few
+   * seconds (an aria-live region), for example when the last round broke.
+   */
+  showMenu(
+    sports: readonly SportMeta[],
+    bests: ReadonlyMap<string, number>,
+    notice?: string,
+  ): Promise<string>;
 
-  /** How-to card for a sport, with the safety reminder when `meta.needsSpace`. */
-  showHowTo(meta: SportMeta, debugInput: boolean): Promise<'start' | 'back'>;
+  /**
+   * How-to card for a sport, with the safety reminder when `meta.needsSpace`. With `options`
+   * (non-camera input) the card shows a "Throwing hand: Right / Left" toggle.
+   */
+  showHowTo(
+    meta: SportMeta,
+    debugInput: boolean,
+    options?: HowToOptions,
+  ): Promise<'start' | 'back'>;
 
   /** Calibration guide (silhouette for the sport's stance) over the mirrored camera view. */
   showCalibration(meta: SportMeta): CalibrationScreen;
 
-  /** Hide every screen; show the HUD, the corner mirror and the camera-on indicator. */
+  /** Hide every screen; show the HUD and the corner mirror. The camera indicator shows on every screen while the camera is active. */
   showPlaying(meta: SportMeta): void;
 
   /** Pause overlay with a large arrow or message for the given problem. Null hides it. */

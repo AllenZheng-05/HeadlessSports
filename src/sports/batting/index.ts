@@ -159,7 +159,7 @@ export const createBatting: SportFactory = (ctx: SportContext): Sport & BattingP
 
   // ---- input: queue the events, apply them in fixedUpdate with the game clock ----
   const push = (kind: number, t: number, speed: number, height: number): void => {
-    if (queue.n >= MAX_QUEUED) return;
+    if (ctx.paused || queue.n >= MAX_QUEUED) return;
     const i = queue.n++;
     queue.kind[i] = kind;
     queue.t[i] = t;
@@ -295,6 +295,10 @@ export const createBatting: SportFactory = (ctx: SportContext): Sport & BattingP
         resolved: onResolved,
         ending: onEnding,
         finish: onFinish,
+        shifted: (by) => {
+          batContactMs += by;
+          if (celebrateAtMs > 0) celebrateAtMs += by;
+        },
       },
     });
 

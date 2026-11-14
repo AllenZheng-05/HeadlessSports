@@ -125,7 +125,8 @@ export const createJavelin: SportFactory = (ctx: SportContext): JavelinSport => 
       case 'ArmLowered':
       case 'FistClosed':
       case 'ThrowReleased':
-        pending.push(e);
+        // Gestures made while the round is paused (player out of frame) do not count.
+        if (!ctx.paused) pending.push(e);
         break;
       case 'Step':
         if (game.phase === 'run' && started) {

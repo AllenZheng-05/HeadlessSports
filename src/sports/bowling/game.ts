@@ -36,6 +36,22 @@ export interface RollOutcome {
   total: number;
 }
 
+/** The big banner for a counted ball. */
+export function rollBanner(o: Pick<RollOutcome, 'kind' | 'pins'>): string {
+  switch (o.kind) {
+    case 'strike':
+      return 'Strike!';
+    case 'spare':
+      return 'Spare!';
+    case 'gutter':
+      return 'Gutter';
+    case 'miss':
+      return 'Miss';
+    default:
+      return o.pins === 1 ? '1 pin' : `${o.pins} pins`;
+  }
+}
+
 export interface GameEvents {
   phase?(next: BowlPhase, prev: BowlPhase): void;
   pickedUp?(): void;
@@ -216,7 +232,8 @@ export class BowlingGame {
     this.rolls.push(pins);
     let kind: RollKind = 'count';
     if (pins === before.pinsUp && pins > 0) {
-      if (before.pinsUp === 10) {
+      // A strike is clearing a fresh rack. Clearing all ten after a 0 on the first ball is a spare.
+      if (before.freshRack && before.pinsUp === 10) {
         kind = 'strike';
         this.strikes++;
       } else {

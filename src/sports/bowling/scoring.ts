@@ -109,8 +109,9 @@ export function runningTotal(rolls: readonly number[], frames = 10): number {
   return t;
 }
 
-function symbol(roll: number, up: number): string {
-  if (roll === up) return up === PINS ? 'X' : '/';
+/** `fresh`: the ball was thrown at a fresh rack, so clearing it is a strike, not a spare. */
+function symbol(roll: number, up: number, fresh: boolean): string {
+  if (roll === up) return fresh ? 'X' : '/';
   return roll === 0 ? '-' : String(roll);
 }
 
@@ -122,16 +123,19 @@ export function frameMarks(rolls: readonly number[], frames = 10): string[] {
     const last = f === frames - 1;
     let marks = '';
     let up = PINS;
+    let fresh = true;
     let thrown = 0;
     while (i < rolls.length && thrown < (last ? 3 : 2)) {
       const roll = rolls[i] as number;
-      marks += symbol(roll, up);
+      marks += symbol(roll, up, fresh);
       i++;
       thrown++;
       up -= roll;
+      fresh = false;
       if (up === 0) {
         if (!last) break;
         up = PINS;
+        fresh = true;
       }
     }
     out.push(marks);

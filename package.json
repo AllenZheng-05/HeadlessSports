@@ -18,6 +18,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
+    "test:soak": "vite build --outDir dist-soak && playwright test --config playwright.soak.config.ts",
     "check:dist": "node scripts/check-dist.mjs",
     "deploy:dry": "pnpm setup:assets && pnpm build && pnpm check:dist && wrangler deploy --dry-run",
     "deploy": "pnpm setup:assets && pnpm build && pnpm check:dist && wrangler deploy"

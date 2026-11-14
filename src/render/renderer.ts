@@ -12,6 +12,8 @@ export interface RendererHandle {
   render(scene: THREE.Scene, camera: THREE.Camera): void;
   /** Draw calls in the last rendered frame. */
   drawCalls(): number;
+  /** three's own resource counters (live object, read only). */
+  memory(): { geometries: number; textures: number };
   dispose(): void;
 }
 
@@ -63,6 +65,9 @@ export async function createRenderer(
     },
     drawCalls() {
       return renderer.info.render.drawCalls;
+    },
+    memory() {
+      return renderer.info.memory;
     },
     dispose() {
       renderer.dispose();

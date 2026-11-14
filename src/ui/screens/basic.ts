@@ -9,9 +9,15 @@ import { logoWithWordmark, screenShell, wordmark } from './shared';
 
 export interface LoadingScreen extends ScreenSpec {
   update(text: string, progress?: number): void;
+  /** True when the screen has a Back button (a sport is loading). */
+  readonly cancellable: boolean;
 }
 
-export function buildLoading(text: string, progress?: number): LoadingScreen {
+export function buildLoading(
+  text: string,
+  progress?: number,
+  onCancel?: () => void,
+): LoadingScreen {
   const { el, card } = screenShell('loading', 'card-loading');
   el.setAttribute('aria-busy', 'true');
   const label = h('p', 'loading-text', text);
@@ -39,7 +45,12 @@ export function buildLoading(text: string, progress?: number): LoadingScreen {
     }
   };
   update(text, progress);
-  return { el, update };
+  if (onCancel === undefined) return { el, update, cancellable: false };
+  // A stalled sport download or WASM start must not trap the player.
+  const back = selectButton('Back', 'btn btn-secondary loading-back');
+  back.addEventListener('click', () => onCancel());
+  card.append(back);
+  return { el, update, cancellable: true, primary: back, onEscape: onCancel };
 }
 
 const FAILURE_TEXT: Record<GateFailure, string> = {

@@ -27,6 +27,8 @@ export interface Flags {
   seed: number;
   /** `?short=1`: sports play a shortened round (for headless checks and quick tries). */
   short: boolean;
+  /** `?hand=left|right`: default throwing hand for keyboard and mouse play. Null when absent. */
+  hand: 'left' | 'right' | null;
 }
 
 export const TIME_SCALE_MIN = 0.1;
@@ -54,6 +56,8 @@ export function parseFlags(search: string | URLSearchParams): Flags {
   const seedRaw = params.get('seed');
   const seedNum = seedRaw === null || seedRaw === '' ? NaN : Number(seedRaw);
 
+  const handRaw = params.get('hand');
+
   return {
     input: params.get('input') === 'debug' ? 'debug' : 'camera',
     source,
@@ -68,5 +72,6 @@ export function parseFlags(search: string | URLSearchParams): Flags {
     sport: text(params, 'sport'),
     seed: Number.isFinite(seedNum) ? seedNum : 1,
     short: params.get('short') === '1',
+    hand: handRaw === 'left' || handRaw === 'right' ? handRaw : null,
   };
 }
