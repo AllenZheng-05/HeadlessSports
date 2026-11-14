@@ -9,6 +9,8 @@ export interface ReleaseConfig {
   neutralLateral: number;
   aimGain: number;
   maxAngle: number;
+  aimShoulderHalf: number;
+  aimSmooth: number;
   hookGain: number;
   maxHook: number;
   lateralScale: number;
@@ -50,14 +52,32 @@ export function ballSpeedFor(speed: number, cfg: ReleaseConfig): number {
   return cfg.minBallSpeed + (cfg.maxBallSpeed - cfg.minBallSpeed) * power;
 }
 
+/** Wrist x from the same-side shoulder to wrist x from the shoulder midline (sw, screen right). */
+export function lateralFromWrist(wristX: number, hand: Side, cfg: ReleaseConfig): number {
+  return wristX + sideSign(hand) * cfg.aimShoulderHalf;
+}
+
+/** Launch angle for a wrist lateral (sw from the midline). The indicator and the release share it. */
+export function aimAngleFor(lateral: number, hand: Side, cfg: ReleaseConfig): number {
+  return clamp(
+    (lateral - sideSign(hand) * cfg.neutralLateral) * cfg.aimGain,
+    -cfg.maxAngle,
+    cfg.maxAngle,
+  );
+}
+
+/** Exponential smoothing of the live aim lateral; frame-rate independent. */
+export function smoothAim(current: number, target: number, dt: number, cfg: ReleaseConfig): number {
+  return current + (target - current) * (1 - Math.exp(-cfg.aimSmooth * dt));
+}
+
 /** Map a ThrowReleased event to a launch. Never reads depth or `poseWorld`. */
 export function mapRelease(input: ReleaseInput, cfg: ReleaseConfig): Release {
   const span = cfg.speedCeil - cfg.speedFloor;
   const power = span > 0 ? clamp((input.speed - cfg.speedFloor) / span, 0, 1) : 1;
-  const aimOffset = input.lateral - sideSign(input.hand) * cfg.neutralLateral;
   return {
     ballSpeed: cfg.minBallSpeed + (cfg.maxBallSpeed - cfg.minBallSpeed) * power,
-    angle: clamp(aimOffset * cfg.aimGain, -cfg.maxAngle, cfg.maxAngle),
+    angle: aimAngleFor(input.lateral, input.hand, cfg),
     hook: clamp(input.curvature * cfg.hookGain, -cfg.maxHook, cfg.maxHook),
     power,
   };

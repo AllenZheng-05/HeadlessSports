@@ -18,6 +18,8 @@ interface BowlingProbe {
   rolls: number[];
   contacted: boolean;
   releases: number;
+  aimAngle: number;
+  lastAngle: number | null;
 }
 
 function watch(page: Page): string[] {
@@ -56,7 +58,8 @@ function probe(page: Page): Promise<BowlingProbe | null> {
       pinsDown: number;
       rolls: number[];
       contacted: boolean;
-      releases: unknown[];
+      releases: { angle: number }[];
+      aimAngle: number;
     } | null;
     if (!s) return null;
     return {
@@ -67,6 +70,11 @@ function probe(page: Page): Promise<BowlingProbe | null> {
       rolls: [...s.rolls],
       contacted: s.contacted,
       releases: s.releases.length,
+      aimAngle: s.aimAngle,
+      lastAngle:
+        s.releases.length > 0
+          ? (s.releases[s.releases.length - 1] as { angle: number }).angle
+          : null,
     };
   });
 }
@@ -135,15 +143,28 @@ test.describe('bowling', () => {
     await waitSport(page, (s) => s.phase === 'aim');
     await page.waitForTimeout(500);
     await page.screenshot({ path: `${SHOTS}/bowling-aim.png` });
+    // Mouse at the centre aims straight; moving it right turns the live aim right.
+    const straight = (await probe(page))?.aimAngle ?? 99;
+    expect(Math.abs(straight)).toBeLessThan(0.012);
+    await dbg('moveTo', 0.62, 0.6);
+    await page.waitForTimeout(900);
+    const turned = (await probe(page))?.aimAngle ?? 0;
+    expect(turned).toBeGreaterThan(straight + 0.008);
     await dbg('press', 'KeyB');
     await page.waitForTimeout(700);
+    const shown = (await probe(page))?.aimAngle ?? 99;
     await dbg('release', 'KeyB');
     await waitSport(page, (s) => s.phase === 'rolling', 5000);
+    // The ball leaves on the aim the indicator was showing.
+    const launched = await probe(page);
+    expect(launched?.lastAngle).toBeCloseTo(shown, 5);
     await waitSport(page, (s) => s.ballZ < -8);
     await page.screenshot({ path: `${SHOTS}/bowling-rolling.png` });
     await waitSport(page, (s) => s.contacted, 10000);
     await page.waitForTimeout(150);
     await page.screenshot({ path: `${SHOTS}/bowling-pins.png` });
+    // The verdict comes within the settle cap of the first pin contact (was about 5 s).
+    await waitSport(page, (s) => s.rolls.length >= 1, 3500);
     await waitSport(page, (s) => s.phase === 'pickup' || s.rolls.length >= 1, 40000);
     await waitSport(page, (s) => s.phase === 'pickup' || s.phase === 'done', 40000);
     const p = await probe(page);

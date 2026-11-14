@@ -45,7 +45,24 @@ export function createBowlingBot(
           const lateral = aimBias + (random() - 0.5) * 0.12;
           // A little path curve varies the hook, so leftover pins on the hooking side get hit too.
           const curve = -0.5 + random() * 0.6;
-          steps.push(...underarmSwing(hand, { power, lateral, curve }), ...openFist(hand, 200));
+          // Aim the way a player does: slide the hanging hand sideways and let the aim settle,
+          // then swing from there. The aim is read from the hand before the swing starts.
+          const sg = hand === 'right' ? 1 : -1;
+          const rx = sg * 0.12 + lateral;
+          steps.push({
+            dur: 450,
+            to:
+              hand === 'right'
+                ? { rightWristX: rx, rightWristY: -1.4 }
+                : { leftWristX: rx, leftWristY: -1.4 },
+            label: 'aim',
+          });
+          steps.push(...idle(450));
+          // underarmSwing's backswing starts at -sg*0.1 + lateral: match it to the aimed hand.
+          steps.push(
+            ...underarmSwing(hand, { power, lateral: lateral + sg * 0.22, curve }),
+            ...openFist(hand, 200),
+          );
           break;
         }
         default:

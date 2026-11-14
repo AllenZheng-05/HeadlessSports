@@ -1,7 +1,15 @@
 import type { Side } from '../../input/types';
 import type { BowlingConfig } from './config';
 import type { BowlingPhysics } from './physics';
-import { mapRelease, smoothBowlerX } from './release';
+import { HEAD_PIN_Z } from './layout';
+import {
+  aimAngleFor,
+  lateralFromWrist,
+  mapRelease,
+  sideSign,
+  smoothAim,
+  smoothBowlerX,
+} from './release';
 import type { Release } from './release';
 import { nextBall, runningTotal } from './scoring';
 import type { NextBall } from './scoring';
@@ -14,7 +22,7 @@ export interface PlayerView {
   lateral: number;
   hands: Record<Side, { present: boolean; known: boolean }>;
   /** `wristY` is relative to the same-side shoulder, sw, positive up. */
-  arms: Record<Side, { speed: number; wristY: number }>;
+  arms: Record<Side, { speed: number; wristX: number; wristY: number }>;
 }
 
 export interface ThrowInfo {
@@ -58,6 +66,8 @@ export interface GameEvents {
   released?(release: Release): void;
   /** First pin contact; `speed` is the ball speed in m/s. */
   contact?(speed: number): void;
+  /** The live count of pins down this roll changed (while rolling). */
+  pinsDown?(count: number): void;
   rolled?(outcome: RollOutcome): void;
   finished?(total: number, rolls: readonly number[]): void;
 }
@@ -65,6 +75,11 @@ export interface GameEvents {
 export interface GameOptions {
   hand: Side;
   frames: number;
+  /**
+   * Added to the wrist lateral (sw). Keyboard and mouse input has no hanging arm: its hand sits
+   * on the body midline at screen centre, so it passes the neutral offset here.
+   */
+  aimBias?: number;
 }
 
 /**
@@ -80,6 +95,10 @@ export class BowlingGame {
   strikes = 0;
   spares = 0;
   lastRelease: Release | null = null;
+  /** Live aim: wrist lateral from the shoulder midline (sw), smoothed, frozen once a swing starts. */
+  aimLateral: number;
+  /** Pins down so far in the current roll. */
+  liveDown = 0;
   /** Wall time spent in the current phase, seconds. */
   phaseTime = 0;
   /** What the next ball is. Updated after every roll. */
@@ -95,6 +114,9 @@ export class BowlingGame {
   private contactSeen = false;
   private finishedFired = false;
   private started = false;
+  private latestView: PlayerView | null = null;
+  private readonly aimBias: number;
+  private aimHoldLeft = 0;
 
   constructor(
     physics: BowlingPhysics,
@@ -108,6 +130,13 @@ export class BowlingGame {
     this.hand = options.hand;
     this.frames = options.frames;
     this.next = nextBall(this.rolls, this.frames);
+    this.aimBias = options.aimBias ?? 0;
+    this.aimLateral = sideSign(options.hand) * cfg.neutralLateral;
+  }
+
+  /** Launch angle the ball would take right now, radians, positive toward screen right. */
+  get aimAngle(): number {
+    return aimAngleFor(this.aimLateral, this.hand, this.cfg);
   }
 
   get total(): number {
@@ -135,6 +164,12 @@ export class BowlingGame {
   }
 
   private pickUp(): void {
+    // Start the aim from where the hand is, not from where it was last ball.
+    const view = this.latestView;
+    if (view !== null) {
+      this.aimLateral = this.wristLateral(view.arms[this.hand].wristX);
+    }
+    this.aimHoldLeft = 0;
     this.enter('aim');
     this.events.pickedUp?.();
   }
@@ -144,13 +179,15 @@ export class BowlingGame {
     if (this.phase !== 'aim' || info.hand !== this.hand) return false;
     if (!this.cfg.acceptAnyStyle && info.style !== 'underarm') return false;
     if (info.speed < this.cfg.minReleaseSpeed) return false;
-    const release = mapRelease(info, this.cfg);
+    // The release uses the live aim the indicator showed, not the wrist position mid-swing.
+    const release = mapRelease({ ...info, lateral: this.aimLateral }, this.cfg);
     this.lastRelease = release;
     this.physics.launch(this.bowlerX, release.ballSpeed, release.angle, release.hook);
     this.sinceRelease = 0;
     this.sinceContact = 0;
     this.restTimer = 0;
     this.contactSeen = false;
+    this.liveDown = 0;
     this.enter('rolling');
     this.events.released?.(release);
     return true;
@@ -160,6 +197,7 @@ export class BowlingGame {
   fixedUpdate(dt: number, view: PlayerView): void {
     if (!this.started || (this.phase === 'done' && this.finishedFired)) return;
     this.phaseTime += dt;
+    this.latestView = view;
     this.physics.step(dt);
 
     switch (this.phase) {
@@ -168,6 +206,7 @@ export class BowlingGame {
         break;
       case 'aim':
         this.bowlerX = smoothBowlerX(this.bowlerX, view.lateral, dt, this.cfg);
+        this.updateAim(dt, view);
         break;
       case 'rolling':
         this.updateRolling(dt);
@@ -199,6 +238,31 @@ export class BowlingGame {
     }
   }
 
+  private wristLateral(wristX: number): number {
+    return lateralFromWrist(wristX, this.hand, this.cfg) + this.aimBias;
+  }
+
+  /** ThrowWindup from the input: the arm is drawn back, so the aim stops following the hand. */
+  onWindup(hand: Side): void {
+    if (this.phase === 'aim' && hand === this.hand) this.aimHoldLeft = this.cfg.aimWindupHoldS;
+  }
+
+  private updateAim(dt: number, view: PlayerView): void {
+    const arm = view.arms[this.hand];
+    if (arm.speed >= this.cfg.aimFreezeSpeed) return;
+    if (this.aimHoldLeft > 0) {
+      this.aimHoldLeft -= dt;
+      return;
+    }
+    const target = this.wristLateral(arm.wristX);
+    this.aimLateral = smoothAim(this.aimLateral, target, dt, this.cfg);
+  }
+
+  /**
+   * End the roll as soon as it is decided: all pins down is a verdict at once; otherwise the
+   * pins have been still for `settleRestS`, capped at `settleTimeoutS` after first contact. A ball
+   * that went past the pins without touching one is a miss or gutter almost immediately.
+   */
   private updateRolling(dt: number): void {
     const cfg = this.cfg;
     const physics = this.physics;
@@ -210,15 +274,39 @@ export class BowlingGame {
       this.events.contact?.(contact);
     }
     if (this.contactSeen) this.sinceContact += dt;
-    if (physics.ballDone() && physics.pinsAtRest()) this.restTimer += dt;
-    else this.restTimer = 0;
-    if (
-      this.restTimer >= cfg.settleRestS ||
-      (this.contactSeen && this.sinceContact >= cfg.settleTimeoutS) ||
-      this.sinceRelease >= cfg.releaseTimeoutS
-    ) {
-      this.countRoll();
+
+    const standing = physics.standingCount();
+    let down = this.next.pinsUp - standing;
+    if (down < 0) down = 0;
+    if (down !== this.liveDown) {
+      this.liveDown = down;
+      // The count moved, so the pins are not settled yet.
+      this.restTimer = 0;
+      this.events.pinsDown?.(down);
     }
+
+    if (this.contactSeen) {
+      if (this.next.pinsUp > 0 && standing === 0) {
+        this.countRoll();
+        return;
+      }
+      if (this.sinceContact >= cfg.settleMinS && physics.pinsAtRest()) this.restTimer += dt;
+      else this.restTimer = 0;
+      if (this.restTimer >= cfg.settleRestS || this.sinceContact >= cfg.settleTimeoutS) {
+        this.countRoll();
+        return;
+      }
+    } else {
+      if (physics.ballZ < HEAD_PIN_Z - 0.9) this.restTimer += dt;
+      else if (physics.ballDone() && physics.pinsAtRest()) this.restTimer += dt;
+      else this.restTimer = 0;
+      const need = physics.ballZ < HEAD_PIN_Z - 0.9 ? cfg.missResolveS : cfg.settleRestS;
+      if (this.restTimer >= need) {
+        this.countRoll();
+        return;
+      }
+    }
+    if (this.sinceRelease >= cfg.releaseTimeoutS) this.countRoll();
   }
 
   private countRoll(): void {

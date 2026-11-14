@@ -1,5 +1,7 @@
 import {
+  BufferGeometry,
   CircleGeometry,
+  DoubleSide,
   Color,
   Float32BufferAttribute,
   InstancedMesh,
@@ -12,7 +14,7 @@ import {
   Vector2,
   Vector3,
 } from 'three/webgpu';
-import type { BufferGeometry, Object3D, PerspectiveCamera, Scene } from 'three/webgpu';
+import type { Object3D, PerspectiveCamera, Scene } from 'three/webgpu';
 import { PALETTE } from '../../render/style/palette';
 import { BlobShadow } from '../../render/style/blobShadow';
 import { mergePainted, paintGeometry, vertexColorToonMaterial } from '../../render/style/toon';
@@ -88,6 +90,24 @@ const Q = new Quaternion();
 const S = new Vector3();
 const ONE = new Vector3(1, 1, 1);
 const pose = new Float64Array(7);
+const Y_AXIS = new Vector3(0, 1, 0);
+const AIM_ARROWS = 12;
+const AIM_FIRST = 0.8;
+const AIM_STEP = 1.45;
+
+/** A flat chevron on the lane pointing down the lane (-z), unit-ish size. */
+function buildArrowGeometry(): BufferGeometry {
+  const g = new BufferGeometry();
+  // Two quads forming a "V" head: outer tip at z=-1, notch at z=-0.35, wings at z=0.
+  const v = new Float32Array([
+    0, 0, -1, -1, 0, 0.25, -0.5, 0, 0.25, 0, 0, -0.1, 0, 0, -1, 0, 0, -0.1, 0.5, 0, 0.25, 1, 0,
+    0.25,
+  ]);
+  g.setAttribute('position', new Float32BufferAttribute(v, 3));
+  g.setIndex([0, 1, 2, 0, 2, 3, 0, 5, 6, 0, 6, 7]);
+  g.computeVertexNormals();
+  return g;
+}
 
 /** Dynamic scene objects: the ball, the ten pins, their shadows, the aim line and the camera. */
 export class BowlingView {
@@ -101,6 +121,7 @@ export class BowlingView {
   private readonly scene: Scene;
   private readonly camera: PerspectiveCamera;
   private lastAimX = 1e9;
+  private lastAimAngle = 1e9;
   private camReady = false;
   private camX = 0;
   private camY = 0;
@@ -148,10 +169,13 @@ export class BowlingView {
     this.pinShadows.renderOrder = 1;
     scene.add(this.pinShadows);
 
+    const arrowGeo = buildArrowGeometry();
+    this.geometries.push(arrowGeo);
     const dotMat = new MeshBasicMaterial({
-      color: PALETTE.whistle,
+      color: PALETTE.ink,
       transparent: true,
-      opacity: 0.75,
+      opacity: 0.8,
+      side: DoubleSide,
       depthWrite: false,
       fog: false,
       polygonOffset: true,
@@ -159,7 +183,7 @@ export class BowlingView {
       polygonOffsetUnits: -4,
     });
     this.materials.push(dotMat);
-    this.aimDots = new InstancedMesh(disc, dotMat, 14);
+    this.aimDots = new InstancedMesh(arrowGeo, dotMat, AIM_ARROWS);
     this.aimDots.name = 'bowling-aim-dots';
     this.aimDots.frustumCulled = false;
     this.aimDots.renderOrder = 2;
@@ -230,15 +254,29 @@ export class BowlingView {
     this.pinShadows.instanceMatrix.needsUpdate = true;
   }
 
-  /** Dots on the lane showing where a straight ball launched from x would roll. */
-  setAim(visible: boolean, x: number): void {
+  /**
+   * A row of arrows down the lane showing where a ball launched now would roll: from lateral
+   * position `x` at the foul line, at `angle` radians from straight (positive toward +x).
+   * Hook is not predicted. Only rewrites the instance matrices when the aim changed.
+   */
+  setAim(visible: boolean, x: number, angle: number): void {
     this.aimDots.visible = visible;
-    if (!visible || Math.abs(x - this.lastAimX) < 1e-4) return;
+    if (!visible) {
+      this.lastAimX = 1e9;
+      return;
+    }
+    if (Math.abs(x - this.lastAimX) < 1e-4 && Math.abs(angle - this.lastAimAngle) < 1e-4) return;
     this.lastAimX = x;
-    for (let i = 0; i < 14; i++) {
-      P.set(x, Y0 + 0.012, LAYOUT.foulZ - 0.9 - i * 1.25);
-      S.set(0.05 + i * 0.004, 1, 0.07 + i * 0.012);
-      this.aimDots.setMatrixAt(i, M.compose(P, Q.identity(), S));
+    this.lastAimAngle = angle;
+    const slope = Math.tan(angle);
+    Q.setFromAxisAngle(Y_AXIS, -angle);
+    for (let i = 0; i < AIM_ARROWS; i++) {
+      const d = AIM_FIRST + i * AIM_STEP;
+      P.set(x + slope * d, Y0 + 0.012, LAYOUT.foulZ - d);
+      // Wider and longer with distance so they read the same size from the camera.
+      const w = 0.12 + i * 0.012;
+      S.set(w, 1, w * 2.6);
+      this.aimDots.setMatrixAt(i, M.compose(P, Q, S));
     }
     this.aimDots.instanceMatrix.needsUpdate = true;
   }

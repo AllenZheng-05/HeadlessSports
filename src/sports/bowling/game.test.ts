@@ -72,11 +72,17 @@ class FakePhysics implements BowlingPhysics {
 }
 
 function view(
-  over: Partial<{ known: boolean; present: boolean; speed: number; wristY: number }> = {},
+  over: Partial<{
+    known: boolean;
+    present: boolean;
+    speed: number;
+    wristX: number;
+    wristY: number;
+  }> = {},
 ): PlayerView {
-  const o = { known: true, present: true, speed: 0, wristY: -1.2, ...over };
+  const o = { known: true, present: true, speed: 0, wristX: 0.12, wristY: -1.2, ...over };
   const hand = { present: o.present, known: o.known };
-  const arm = { speed: o.speed, wristY: o.wristY };
+  const arm = { speed: o.speed, wristX: o.wristX, wristY: o.wristY };
   return { lateral: 0, hands: { left: hand, right: hand }, arms: { left: arm, right: arm } };
 }
 
@@ -224,13 +230,13 @@ describe('throws', () => {
 
   it('launches from the bowler position with the mapped release', () => {
     const t = setup([5]);
-    t.state.view = { ...view(), lateral: 1 };
+    t.state.view = { ...view({ wristX: 0.62 }), lateral: 1 };
     t.game.onFistClosed('right');
     t.run(1);
     t.game.onThrow({
       hand: 'right',
       speed: 8,
-      lateral: 0.62 + 0.5,
+      lateral: 0,
       curvature: 0.3,
       style: 'underarm',
     });
@@ -352,15 +358,174 @@ describe('frames', () => {
     expect(t.finished()[0]?.total).toBe(11);
   });
 
-  it('times out when the pins never rest', () => {
+  it('times out when the pins never rest, 2.5 s after first contact', () => {
     const t = setup([4]);
     t.physics.pinsAtRest = () => false;
     t.game.onFistClosed('right');
     t.throwIt();
-    t.run(7.5);
+    // Contact is at 0.8 s in the fake physics.
+    t.run(0.8 + bowlingConfig.settleTimeoutS - 0.1);
     expect(t.game.phase).toBe('rolling');
-    t.run(2.6);
+    t.run(0.3);
     expect(t.game.phase).not.toBe('rolling');
     expect(t.outcomes[0]?.pins).toBe(4);
+  });
+});
+
+/** Seconds after launch at which the first new outcome arrives. */
+function verdictTime(t: ReturnType<typeof setup>): number {
+  const before = t.outcomes.length;
+  t.game.onFistClosed('right');
+  t.throwIt();
+  let n = 0;
+  while (t.outcomes.length === before && n < 20 * 120) {
+    t.run(DT);
+    n++;
+  }
+  return n * DT;
+}
+
+describe('early verdict', () => {
+  it('calls a strike the moment the last pin is down, before the pins rest', () => {
+    const t = setup([10]);
+    const at = verdictTime(t);
+    expect(t.outcomes[0]).toMatchObject({ pins: 10, kind: 'strike' });
+    // Contact at 0.8 s; the fake pins would not rest until 1.5 s.
+    expect(at).toBeGreaterThan(0.79);
+    expect(at).toBeLessThan(0.85);
+    expect(t.game.phase).toBe('settle');
+  });
+
+  it('calls a spare at once too', () => {
+    const t = setup([6, 4]);
+    t.playBall();
+    const at = verdictTime(t);
+    expect(t.outcomes[1]).toMatchObject({ pins: 4, kind: 'spare' });
+    expect(at).toBeLessThan(0.85);
+  });
+
+  it('ends a non-strike when the pins have rested for the rest window', () => {
+    const t = setup([7]);
+    const at = verdictTime(t);
+    expect(t.outcomes[0]).toMatchObject({ pins: 7, kind: 'count' });
+    // Rest starts at 1.5 s in the fake physics; the verdict follows settleRestS later.
+    expect(at).toBeGreaterThanOrEqual(1.5 + bowlingConfig.settleRestS - 0.02);
+    expect(at).toBeLessThan(1.5 + bowlingConfig.settleRestS + 0.05);
+  });
+
+  it('never waits past the cap after contact', () => {
+    const t = setup([3]);
+    t.physics.pinsAtRest = () => false;
+    const at = verdictTime(t);
+    expect(at).toBeLessThanOrEqual(0.8 + bowlingConfig.settleTimeoutS + 0.05);
+    expect(at).toBeGreaterThanOrEqual(0.8 + bowlingConfig.settleTimeoutS - 0.05);
+  });
+
+  it('resolves a ball that passes the pins untouched almost at once', () => {
+    const t = setup([0]);
+    t.physics.ballInGutter = true;
+    // No contact, never "done" or at rest: only passing the pins can end it.
+    t.physics.takeContact = () => 0;
+    t.physics.ballDone = () => false;
+    t.physics.pinsAtRest = () => false;
+    const at = verdictTime(t);
+    expect(t.outcomes[0]?.kind).toBe('gutter');
+    // The fake ball reaches z = head pin - 0.9 at (19.9 - 1) / 10 s.
+    expect(at).toBeGreaterThan(1.89);
+    expect(at).toBeLessThan(1.89 + bowlingConfig.missResolveS + 0.05);
+  });
+
+  it('reports the live count of pins down while rolling', () => {
+    const physics = new FakePhysics();
+    physics.plan = [6];
+    const seen: number[] = [];
+    const game = new BowlingGame(
+      physics,
+      { ...bowlingConfig },
+      { pinsDown: (n) => seen.push(n) },
+      { hand: 'right', frames: 10 },
+    );
+    game.start();
+    game.onFistClosed('right');
+    game.onThrow({ hand: 'right', speed: 6, lateral: 0.62, curvature: 0, style: 'underarm' });
+    for (let i = 0; i < 4 * 120; i++) game.fixedUpdate(DT, view());
+    expect(seen).toEqual([6]);
+  });
+});
+
+describe('live aim', () => {
+  it('follows a slow hand and reports the angle the ball will take', () => {
+    const t = setup([5]);
+    t.game.onFistClosed('right');
+    t.run(0.5);
+    expect(t.game.aimAngle).toBeCloseTo(0, 5);
+    t.state.view = view({ wristX: 0.12 + 0.6 });
+    t.run(1);
+    expect(t.game.aimAngle).toBeCloseTo(0.6 * bowlingConfig.aimGain, 3);
+    t.state.view = view({ wristX: 0.12 - 5 });
+    t.run(1);
+    expect(t.game.aimAngle).toBeCloseTo(-bowlingConfig.maxAngle, 5);
+  });
+
+  it('freezes once the swing starts and launches with exactly that aim', () => {
+    const t = setup([5]);
+    t.state.view = view({ wristX: 0.12 + 0.4 });
+    t.game.onFistClosed('right');
+    t.run(1);
+    const shown = t.game.aimAngle;
+    // The hand sweeps across during the swing; the aim must not follow it.
+    t.state.view = view({ wristX: 2, speed: 5 });
+    t.run(0.3);
+    expect(t.game.aimAngle).toBeCloseTo(shown, 6);
+    t.game.onThrow({ hand: 'right', speed: 6, lateral: -3, curvature: 0, style: 'underarm' });
+    expect(t.physics.launches[0]?.angle).toBeCloseTo(shown, 6);
+  });
+
+  it('starts from where the hand is when the ball is picked up', () => {
+    const t = setup([5]);
+    t.state.view = view({ wristX: 0.12 + 0.5 });
+    t.run(0.05);
+    t.game.onFistClosed('right');
+    expect(t.game.aimAngle).toBeCloseTo(0.5 * bowlingConfig.aimGain, 6);
+  });
+
+  it('mirrors for the left hand', () => {
+    const t = setup([5], 10, 'left');
+    t.state.view = view({ wristX: -0.12 - 0.5 });
+    t.run(0.05);
+    t.game.onFistClosed('left');
+    expect(t.game.aimAngle).toBeCloseTo(-0.5 * bowlingConfig.aimGain, 6);
+  });
+});
+
+describe('live aim, wind-up and bias', () => {
+  it('locks the aim on a wind-up, then lets go after the hold', () => {
+    const t = setup([5]);
+    t.game.onFistClosed('right');
+    t.run(0.5);
+    const shown = t.game.aimAngle;
+    t.game.onWindup('right');
+    // A slow hand drifting while the throw is charged must not move the aim.
+    t.state.view = view({ wristX: 0.12 + 0.8 });
+    t.run(1);
+    expect(t.game.aimAngle).toBeCloseTo(shown, 6);
+    t.run(bowlingConfig.aimWindupHoldS);
+    expect(t.game.aimAngle).toBeGreaterThan(shown + 0.01);
+  });
+
+  it('adds the aim bias for keyboard and mouse input', () => {
+    const physics = new FakePhysics();
+    const game = new BowlingGame(
+      physics,
+      { ...bowlingConfig },
+      {},
+      { hand: 'right', frames: 10, aimBias: bowlingConfig.neutralLateral },
+    );
+    game.start();
+    // Hand on the body midline (wrist 0.5 sw inside the shoulder) reads as straight.
+    const v = view({ wristX: -0.5 });
+    for (let i = 0; i < 120; i++) game.fixedUpdate(DT, v);
+    game.onFistClosed('right');
+    expect(game.aimAngle).toBeCloseTo(0, 6);
   });
 });

@@ -377,6 +377,9 @@ export class RapierBowling implements BowlingPhysics, BowlingBodies {
         this.contacted = true;
         this.contactSpeed = Math.max(this.ballSpeedNow, 0.5);
       }
+      // A pin that is already down no longer changes the score, so it may roll on without
+      // holding up the verdict. A standing (or wobbling) pin must be still.
+      if (this.pinDown(i)) continue;
       body.linvel(this.spare);
       if (this.spare.x ** 2 + this.spare.y ** 2 + this.spare.z ** 2 > slowL) rest = false;
       body.angvel(this.spare);

@@ -33,8 +33,16 @@ export const bowlingConfig = {
   /** Where the hanging wrist sits relative to the shoulder midpoint (sw). */
   neutralLateral: 0.62,
   /** Radians per sw of wrist offset from neutral. */
-  aimGain: 0.09,
-  maxAngle: 0.1,
+  aimGain: 0.025,
+  maxAngle: 0.045,
+  /** Half the shoulder span in sw: wrist-from-shoulder to wrist-from-midline. */
+  aimShoulderHalf: 0.5,
+  /** Smoothing rate of the live aim (1/s). Higher follows the hand faster. */
+  aimSmooth: 9,
+  /** The aim stops following the wrist once it moves faster than this (sw/s): a swing has begun. */
+  aimFreezeSpeed: 1.2,
+  /** After a wind-up the aim stays locked this long (s), or until the throw. */
+  aimWindupHoldS: 2,
   /** Sideways acceleration (m/s^2) per unit of path curvature (1/sw). */
   hookGain: 0.35,
   maxHook: 0.7,
@@ -58,8 +66,14 @@ export const bowlingConfig = {
   // Settling
   pinSlowLinear: 0.15,
   pinSlowAngular: 0.5,
+  /** Pins must be still this long to end a roll (s). */
   settleRestS: 0.4,
-  settleTimeoutS: 7,
+  /** Earliest the rest test may end a roll after first pin contact (s), so the first hit can start. */
+  settleMinS: 0.35,
+  /** Hard cap from first pin contact to the verdict (s). All ten down ends it at once. */
+  settleTimeoutS: 2.5,
+  /** A ball that passed the pins without touching one is called a miss or gutter after this (s). */
+  missResolveS: 0.15,
   releaseTimeoutS: 10,
   /** A pin tilted more than this (degrees) from upright is down. */
   downTiltDeg: 35,
@@ -94,6 +108,12 @@ export const bowlingRanges: Record<string, TunableRange> = {
   maxHook: { min: 0, max: 3, step: 0.05 },
   hookStart: { min: 0, max: 0.95, step: 0.01 },
   laneFriction: { min: 0, max: 0.5, step: 0.01 },
-  settleTimeoutS: { min: 2, max: 15, step: 0.5 },
+  aimSmooth: { min: 2, max: 30, step: 0.5 },
+  aimWindupHoldS: { min: 0.3, max: 5, step: 0.1 },
+  aimFreezeSpeed: { min: 0.3, max: 4, step: 0.1 },
+  settleRestS: { min: 0.1, max: 1.5, step: 0.05 },
+  settleMinS: { min: 0, max: 1, step: 0.05 },
+  settleTimeoutS: { min: 1, max: 8, step: 0.1 },
+  missResolveS: { min: 0, max: 1, step: 0.05 },
   downTiltDeg: { min: 15, max: 80, step: 1 },
 };

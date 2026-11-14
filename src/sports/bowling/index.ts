@@ -18,6 +18,8 @@ export interface BowlingDebug {
   readonly ballZ: number;
   readonly ballX: number;
   readonly bowlerX: number;
+  /** Live aim, radians from straight; the indicator and the release both use it. */
+  readonly aimAngle: number;
   /** Pins down by the most recent ball. */
   readonly pinsDown: number;
   readonly rolls: readonly number[];
@@ -94,6 +96,7 @@ export const createBowling: SportFactory = async (ctx: SportContext) => {
 
   const onRolled = (o: RollOutcome): void => {
     pinsDown = o.pins;
+    ctx.hud.setHint(null);
     refreshCard();
     switch (o.kind) {
       case 'strike':
@@ -135,7 +138,7 @@ export const createBowling: SportFactory = async (ctx: SportContext) => {
         break;
       case 'aim':
         ctx.hud.setBanner(null);
-        ctx.hud.setHint('Step left or right to aim, then swing');
+        ctx.hud.setHint('Step or move your hand to line up the arrows, then swing');
         break;
       case 'rolling':
         ctx.hud.setHint(null);
@@ -171,11 +174,14 @@ export const createBowling: SportFactory = async (ctx: SportContext) => {
         holding = false;
         launches++;
         releases.push(release);
-        view.setAim(false, 0);
+        view.setAim(false, 0, 0);
         animator.play('throw-under', { side: hand, strength: 0.4 + 0.6 * release.power });
         ctx.audio.play('whoosh', { pitch: 0.8 + 0.5 * release.power });
         ctx.hud.setMeter('power', release.power, `${release.ballSpeed.toFixed(1)} m/s`, 'good');
         meterLeft = cfg.powerMeterS;
+      },
+      pinsDown: (count) => {
+        if (count > 0) ctx.hud.setHint(count === 1 ? '1 pin down' : `${count} pins down`);
       },
       contact: (speed) => {
         ctx.audio.play('clatter', { volume: Math.min(1, Math.max(0.35, speed / 8)) });
@@ -203,12 +209,19 @@ export const createBowling: SportFactory = async (ctx: SportContext) => {
         });
       },
     },
-    { hand, frames },
+    {
+      hand,
+      frames,
+      aimBias: ctx.input.source === null ? (hand === 'right' ? 1 : -1) * cfg.neutralLateral : 0,
+    },
   );
 
   const unsubscribers = [
     ctx.input.on('FistClosed', (e) => {
       if (!ctx.paused) game.onFistClosed(e.hand);
+    }),
+    ctx.input.on('ThrowWindup', (e) => {
+      if (!ctx.paused) game.onWindup(e.hand);
     }),
     ctx.input.on('ThrowReleased', (e) => {
       // Gestures made while the round is paused (player out of frame) do not count.
@@ -253,7 +266,7 @@ export const createBowling: SportFactory = async (ctx: SportContext) => {
       }
       view.drawPins(physics, alpha);
       view.followBallShadow();
-      view.setAim(phase === 'aim', game.bowlerX);
+      view.setAim(phase === 'aim', game.bowlerX, game.aimAngle);
       view.updateCamera(
         dt,
         CAMERA_FOR[phase],
@@ -305,6 +318,9 @@ export const createBowling: SportFactory = async (ctx: SportContext) => {
     },
     get bowlerX(): number {
       return game.bowlerX;
+    },
+    get aimAngle(): number {
+      return game.aimAngle;
     },
     get pinsDown(): number {
       return pinsDown;

@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { bowlingConfig } from './config';
-import { ballSpeedFor, mapRelease, smoothBowlerX, targetBowlerX } from './release';
+import {
+  aimAngleFor,
+  ballSpeedFor,
+  lateralFromWrist,
+  mapRelease,
+  smoothAim,
+  smoothBowlerX,
+  targetBowlerX,
+} from './release';
 
 const cfg = bowlingConfig;
 const base = { hand: 'right' as const, speed: 5, lateral: 0.62, curvature: 0 };
@@ -27,13 +35,13 @@ describe('release mapping', () => {
   });
 
   it('aims toward screen right when the wrist is further right', () => {
-    expect(mapRelease({ ...base, lateral: 0.62 + 0.5 }, cfg).angle).toBeCloseTo(0.045);
-    expect(mapRelease({ ...base, lateral: 0.62 - 0.5 }, cfg).angle).toBeCloseTo(-0.045);
+    expect(mapRelease({ ...base, lateral: 0.62 + 0.5 }, cfg).angle).toBeCloseTo(0.5 * cfg.aimGain);
+    expect(mapRelease({ ...base, lateral: 0.62 - 0.5 }, cfg).angle).toBeCloseTo(-0.5 * cfg.aimGain);
   });
 
   it('uses the mirrored neutral for the left hand', () => {
     const left = mapRelease({ ...base, hand: 'left', lateral: -0.62 + 0.5 }, cfg);
-    expect(left.angle).toBeCloseTo(0.045);
+    expect(left.angle).toBeCloseTo(0.5 * cfg.aimGain);
     // The same raw lateral is a different aim for each hand.
     const r = mapRelease({ ...base, lateral: 0 }, cfg).angle;
     const l = mapRelease({ ...base, hand: 'left', lateral: 0 }, cfg).angle;
@@ -65,5 +73,31 @@ describe('release mapping', () => {
     let x = 0;
     for (let i = 0; i < 600; i++) x = smoothBowlerX(x, 1, 1 / 60, cfg);
     expect(x).toBeCloseTo(cfg.lateralScale, 4);
+  });
+});
+
+describe('aim indicator agrees with the release', () => {
+  it('uses the same angle function', () => {
+    for (const hand of ['left', 'right'] as const) {
+      for (let l = -2; l <= 2; l += 0.25) {
+        expect(mapRelease({ ...base, hand, lateral: l }, cfg).angle).toBe(
+          aimAngleFor(l, hand, cfg),
+        );
+      }
+    }
+  });
+
+  it('turns a hanging wrist beside the shoulder into a straight aim', () => {
+    expect(aimAngleFor(lateralFromWrist(0.12, 'right', cfg), 'right', cfg)).toBeCloseTo(0);
+    expect(aimAngleFor(lateralFromWrist(-0.12, 'left', cfg), 'left', cfg)).toBeCloseTo(0);
+  });
+
+  it('smooths toward the target without overshooting', () => {
+    let v = 0;
+    for (let i = 0; i < 240; i++) {
+      v = smoothAim(v, 1, 1 / 120, cfg);
+      expect(v).toBeLessThanOrEqual(1);
+    }
+    expect(v).toBeCloseTo(1, 2);
   });
 });
