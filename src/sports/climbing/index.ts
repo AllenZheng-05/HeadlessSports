@@ -5,6 +5,13 @@ import { createClimbBot } from './bot';
 import { climbingConfig, climbingRanges } from './config';
 import { Layout, mulberry32 } from './layout';
 import { chooseHold } from './plan';
+import {
+  createPointerControl,
+  isPointerInput,
+  pointerClick,
+  pointerStep,
+  pointerTarget,
+} from './pointer';
 import { wallToHand } from './reach';
 import type { Vec2 } from './reach';
 import {
@@ -28,6 +35,10 @@ export interface ClimbingSport extends Sport {
   readonly status: string;
   readonly holding: { left: boolean; right: boolean };
   readonly layoutChecksum: number;
+  /** Mouse play only: the hand the mouse controls right now, else null. */
+  readonly pointerHand: 'left' | 'right' | null;
+  /** Mouse play only: the hold a click at this image position would take for the mouse hand, or -1. */
+  pointerHoldAt(x: number, y: number): number;
   /** Image position (mirrored normalised) where this hand should go to take the next hold. */
   aimImage(side: 'left' | 'right'): { x: number; y: number } | null;
 }
@@ -80,6 +91,17 @@ export const createClimbing: SportFactory = (ctx: SportContext): ClimbingSport =
   let camAnchor = state.y;
 
   const cursor: Vec2 = { x: 0, y: 0 };
+  // Mouse play (keyboard-and-mouse input only): clicks grab holds, the mouse alternates hands.
+  const ptr = isPointerInput(ctx.input) ? ctx.input : null;
+  const pointer = createPointerControl();
+  if (ptr) {
+    ptr.setPointerMode(true);
+    pointer.seenClicks = ptr.pointerClicks;
+    pointer.active = ptr.selectedHand === 'left' ? 0 : 1;
+  }
+  let shownActive = -1;
+  /** The hand index this sport last gave the provider, to spot a key press that changed it. */
+  let pushedHand: 0 | 1 = pointer.active;
   let started = false;
   let finished = false;
   let finishIn = 0;
@@ -129,7 +151,7 @@ export const createClimbing: SportFactory = (ctx: SportContext): ClimbingSport =
       if (!started) return;
       if (state.grabs === 1) {
         ctx.hud.setBanner(null);
-        ctx.hud.setHint('Pull the closed hand down. Reach up with the other.');
+        if (!ptr) ctx.hud.setHint('Pull the closed hand down. Reach up with the other.');
       }
     }
     if (state.releaseSeq !== seenRelease) {
@@ -256,6 +278,13 @@ export const createClimbing: SportFactory = (ctx: SportContext): ClimbingSport =
       },
     },
     layoutChecksum: layout.checksum,
+    get pointerHand(): 'left' | 'right' | null {
+      return ptr ? (pointer.active === 0 ? 'left' : 'right') : null;
+    },
+
+    pointerHoldAt(x, y): number {
+      return pointerTarget(pointer, state, cfg, layout, x, y);
+    },
 
     aimImage(side): { x: number; y: number } | null {
       const idx = side === 'right' ? 1 : 0;
@@ -268,15 +297,18 @@ export const createClimbing: SportFactory = (ctx: SportContext): ClimbingSport =
 
     start(): void {
       started = true;
-      ctx.hud.setBanner('Close a hand on a hold to start');
-      ctx.hud.setHint('Grab, pull down, reach with the other hand');
+      ctx.hud.setBanner(ptr ? 'Click a hold to start' : 'Close a hand on a hold to start');
+      if (!ptr) ctx.hud.setHint('Grab, pull down, reach with the other hand');
       wall.update(camY);
       refreshHud();
     },
 
     fixedUpdate(dt: number): void {
       // Grab and release come from hand state read here, so nothing changes while paused.
-      if (finished || ctx.paused) return;
+      if (finished || ctx.paused) {
+        if (ptr) pointer.seenClicks = ptr.pointerClicks;
+        return;
+      }
       const hands = ctx.input.state.hands;
       input.left.present = hands.left.present;
       input.left.closed = hands.left.closed;
@@ -287,6 +319,21 @@ export const createClimbing: SportFactory = (ctx: SportContext): ClimbingSport =
       input.right.x = hands.right.x;
       input.right.y = hands.right.y;
       layout.ensure(state.y + cfg.cameraAboveM + 4);
+      if (ptr) {
+        // A / D picked a hand by key: follow it. Then take each new click, then drive the hands.
+        const picked = ptr.selectedHand === 'left' ? 0 : 1;
+        if (picked !== pushedHand) pointer.active = picked;
+        while (pointer.seenClicks < ptr.pointerClicks) {
+          pointer.seenClicks++;
+          if (state.status !== 'fell') {
+            pointerClick(pointer, state, cfg, layout, ptr.pointerX, ptr.pointerY);
+          }
+        }
+        const want = pointer.active === 0 ? 'left' : 'right';
+        if (ptr.selectedHand !== want) ptr.selectHand(want);
+        pushedHand = pointer.active;
+        pointerStep(pointer, state, cfg, layout, input, dt);
+      }
       step(state, cfg, layout, input, dt);
       handleEvents();
       handleEnd();
@@ -315,7 +362,17 @@ export const createClimbing: SportFactory = (ctx: SportContext): ClimbingSport =
       const hoverR = r.holding
         ? -1
         : layout.findNearest(state.x + r.cursorX, state.y + r.cursorY, l.hold, hoverL);
-      wall.setLit(hoverL, hoverR, l.hold, r.hold);
+      if (ptr) {
+        // The mouse hand lights the hold a click would take, even while it is holding.
+        const t = pointerTarget(pointer, state, cfg, layout, ptr.pointerX, ptr.pointerY);
+        if (pointer.active === 0) wall.setLit(t, -1, l.hold, r.hold);
+        else wall.setLit(-1, t, l.hold, r.hold);
+        ctx.hud.setCursor('pointer', ptr.pointerX, ptr.pointerY, false);
+        if (shownActive !== pointer.active) {
+          shownActive = pointer.active;
+          ctx.hud.setHint(`Click a hold with your ${pointer.active === 0 ? 'left' : 'right'} hand`);
+        }
+      } else wall.setLit(hoverL, hoverR, l.hold, r.hold);
 
       // Climber.
       const feet = state.y - drop;
@@ -348,6 +405,10 @@ export const createClimbing: SportFactory = (ctx: SportContext): ClimbingSport =
 
     dispose(): void {
       unregister();
+      if (ptr) {
+        ptr.setPointerMode(false);
+        ctx.hud.setCursor('pointer', null, 0);
+      }
       wall.dispose();
       group.removeFromParent();
       ctx.stage.scene.add(ctx.avatar.root);

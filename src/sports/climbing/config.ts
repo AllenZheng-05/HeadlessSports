@@ -9,6 +9,13 @@ export const climbingConfig = {
   /** A hold is let go when it ends up this much farther than the reach box. */
   reachSlack: 1.15,
 
+  // Mouse play: after a click-grab the hand eases to this spot (metres from the shoulders), which
+  // pulls the climber up under the hold. x is mirrored per side.
+  pointerRestX: 0.25,
+  pointerRestY: 0.0,
+  /** Ease rate of that pull, 1/s. */
+  pointerPullRate: 6,
+
   // Grabbing.
   jugRadius: 0.17,
   crimpRadius: 0.1,
@@ -81,6 +88,9 @@ export const climbingRanges: Record<string, TunableRange> = {
   reachHeight: { min: 0.8, max: 3, step: 0.05 },
   reachOffsetY: { min: -0.5, max: 0.8, step: 0.05 },
   reachSlack: { min: 1, max: 2, step: 0.05 },
+  pointerRestX: { min: 0, max: 0.8, step: 0.05 },
+  pointerRestY: { min: -0.5, max: 0.8, step: 0.05 },
+  pointerPullRate: { min: 1, max: 20, step: 0.5 },
   jugRadius: { min: 0.05, max: 0.4, step: 0.01 },
   crimpRadius: { min: 0.03, max: 0.3, step: 0.01 },
   grabWindowMs: { min: 0, max: 800, step: 10 },

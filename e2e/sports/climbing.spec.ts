@@ -17,6 +17,8 @@ interface ClimbingHook {
     status: string;
     holding: { left: boolean; right: boolean };
     layoutChecksum: number;
+    pointerHand: 'left' | 'right' | null;
+    pointerHoldAt(x: number, y: number): number;
     aimImage(side: 'left' | 'right'): { x: number; y: number } | null;
   } | null;
   drawCalls: number;
@@ -24,6 +26,7 @@ interface ClimbingHook {
     press(code: string): void;
     release(code: string): void;
     moveTo(x: number, y: number): void;
+    setButton(down: boolean): void;
   } | null;
 }
 
@@ -157,6 +160,88 @@ test.describe('rock climbing', () => {
       () => (window as unknown as { __game: ClimbingHook }).__game.result,
     );
     expect(result?.score ?? 0).toBeGreaterThan(0);
+    expect(problems).toEqual([]);
+  });
+
+  test('is playable with the mouse alone, hand over hand, without letting go', async ({ page }) => {
+    const problems = watch(page);
+    await page.goto('/?sport=climbing&input=debug&skipGate=1&short=1');
+    await waitPhase(page, 'playing');
+    await page.waitForTimeout(500);
+
+    const read = (): Promise<{
+      active: string | null;
+      left: boolean;
+      right: boolean;
+      grabs: number;
+      height: number;
+      aimL: { x: number; y: number } | null;
+      aimR: { x: number; y: number } | null;
+    }> =>
+      page.evaluate(() => {
+        const s = (window as unknown as { __game: ClimbingHook }).__game.sport!;
+        return {
+          active: s.pointerHand,
+          left: s.holding.left,
+          right: s.holding.right,
+          grabs: s.grabs,
+          height: s.height,
+          aimL: s.aimImage('left'),
+          aimR: s.aimImage('right'),
+        };
+      });
+    const click = async (at: { x: number; y: number }): Promise<void> => {
+      await page.evaluate(
+        ([x, y]) => {
+          const d = (window as unknown as { __game: ClimbingHook }).__game.debugInput!;
+          d.moveTo(x as number, y as number);
+        },
+        [at.x, at.y] as const,
+      );
+      await page.waitForTimeout(120);
+      await page.evaluate(() => {
+        const d = (window as unknown as { __game: ClimbingHook }).__game.debugInput!;
+        d.setButton(true);
+        d.setButton(false);
+      });
+      await page.waitForTimeout(700);
+    };
+
+    const h0 = (await read()).height;
+    let prev = await read();
+    expect(prev.active).toBe('right');
+    for (let n = 1; n <= 6; n++) {
+      const aim = prev.active === 'left' ? prev.aimL : prev.aimR;
+      expect(aim).not.toBeNull();
+      const mover = prev.active;
+      await click(aim!);
+      const now = await read();
+      // The clicking hand holds, the other one never let go, and the mouse changed hands.
+      expect(now[mover as 'left' | 'right']).toBe(true);
+      expect(now.grabs).toBe(prev.grabs + 1);
+      if (n > 1) expect(now[mover === 'left' ? 'right' : 'left']).toBe(true);
+      expect(now.active).toBe(mover === 'left' ? 'right' : 'left');
+      prev = now;
+    }
+    expect(prev.left && prev.right).toBe(true);
+    expect(prev.height - h0).toBeGreaterThan(0.8);
+
+    // A click that is not on a hold changes nothing.
+    const empty = await page.evaluate(() => {
+      const s = (window as unknown as { __game: ClimbingHook }).__game.sport!;
+      for (let y = 0.05; y < 1; y += 0.05) {
+        for (let x = 0.05; x < 1; x += 0.05) {
+          if (s.pointerHoldAt(x, y) < 0) return { x, y };
+        }
+      }
+      return null;
+    });
+    expect(empty).not.toBeNull();
+    await click(empty!);
+    const after = await read();
+    expect(after.left && after.right).toBe(true);
+    expect(after.grabs).toBe(prev.grabs);
+    expect(after.active).toBe(prev.active);
     expect(problems).toEqual([]);
   });
 

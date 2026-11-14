@@ -18,9 +18,7 @@ export const meta: SportMeta = {
     'Reach up with the other hand. Rest on the ledges.',
   ],
   debugKeys: [
-    'A / D: select left / right hand',
-    'Mouse: move the selected hand',
-    'Q / E: toggle left / right fist',
-    'Mouse button: close the selected hand',
+    'Mouse: move the hand, click a hold to grab it',
+    'Each click switches hands. A / D: pick a hand',
   ],
 };

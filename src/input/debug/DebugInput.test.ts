@@ -444,3 +444,43 @@ describe('DebugInput update', () => {
     }
   });
 });
+
+describe('DebugInput pointer mode', () => {
+  it('is off by default: the button still closes the hand', () => {
+    const { input } = make();
+    input.update(0);
+    input.setButton(true);
+    input.update(10);
+    expect(input.state.hands.right.closed).toBe(true);
+    expect(input.pointerClicks).toBe(0);
+  });
+
+  it('counts clicks and leaves the fists alone', () => {
+    const { input, events } = make();
+    input.setPointerMode(true);
+    input.update(0);
+    input.setButton(true);
+    input.update(10);
+    input.setButton(false);
+    input.update(20);
+    input.setButton(true);
+    input.update(30);
+    expect(input.pointerClicks).toBe(2);
+    expect(input.state.hands.right.closed).toBe(false);
+    expect(of(events, 'FistClosed')).toHaveLength(0);
+  });
+
+  it('selects a hand and puts it under the mouse', () => {
+    const { input } = make();
+    input.setPointerMode(true);
+    input.update(0);
+    input.moveTo(0.2, 0.3);
+    input.update(10);
+    expect(input.pointerX).toBeCloseTo(0.2);
+    expect(input.pointerY).toBeCloseTo(0.3);
+    input.selectHand('left');
+    expect(input.selectedHand).toBe('left');
+    expect(input.state.hands.left.x).toBeCloseTo(0.2);
+    expect(input.state.hands.left.y).toBeCloseTo(0.3);
+  });
+});

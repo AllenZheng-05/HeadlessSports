@@ -171,6 +171,9 @@ export class DebugInput implements InputProvider {
   private mouseX = 0.5;
   private mouseY = 0.5;
   private mouseFistSide: Side | null = null;
+  /** Opt-in (a sport turns it on): the mouse button only counts clicks and leaves the fists alone. */
+  private pointerOn = false;
+  private clicks = 0;
 
   // Gestures.
   private raisedOne: Side | null = null;
@@ -344,6 +347,43 @@ export class DebugInput implements InputProvider {
     this.enqueue(KIND_BUTTON, '', false, 0, 0, down);
   }
 
+  /**
+   * Opt-in click mode for a sport that wants discrete clicks instead of a held fist. While on, the
+   * mouse button no longer closes or opens the selected hand; it only bumps `pointerClicks`.
+   * Turning it on or off lets go of a fist the mouse was holding. Off by default.
+   */
+  setPointerMode(on: boolean): void {
+    if (this.pointerOn === on) return;
+    this.pointerOn = on;
+    if (this.mouseFistSide) {
+      this.setFist(this.mouseFistSide, false, this.lastT);
+      this.mouseFistSide = null;
+    }
+  }
+
+  /** Mouse button presses seen while pointer mode was on. */
+  get pointerClicks(): number {
+    return this.clicks;
+  }
+
+  /** Mouse position as a mirrored-image position (the same space as a hand's x and y). */
+  get pointerX(): number {
+    return this.mouseX;
+  }
+  get pointerY(): number {
+    return this.mouseY;
+  }
+
+  get selectedHand(): Side {
+    return this.selected;
+  }
+
+  /** Choose which hand the mouse moves, and put it under the mouse straight away. */
+  selectHand(side: Side): void {
+    this.selected = side;
+    this.moveCursor(side);
+  }
+
   private enqueue(
     kind: number,
     code: string,
@@ -426,7 +466,9 @@ export class DebugInput implements InputProvider {
       this.mouseY = r.y;
       this.moveCursor(this.selected);
     } else if (r.kind === KIND_BUTTON) {
-      if (r.down) {
+      if (this.pointerOn) {
+        if (r.down) this.clicks++;
+      } else if (r.down) {
         this.mouseFistSide = this.selected;
         this.setFist(this.selected, true, nowMs);
       } else if (this.mouseFistSide) {
