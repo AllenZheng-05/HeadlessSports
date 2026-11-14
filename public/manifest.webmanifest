@@ -1,0 +1,12 @@
+{
+  "name": "Headless Sports",
+  "short_name": "Headless Sports",
+  "description": "Sports games you play with your whole body. Your video never leaves your device.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "background_color": "#BFE3F7",
+  "theme_color": "#BFE3F7",
+  "icons": [{ "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}

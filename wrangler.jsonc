@@ -1,0 +1,19 @@
+{
+  // Cloudflare Workers with static assets. No Worker script: Cloudflare serves ./dist directly.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "headless-sports",
+  "compatibility_date": "2026-11-01",
+  "assets": {
+    "directory": "./dist",
+    // Unknown paths return public/404.html (copied to dist/404.html) with a 404 status.
+    "not_found_handling": "404-page",
+  },
+
+  // Custom domain. Leave this commented until the first deploy has been smoke-tested on the
+  // *.workers.dev URL. A Workers custom domain requires the zone (allenzheng.com) to be on the
+  // SAME Cloudflare account that owns this Worker; Cloudflare then creates the DNS record and
+  // certificate for you. If the zone is elsewhere, read docs/DEPLOY.md, "The custom domain".
+  // Uncomment (remove the comment marks and add a comma after the "assets" block above):
+  //
+  // "routes": [{ "pattern": "sports.allenzheng.com", "custom_domain": true }]
+}

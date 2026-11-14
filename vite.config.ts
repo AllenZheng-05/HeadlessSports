@@ -1,7 +1,10 @@
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
+import { serviceWorkerPlugin } from './src/sw/plugin';
+import { SECURITY_HEADERS } from './src/sw/securityHeaders';
 
 export default defineConfig({
+  plugins: [serviceWorkerPlugin()],
   build: {
     target: 'es2022',
     rolldownOptions: {
@@ -19,5 +22,9 @@ export default defineConfig({
   server: {
     port: 5173,
     strictPort: true,
+  },
+  preview: {
+    // The same headers Cloudflare sends (public/_headers), so tests run under the real policy.
+    headers: { ...SECURITY_HEADERS },
   },
 });

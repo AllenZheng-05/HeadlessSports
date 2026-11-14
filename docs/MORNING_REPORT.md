@@ -147,4 +147,18 @@ Pick Bowling; stand about 2 to 2.5 m back, whole body in view. Without a camera:
 7. **Pins.** Do they fall believably and settle in reasonable time? Any pins left wobbling or counted wrongly?
 8. Known issues: with keyboard and mouse, a straight ball needs the mouse about two thirds of the way across the screen (mouse centre aims left); `E` toggles, so the second pick-up needs two presses; the bowler's body hides the near half of the lane; the ball-return pedestal is partly behind the camera preview.
 
+### Milestone 6: archery
+
+Pick Archery; sitting or standing, shoulders and both arms in view. Without a camera: `/?sport=archery&input=debug&skipGate=1` (A selects the bow hand and the mouse places it, D selects the draw hand, E closes it near the bow hand to nock, drag away to draw, E again to release) or the bot at `/?sport=archery&source=synthetic&skipGate=1`.
+
+1. **Bow arm.** Hold your bow arm out to the side. Does the game accept it? Tunables: `bowMinReach`, `bowMaxDrop`.
+2. **Nock.** Bring the other hand next to the bow hand and close the fist. The hint should change. If not, note how far apart your wrists were. Tunables: `nockDistance`, `nockGraceMs`.
+3. **Draw.** Pull back. The Draw meter should reach 100% at a comfortable full pull. Tunables: `drawStart` 0.5, `drawFull` 2.1 (shoulder widths between the wrists).
+4. **Release.** Open the hand. The arrow should leave with the aim you were holding, not where the hand dragged to. Tunable: `releaseLookbackMs` 120. This is the only release in the game that relies on seeing the hand open, so note how reliable it is at your distance.
+5. **Aim.** Does the reticle follow the bow hand steadily? If twitchy, lower `aimGainX` / `aimGainY` (0.25) first, then the sway (`maxSwayRad`).
+6. **Lost hand.** Hide the draw hand: "Show me your hand" should appear and the draw should hold, cancelling after about 2.5 s.
+7. **Fallback.** If the fist is never seen, hold both hands together for 6 s: "Auto-nock" should appear; release by a quick move toward the bow hand or a 2.5 s hold.
+8. **Seated.** Play a round sitting down.
+9. Known issues: the camera sits close over the archer's shoulder, so the athlete is mostly out of frame and the target is small until the close-up after each shot (camera numbers are tunables: `camBack`, `camHeight`, `camSide`, `fovBase`, `fovDraw`).
+
 Checklists for the remaining sports are added as they are completed.
