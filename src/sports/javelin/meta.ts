@@ -17,9 +17,5 @@ export const meta: SportMeta = {
     'Swing your throwing arm hard overhead to throw',
     'Throw before the foul line',
   ],
-  debugKeys: [
-    'Tap R, or hold Up arrow (Shift: faster): run',
-    'Click, or tap T: throw (hold T longer: harder)',
-    'Mouse up and down: loft',
-  ],
+  debugKeys: ['Hold the button to run', 'Let go just before the line to throw'],
 };

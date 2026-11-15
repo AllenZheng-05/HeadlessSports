@@ -3,7 +3,7 @@ import { runScript } from '../../input/testing/runScript';
 import type { GameEvent } from '../../input/types';
 import { recognizerConfig } from '../../input/recognizers/config';
 import type { Script } from '../../tracking/synthetic/script';
-import { idle, overarmThrow, runInPlace } from '../../tracking/synthetic/scripts/moves';
+import { idle, jogInPlace, overarmThrow, runInPlace } from '../../tracking/synthetic/scripts/moves';
 
 /**
  * The exact sequence the javelin bot plays: run on the spot, then throw (no fist, no raise). Run through the real
@@ -70,4 +70,42 @@ describe('run -> throw through the real recognizers', () => {
       expect(rows.length).toBe(5);
     });
   }
+});
+
+describe('a whole-body jog -> throw through the real recognizers', () => {
+  it('the pump never makes an overarm throw; the throw makes exactly one; cadence stops after the jog', () => {
+    for (let seed = 1; seed <= 5; seed++) {
+      const script: Script = {
+        name: 'javelin-jog-seq',
+        steps: [
+          ...idle(600),
+          ...jogInPlace({
+            steps: 12,
+            stepsPerSecond: 4,
+            kneeLift: 0.3,
+            armPump: 0.4,
+            settle: false,
+          }),
+          ...overarmThrow('right', { power: 0.9, loftDeg: 100 }),
+          ...idle(400),
+        ],
+      };
+      let peak = 0;
+      const run = runScript(script, {
+        seed,
+        needs: { pose: true, handCrops: false, fullFrameHands: false },
+        onFrame: (s) => {
+          peak = Math.max(peak, s.cadence.stepsPerSecond);
+        },
+      });
+      const overarm = run.events.filter((e) => e.type === 'ThrowReleased' && e.style === 'overarm');
+      expect(overarm).toHaveLength(1);
+      expect(peak).toBeGreaterThan(3.5);
+      expect(peak).toBeLessThan(4.6);
+      // Steps come from the jog (it ends at 600 + 250 + 3000 ms), not from the throw after it: at
+      // most the arm's first move into the throw can read as one more step.
+      const late = run.events.filter((e) => e.type === 'Step' && e.t > 600 + 250 + 3000 + 50);
+      expect(late.length).toBeLessThanOrEqual(1);
+    }
+  });
 });

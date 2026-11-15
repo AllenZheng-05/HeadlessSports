@@ -4,15 +4,17 @@ import { javelinConfig } from './config';
 import {
   attemptLine,
   attemptsFor,
-  clickThrow,
   createGame,
+  createMouseRun,
   distanceToLine,
   onStep,
   onThrow,
   requiredThrowSpeed,
   stepGame,
+  stepMouseRun,
 } from './game';
-import type { GameState, ThrowInput } from './game';
+import type { GameState, MouseRun, ThrowInput } from './game';
+import { flightRange } from './distance';
 
 const cfg = { ...javelinConfig };
 const DT = 1 / 120;
@@ -137,21 +139,147 @@ describe('throw guard', () => {
   });
 });
 
-describe('click throw', () => {
-  it('a click makes a valid overarm throw while running, higher with the pointer higher', () => {
-    const { s, now } = started();
-    const t = run(s, now, 2, 4);
-    const low = clickThrow(cfg, t, 'right', 0.9);
-    const high = clickThrow(cfg, t, 'right', 0.1);
-    expect(high.vy).toBeGreaterThan(low.vy);
-    expect(low.speed).toBeGreaterThan(requiredThrowSpeed(s, cfg));
-    expect(onThrow(s, cfg, t, high, 'right')).toBe(true);
-    expect(s.phase).toBe('flight');
-  });
-  it('a click before the run starts does nothing', () => {
+/** Drive the mouse flow like the sport does: one fixed step at a time. */
+function mouseSim(s: GameState, m: MouseRun, t0: number) {
+  let t = t0;
+  let releases = m.seenReleases;
+  return {
+    get t() {
+      return t;
+    },
+    release: () => {
+      releases++;
+    },
+    step(seconds: number, down: boolean): void {
+      const n = Math.round(seconds * 120);
+      for (let i = 0; i < n; i++) {
+        t += DT * 1000;
+        const target = stepMouseRun(m, s, cfg, t, DT, down, releases, false, 'right');
+        stepGame(s, cfg, DT, t, 0, target);
+      }
+    },
+  };
+}
+
+describe('mouse play', () => {
+  it('holding runs at the set speed, with no tap rate or other input', () => {
     const s = createGame(1);
-    expect(onThrow(s, cfg, 100, clickThrow(cfg, 100, 'right', 0.5), 'right')).toBe(false);
+    const m = createMouseRun(0);
+    const sim = mouseSim(s, m, 0);
+    sim.step(cfg.readyMs / 1000 + 0.05, true);
+    expect(s.phase).toBe('run');
+    sim.step(1.5, true);
+    expect(s.speed).toBeCloseTo(cfg.mouseRunSpeed, 6);
+    expect(s.position).toBeGreaterThan(5);
+  });
+  it('does not run without the button, and stops when it is let go before the run', () => {
+    const s = createGame(1);
+    const sim = mouseSim(s, createMouseRun(0), 0);
+    sim.step(cfg.readyMs / 1000 + 0.05, false);
+    sim.step(2, false);
+    expect(s.phase).toBe('run');
+    expect(s.speed).toBe(0);
+    expect(s.position).toBe(0);
+  });
+  it('a press during the get-ready beat starts the run when it ends, if still held', () => {
+    const s = createGame(1);
+    const sim = mouseSim(s, createMouseRun(0), 0);
+    sim.step(cfg.readyMs / 1000 - 0.3, true);
     expect(s.phase).toBe('ready');
+    expect(s.speed).toBe(0);
+    sim.step(0.4, true);
+    expect(s.phase).toBe('run');
+    sim.step(0.5, true);
+    expect(s.speed).toBeGreaterThan(3);
+  });
+  it('a release during the ready beat does nothing', () => {
+    const s = createGame(1);
+    const sim = mouseSim(s, createMouseRun(0), 0);
+    sim.step(0.5, true);
+    sim.release();
+    sim.step(cfg.readyMs / 1000, false);
+    expect(s.phase).toBe('run');
+    expect(s.records).toHaveLength(0);
+    sim.step(0.5, false);
+    expect(s.phase).toBe('run');
+  });
+  it('letting go throws once with the fixed power and loft', () => {
+    const s = createGame(1);
+    const sim = mouseSim(s, createMouseRun(0), 0);
+    sim.step(cfg.readyMs / 1000 + 0.05, true);
+    sim.step(1.5, true);
+    sim.release();
+    sim.step(DT * 2, false);
+    expect(s.phase).toBe('flight');
+    expect(s.releaseSeq).toBe(1);
+    expect(s.release.throwSpeed).toBe(cfg.mouseThrowSpeed);
+    expect(s.release.angleDeg).toBeCloseTo(cfg.mouseLoftDeg, 6);
+    expect(s.release.runSpeed).toBeCloseTo(cfg.mouseRunSpeed, 6);
+    sim.step(8, false);
+    expect(s.releaseSeq).toBe(1);
+    expect(s.records).toHaveLength(1);
+    expect(s.records[0]!.foul).toBe(false);
+  });
+  it('a very short tap runs briefly, then throws', () => {
+    const s = createGame(1);
+    const sim = mouseSim(s, createMouseRun(0), 0);
+    sim.step(cfg.readyMs / 1000 + 0.05, false);
+    sim.step(0.05, true);
+    sim.release();
+    sim.step(0.05, false);
+    expect(s.phase).toBe('run');
+    sim.step(0.3, false);
+    expect(s.phase).toBe('flight');
+    expect(s.release.runSpeed).toBeGreaterThan(0);
+    expect(s.position).toBeGreaterThan(0.3);
+    sim.step(8, false);
+    expect(s.records).toHaveLength(1);
+    expect(s.records[0]!.foul).toBe(false);
+  });
+  it('a release just before the line is a strong throw', () => {
+    const s = createGame(1);
+    const sim = mouseSim(s, createMouseRun(0), 0);
+    sim.step(cfg.readyMs / 1000 + 0.05, true);
+    while (distanceToLine(s, cfg) > 1) sim.step(0.01, true);
+    sim.release();
+    sim.step(DT * 2, false);
+    expect(s.flightFoul).toBe(false);
+    sim.step(8, false);
+    expect(s.records[0]!.distance).toBeGreaterThan(60);
+  });
+  it('a release after the line is a foul', () => {
+    const s = createGame(1);
+    const sim = mouseSim(s, createMouseRun(0), 0);
+    sim.step(cfg.readyMs / 1000 + 0.05, true);
+    while (distanceToLine(s, cfg) > -0.1) sim.step(0.01, true);
+    expect(s.phase).toBe('run');
+    sim.release();
+    sim.step(DT * 2, false);
+    expect(s.flightFoul).toBe(true);
+    sim.step(8, false);
+    expect(s.records[0]).toMatchObject({ foul: true, distance: 0 });
+  });
+  it('holding across the line is a foul and the javelin drops', () => {
+    const s = createGame(1);
+    const sim = mouseSim(s, createMouseRun(0), 0);
+    sim.step(cfg.readyMs / 1000 + 0.05, true);
+    sim.step(10, true);
+    expect(s.dropped).toBe(true);
+    sim.step(5, true);
+    expect(s.records[0]).toMatchObject({ foul: true, distance: 0, why: 'crossed' });
+  });
+  it('the fixed loft is close to the best angle for the fixed power', () => {
+    const v = cfg.baseSpeed + cfg.runGain * (cfg.mouseRunSpeed / cfg.maxRunSpeed) + cfg.throwGain;
+    let bestAngle = 0;
+    let best = 0;
+    for (let a = 10; a <= 52; a++) {
+      const r = flightRange(cfg, v, a);
+      if (r > best) {
+        best = r;
+        bestAngle = a;
+      }
+    }
+    expect(Math.abs(cfg.mouseLoftDeg - bestAngle)).toBeLessThanOrEqual(3);
   });
 });
 

@@ -1,5 +1,6 @@
 import { mirrorUpperBody } from '../../core/avatarDrive';
 import type { MeterTone, Sport, SportBot, SportContext, SportFactory } from '../../core/sport';
+import { asMouseControl } from '../../input/debug/mouseControl';
 import { recognizerConfig } from '../../input/recognizers/config';
 import type { GameEvent, Side } from '../../input/types';
 import { AvatarAnimator } from '../../render/avatar/AvatarAnimator';
@@ -13,9 +14,10 @@ import { flightPitch } from './distance';
 import {
   attemptLine,
   attemptsFor,
-  clickThrow,
   createGame,
   distanceToLine,
+  createMouseRun,
+  stepMouseRun,
   onStep,
   onThrow,
   stepGame,
@@ -40,17 +42,6 @@ export interface JavelinSport extends Sport {
   readonly log: readonly string[];
 }
 
-/** The click API of the keyboard-and-mouse provider (duck-typed; camera input has none). */
-interface ClickInput {
-  setPointerMode(on: boolean): void;
-  readonly pointerClicks: number;
-  readonly pointerY: number;
-}
-
-function isClickInput(input: unknown): input is ClickInput {
-  return typeof (input as Partial<ClickInput> | null)?.setPointerMode === 'function';
-}
-
 /** Pitch of the javelin when held, radians (nose up). */
 const HOLD_PITCH = 0.22;
 /** How fast the visual launch offset (mitt vs model release point) fades, 1/s. */
@@ -62,6 +53,12 @@ const FLIGHT_SCALE = 1.5;
 function botVariant(): 'slow' | 'fast' | null {
   const v = new URLSearchParams(globalThis.location?.search ?? '').get('botRun');
   return v === 'slow' || v === 'fast' ? v : null;
+}
+
+/** `?botStyle=jog` makes the bot jog with arms and torso as well as knees. */
+function botStyle(): 'legs' | 'jog' {
+  const v = new URLSearchParams(globalThis.location?.search ?? '').get('botStyle');
+  return v === 'jog' ? 'jog' : 'legs';
 }
 
 export const createJavelin: SportFactory = (ctx: SportContext): JavelinSport => {
@@ -133,12 +130,15 @@ export const createJavelin: SportFactory = (ctx: SportContext): JavelinSport => 
   let stickPitch = 0;
   let stickPhi = 0;
 
-  // Keyboard and mouse: a left click throws. Camera input has no click API.
-  const clicks = isClickInput(ctx.input) ? ctx.input : null;
-  let seenClicks = 0;
-  if (clicks) {
-    clicks.setPointerMode(true);
-    seenClicks = clicks.pointerClicks;
+  // Mouse (camera off): hold the button to run at a set speed, let go to throw. The mouse API is
+  // null for camera input.
+  const mouse = asMouseControl(ctx.input);
+  let mouseRun = createMouseRun(0);
+  let mouseCadenceSet = 0;
+  if (mouse) {
+    mouse.setManualMode(true);
+    mouse.setPointerFollow(false);
+    mouseRun = createMouseRun(mouse.pointerReleases);
   }
 
   // Events are queued by the input handlers and consumed in fixedUpdate, so every gesture is
@@ -238,7 +238,11 @@ export const createJavelin: SportFactory = (ctx: SportContext): JavelinSport => 
         lineShown = true;
         ctx.hud.setMeter('line', fill, `Foul line ${rem} m`, tone);
       }
-      if (game.idleHint) setHint('Lift your knees to run');
+      if (mouse) {
+        if (distanceToLine(game, cfg) <= cfg.throwZone) setHint('Let go!');
+        else if (game.speed < 0.5) setHint('Hold the button to run');
+        else setHint('Let go just before the line');
+      } else if (game.idleHint) setHint('Run on the spot: pump your arms and lift your knees');
       else if (distanceToLine(game, cfg) <= cfg.throwZone) setHint('Throw!');
       else setHint('Run on the spot: faster is farther');
       // Speed meter: fills with the run speed, so quicker feet are seen at once.
@@ -350,7 +354,7 @@ export const createJavelin: SportFactory = (ctx: SportContext): JavelinSport => 
       snapCamera = true;
       animator.stop();
       ctx.hud.setBanner('Get ready');
-      setHint('Run on the spot to build speed');
+      setHint(mouse ? 'Hold the button to run' : 'Run on the spot to build speed');
     }
     if (game.doneSeq !== seenDone) {
       seenDone = game.doneSeq;
@@ -464,28 +468,33 @@ export const createJavelin: SportFactory = (ctx: SportContext): JavelinSport => 
     start(): void {
       started = true;
       ctx.hud.setBanner('Get ready');
-      setHint('Run on the spot to build speed');
+      setHint(mouse ? 'Hold the button to run' : 'Run on the spot to build speed');
       refreshHud();
     },
 
     fixedUpdate(dt: number, nowMs: number): void {
       if (finished) return;
       drain(nowMs);
-      if (clicks) {
-        while (seenClicks < clicks.pointerClicks) {
-          seenClicks++;
-          if (ctx.paused) continue;
-          const taken = onThrow(
-            game,
-            cfg,
-            nowMs,
-            clickThrow(cfg, nowMs, hand, clicks.pointerY),
-            hand,
-          );
-          note(`click now=${nowMs.toFixed(0)} ${game.phase} taken=${taken}`);
+      let runTarget = -1;
+      if (mouse) {
+        runTarget = stepMouseRun(
+          mouseRun,
+          game,
+          cfg,
+          nowMs,
+          dt,
+          mouse.pointerDown,
+          mouse.pointerReleases,
+          ctx.paused,
+          hand,
+        );
+        const cadence = runTarget > 0 ? cfg.mouseCadence : 0;
+        if (cadence !== mouseCadenceSet) {
+          mouseCadenceSet = cadence;
+          mouse.setRunCadence(cadence);
         }
       }
-      stepGame(game, cfg, dt, nowMs, ctx.input.state.cadence.amplitude);
+      stepGame(game, cfg, dt, nowMs, ctx.input.state.cadence.amplitude, runTarget);
       react();
     },
 
@@ -531,12 +540,16 @@ export const createJavelin: SportFactory = (ctx: SportContext): JavelinSport => 
     },
 
     createBot(): SportBot {
-      return createJavelinBot(cfg, game, hand, ctx.random, botVariant());
+      return createJavelinBot(cfg, game, hand, ctx.random, botVariant(), botStyle());
     },
 
     dispose(): void {
       onAny();
-      if (clicks) clicks.setPointerMode(false);
+      if (mouse) {
+        mouse.setRunCadence(0);
+        mouse.setPointerFollow(true);
+        mouse.setManualMode(false);
+      }
       unregister();
       recognizerConfig.throw.maxBodySpeed = savedBodySpeed;
       recognizerConfig.throw.armSpeed = savedArmSpeed;

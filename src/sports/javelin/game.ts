@@ -173,23 +173,31 @@ export function requiredThrowSpeed(s: GameState, cfg: JavelinConfig): number {
 }
 
 /**
- * The throw a mouse click makes (keyboard and mouse play): a fixed good wrist speed, with the loft
- * from the pointer height (top of the screen throws high), like the T key's mouse loft.
+ * The throw a mouse release makes (mouse play): a fixed good wrist speed and a fixed loft. The
+ * only skill is when the button is let go. The 2D release direction that maps to `mouseLoftDeg`
+ * is the inverse of `releaseAngleDeg`.
  */
-export function clickThrow(
+export function mouseThrow(cfg: JavelinConfig, t: number, hand: 'left' | 'right'): ThrowInput {
+  const span = Math.max(1e-6, cfg.proxyHigh - cfg.proxyLow);
+  const range = Math.max(1e-6, cfg.maxAngle - cfg.minAngle);
+  const frac = Math.max(0, Math.min(1, (cfg.mouseLoftDeg - cfg.minAngle) / range));
+  const s = cfg.proxyLow + span * Math.pow(frac, 1 / Math.max(1e-6, cfg.angleCurve));
+  return { t, hand, speed: cfg.mouseThrowSpeed, vy: s * cfg.mouseThrowSpeed, style: 'overarm' };
+}
+
+/**
+ * The button was let go: throw at once with the fixed mouse throw. The get-ready lockout does not
+ * apply (a very short tap still throws). Returns true when the throw was taken.
+ */
+export function onMouseRelease(
+  s: GameState,
   cfg: JavelinConfig,
-  t: number,
+  nowMs: number,
   hand: 'left' | 'right',
-  pointerY: number,
-): ThrowInput {
-  const loft = Math.max(0, Math.min(1.4, (0.5 - pointerY) * 1.6 + 0.6));
-  return {
-    t,
-    hand,
-    speed: cfg.clickThrowSpeed,
-    vy: cfg.clickThrowSpeed * Math.sin(loft),
-    style: 'overarm',
-  };
+): boolean {
+  if (s.phase !== 'run') return false;
+  s.lockoutUntilMs = 0;
+  return onThrow(s, cfg, nowMs, mouseThrow(cfg, nowMs, hand), hand);
 }
 
 /**
@@ -229,6 +237,54 @@ export function onThrow(
   s.phaseT = 0;
   s.releaseSeq++;
   return true;
+}
+
+/** Mouse play: what the button has done so far this attempt. */
+export interface MouseRun {
+  seenReleases: number;
+  /** Game ms spent running under the button (or finishing a short tap). */
+  runMs: number;
+  /** A release has been seen and its throw is waiting for `mouseMinRunMs`. */
+  throwDue: boolean;
+}
+
+export function createMouseRun(releases: number): MouseRun {
+  return { seenReleases: releases, runMs: 0, throwDue: false };
+}
+
+/**
+ * Mouse play, once per fixed step before `stepGame`: hold runs at `mouseRunSpeed`, a release
+ * throws (after a very short tap has run for `mouseMinRunMs`). A press that began in the ready beat
+ * and is still held starts running the moment the run begins; a release before the run is ignored.
+ * Returns the run speed to pass to `stepGame`.
+ */
+export function stepMouseRun(
+  m: MouseRun,
+  s: GameState,
+  cfg: JavelinConfig,
+  nowMs: number,
+  dt: number,
+  down: boolean,
+  releases: number,
+  paused: boolean,
+  hand: 'left' | 'right',
+): number {
+  const run = s.phase === 'run' && !paused;
+  if (!run) {
+    m.runMs = 0;
+    m.throwDue = false;
+  }
+  if (releases !== m.seenReleases) {
+    m.seenReleases = releases;
+    if (run) m.throwDue = true;
+  }
+  const running = run && (down || m.throwDue);
+  if (running) m.runMs += dt * 1000;
+  if (run && m.throwDue && m.runMs >= cfg.mouseMinRunMs) {
+    m.throwDue = false;
+    onMouseRelease(s, cfg, nowMs, hand);
+  }
+  return running && s.phase === 'run' ? cfg.mouseRunSpeed : 0;
 }
 
 function land(s: GameState, cfg: JavelinConfig): void {
@@ -276,6 +332,8 @@ export function stepGame(
   dt: number,
   nowMs: number,
   amplitude: number,
+  /** Mouse play: when 0 or more, the run speed to head for instead of the cadence's (m/s). */
+  runTarget = -1,
 ): void {
   s.phaseT += dt;
   s.cadenceNow = effectiveCadence(s.cadence, nowMs - s.lastStepMs, cfg);
@@ -286,7 +344,7 @@ export function stepGame(
       break;
     case 'run': {
       s.runT += dt;
-      const target = targetRunSpeed(s.cadenceNow, amplitude, cfg);
+      const target = runTarget >= 0 ? runTarget : targetRunSpeed(s.cadenceNow, amplitude, cfg);
       s.speed = approachSpeed(s.speed, target, dt, cfg);
       s.position += s.speed * dt;
       s.idleHint = s.runT > cfg.idleTimeoutS && s.position < cfg.idleMoveM;

@@ -54,8 +54,16 @@ export const javelinConfig = {
   minThrowSpeed: 3,
   /** Added to the floor at full run speed, sw/s: arm pumping while running must not throw. */
   pumpMargin: 1.5,
-  /** Wrist speed a mouse click throws with (keyboard and mouse play), sw/s. */
-  clickThrowSpeed: 8.5,
+  /** Mouse play: the run speed while the button is held, m/s (reached with `accel`). */
+  mouseRunSpeed: 8,
+  /** Mouse play: the step rate shown while running, steps/s (looks only). */
+  mouseCadence: 4,
+  /** Mouse play: a release sooner than this after running starts keeps running until then, ms. */
+  mouseMinRunMs: 250,
+  /** Mouse play: the fixed arm power of a release (wrist speed, sw/s; `throwCeil` is full power). */
+  mouseThrowSpeed: 11,
+  /** Mouse play: the fixed release angle, degrees. */
+  mouseLoftDeg: 36,
   /** Only a throw with the wrist above the shoulder at the speed peak counts. */
   acceptAnyStyle: false,
   /** Latency compensation never steps back further than this, s. */
@@ -139,7 +147,11 @@ export const javelinRanges: Record<string, TunableRange> = {
   cadenceFadeMs: { min: 100, max: 1500, step: 50 },
   minThrowSpeed: { min: 1, max: 8, step: 0.1 },
   pumpMargin: { min: 0, max: 5, step: 0.1 },
-  clickThrowSpeed: { min: 2, max: 11, step: 0.5 },
+  mouseRunSpeed: { min: 3, max: 12, step: 0.5 },
+  mouseCadence: { min: 1, max: 6, step: 0.1 },
+  mouseMinRunMs: { min: 0, max: 1000, step: 50 },
+  mouseThrowSpeed: { min: 4, max: 14, step: 0.5 },
+  mouseLoftDeg: { min: 12, max: 52, step: 1 },
   maxBodySpeedOverride: { min: 0, max: 12, step: 0.5 },
   recognizerArmSpeed: { min: 0, max: 5, step: 0.1 },
   recognizerArmMs: { min: 0, max: 300, step: 10 },

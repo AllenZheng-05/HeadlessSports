@@ -35,7 +35,6 @@ interface JavelinHook {
     log: string[];
   } | null;
   drawCalls: number;
-  debugInput: { press(code: string): void; release(code: string): void } | null;
 }
 
 function watch(page: Page): string[] {
@@ -151,88 +150,84 @@ test.describe('javelin', () => {
     expect(problems).toEqual([]);
   });
 
-  test('keyboard and mouse: a valid throw, then a foul round', async ({ page }) => {
-    const problems = watch(page);
-    const call = (fn: string, code: string): Promise<void> =>
-      page.evaluate(
-        ([f, c]) => {
-          const d = (window as unknown as { __game: JavelinHook }).__game
-            .debugInput as unknown as Record<string, (code: string) => void>;
-          d[f as string]!(c as string);
-        },
-        [fn, code] as const,
-      );
-
+  const gameResult = (page: Page): Promise<JavelinHook['result']> =>
+    page.evaluate(() => (window as unknown as { __game: JavelinHook }).__game.result);
+  const lineGapBelow = (page: Page, metres: number): Promise<unknown> =>
+    page.waitForFunction(
+      (m) => {
+        const s = (window as unknown as { __game: JavelinHook }).__game.sport;
+        return s !== null && s.phase === 'run' && s.distanceToLine < m;
+      },
+      metres,
+      { timeout: 30000 },
+    );
+  async function startMouseRound(page: Page): Promise<void> {
     await page.goto('/?sport=javelin&input=debug&skipGate=1&short=1');
     await waitPhase(page, 'playing');
     await page.waitForTimeout(400);
     expect(await sportPhase(page)).toBe('ready');
     // No start gesture: the run begins by itself after the get-ready beat.
     await waitSportPhase(page, 'run', 8000);
-    await call('press', 'ArrowUp');
-    await page.waitForFunction(
-      () => {
-        const s = (window as unknown as { __game: JavelinHook }).__game.sport;
-        return s !== null && s.distanceToLine < 9.5 && s.distanceToLine > 7;
-      },
-      undefined,
-      { timeout: 30000 },
-    );
-    await call('press', 'KeyT');
-    await page.waitForTimeout(600);
-    await call('release', 'KeyT');
-    await call('release', 'ArrowUp');
-    await waitPhase(page, 'results', 60000);
-    const result = await page.evaluate(
-      () => (window as unknown as { __game: JavelinHook }).__game.result,
-    );
-    console.info(`debug throw: ${JSON.stringify(result)}`);
-    expect(result!.score).toBeGreaterThan(10);
-    expect(problems).toEqual([]);
+    await page.mouse.move(600, 400);
+  }
 
-    // Second round: never throw. The athlete crosses the line: foul, score 0.
-    await page.goto('/?sport=javelin&input=debug&skipGate=1&short=1');
-    await waitPhase(page, 'playing');
-    await page.waitForTimeout(400);
-    await waitSportPhase(page, 'run', 8000);
-    await call('press', 'ArrowUp');
+  test('mouse: holding runs, letting go before the line is a scoring throw', async ({ page }) => {
+    const problems = watch(page);
+    await startMouseRound(page);
+    await page.mouse.down();
+    await lineGapBelow(page, 4);
+    await page.mouse.up();
+    await waitSportPhase(page, 'flight', 5000);
     await waitPhase(page, 'results', 60000);
-    const foul = await page.evaluate(
-      () => (window as unknown as { __game: JavelinHook }).__game.result,
-    );
-    console.info(`debug foul: ${JSON.stringify(foul)}`);
-    expect(foul!.score).toBe(0);
-    expect(foul!.headline).toBe('No mark');
+    const result = await gameResult(page);
+    console.info(`mouse throw: ${JSON.stringify(result)}`);
+    expect(result!.score).toBeGreaterThan(40);
     expect(problems).toEqual([]);
   });
 
-  test('keyboard and mouse: tapping R to run, faster taps run faster', async ({ page }) => {
+  test('mouse: pressing during the get-ready beat starts the run when it ends', async ({
+    page,
+  }) => {
     const problems = watch(page);
-    const tap = (code: string): Promise<void> =>
-      page.evaluate((c) => {
-        const d = (window as unknown as { __game: JavelinHook }).__game.debugInput;
-        d!.press(c);
-        d!.release(c);
-      }, code);
-    const speed = (): Promise<number> =>
-      page.evaluate(() => (window as unknown as { __game: JavelinHook }).__game.sport?.speed ?? 0);
-
     await page.goto('/?sport=javelin&input=debug&skipGate=1&short=1');
     await waitPhase(page, 'playing');
+    await page.mouse.move(600, 400);
+    await page.mouse.down();
+    expect(await sportPhase(page)).toBe('ready');
     await waitSportPhase(page, 'run', 8000);
-    for (let i = 0; i < 6; i++) {
-      await tap('KeyR');
-      await page.waitForTimeout(450);
-    }
-    const slow = await speed();
-    for (let i = 0; i < 14; i++) {
-      await tap('KeyR');
-      await page.waitForTimeout(220);
-    }
-    const fast = await speed();
-    console.info(`tap speed: slow ${slow.toFixed(2)} fast ${fast.toFixed(2)}`);
-    expect(slow).toBeGreaterThan(0.5);
-    expect(fast).toBeGreaterThan(slow + 1);
+    await page.waitForFunction(
+      () => ((window as unknown as { __game: JavelinHook }).__game.sport?.speed ?? 0) > 3,
+      undefined,
+      { timeout: 8000 },
+    );
+    await page.mouse.up();
+    await waitPhase(page, 'results', 60000);
+    expect(problems).toEqual([]);
+  });
+
+  test('mouse: letting go after the line is a foul', async ({ page }) => {
+    const problems = watch(page);
+    await startMouseRound(page);
+    await page.mouse.down();
+    await lineGapBelow(page, -0.1);
+    await page.mouse.up();
+    await waitPhase(page, 'results', 60000);
+    const result = await gameResult(page);
+    console.info(`mouse late release: ${JSON.stringify(result)}`);
+    expect(result!.score).toBe(0);
+    expect(result!.headline).toBe('No mark');
+    expect(problems).toEqual([]);
+  });
+
+  test('mouse: holding across the line is a foul', async ({ page }) => {
+    const problems = watch(page);
+    await startMouseRound(page);
+    await page.mouse.down();
+    await waitPhase(page, 'results', 60000);
+    const result = await gameResult(page);
+    expect(result!.score).toBe(0);
+    expect(result!.headline).toBe('No mark');
+    await page.mouse.up();
     expect(problems).toEqual([]);
   });
 
@@ -262,29 +257,28 @@ test.describe('javelin', () => {
     expect(problems).toEqual([]);
   });
 
-  test('keyboard and mouse: a left click throws', async ({ page }) => {
+  test('a whole-body jog (arm pump, torso bob, small knees) runs the athlete and throws', async ({
+    page,
+  }) => {
     const problems = watch(page);
-    await page.goto('/?sport=javelin&input=debug&skipGate=1&short=1');
+    await page.goto(
+      '/?sport=javelin&source=synthetic&skipGate=1&short=1&timeScale=4&seed=3&botStyle=jog',
+    );
     await waitPhase(page, 'playing');
-    await waitSportPhase(page, 'run', 8000);
-    await page.keyboard.down('ArrowUp');
     await page.waitForFunction(
-      () => {
-        const s = (window as unknown as { __game: JavelinHook }).__game.sport;
-        return s !== null && s.distanceToLine < 9.5 && s.distanceToLine > 7;
-      },
+      () => ((window as unknown as { __game: JavelinHook }).__game.sport?.speed ?? 0) > 3,
       undefined,
-      { timeout: 30000 },
+      { timeout: 60000 },
     );
-    await page.mouse.click(600, 300);
-    await page.keyboard.up('ArrowUp');
-    await waitSportPhase(page, 'flight', 5000);
-    await waitPhase(page, 'results', 60000);
-    const result = await page.evaluate(
-      () => (window as unknown as { __game: JavelinHook }).__game.result,
+    await waitPhase(page, 'results', 150000);
+    const recs = await page.evaluate(
+      () => (window as unknown as { __game: JavelinHook }).__game.sport?.records ?? [],
     );
-    console.info(`click throw: ${JSON.stringify(result)}`);
-    expect(result!.score).toBeGreaterThan(10);
+    console.info(`jog bot: ${JSON.stringify(recs)}`);
+    expect(recs).toHaveLength(1);
+    expect(recs[0]!.foul).toBe(false);
+    expect(recs[0]!.runSpeed).toBeGreaterThan(2.5);
+    expect(recs[0]!.distance).toBeGreaterThan(20);
     expect(problems).toEqual([]);
   });
 });
