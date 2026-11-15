@@ -1,5 +1,5 @@
 import type { Side } from '../../input/types';
-import { aimPitch, createAim } from './aim';
+import { aimPitch, createAim, steerOffset } from './aim';
 import type { Aim, PitchKind } from './aim';
 import type { PitchingConfig } from './config';
 import { flightSeconds, latencyProgress } from './flight';
@@ -373,12 +373,21 @@ export function onThrow(
   }
   aimPitch(cfg, e, throwingHand, g.kind, g.target, g.debug, g.aim, g.scratch);
   if (live !== null) {
-    // The pitch goes where the aim indicator was pointing at the release time.
+    // The pitch goes where the ring was locked at the throw's start, plus the throwing arm's small
+    // steering (camera only: the mouse puts the pitch exactly under the cursor).
+    let sx = 0;
+    let sy = 0;
+    if (!g.debug) {
+      steerOffset(cfg, e, throwingHand, false, g.scratch);
+      sx = g.scratch.x;
+      sy = g.scratch.y;
+    }
     const dx = g.kind === 'curve' ? e.curvature * cfg.curvatureGain : 0;
-    g.aim.rawX = live.rawX + dx;
-    g.aim.rawY = live.rawY;
-    g.aim.x = live.x + dx * (1 - cfg.assist);
-    g.aim.y = live.y;
+    const k = 1 - cfg.assist;
+    g.aim.rawX = live.rawX + dx + sx;
+    g.aim.rawY = live.rawY + sy;
+    g.aim.x = live.x + (dx + sx) * k;
+    g.aim.y = live.y + sy * k;
   }
   g.score = scorePitch(cfg, g.aim.x, g.aim.y, g.target, g.kind, g.aim.scoredKmh, g.called);
   g.flightMs = flightSeconds(cfg, g.aim.kmh) * 1000;

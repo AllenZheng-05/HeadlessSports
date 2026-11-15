@@ -158,6 +158,33 @@ describe('the rhythm of a pitch', () => {
   });
 });
 
+describe('steering on top of the locked ring', () => {
+  const live = { rawX: 0.1, rawY: 0.9, x: 0.05, y: 0.85, kmh: 0, scoredKmh: 0 };
+  const thrown = (e: Partial<ThrowInput>, debug = false) => {
+    const g = createGame(3, lcg(1), debug);
+    skipCall(g);
+    toWindup(g, hand());
+    onThrow(g, cfg, 0, throwAt(e), 'right', false, live);
+    return g;
+  };
+  it('a natural release goes where the ring was', () => {
+    const g = thrown({ lateral: 0.62, vy: 6 * (cfg.proxyLow + cfg.proxyHigh) * 0.5 });
+    expect(g.aim.rawX).toBeCloseTo(0.1, 9);
+    expect(g.aim.rawY).toBeCloseTo(0.9, 9);
+  });
+  it('a pushed release nudges it, by at most the steering clamp', () => {
+    const g = thrown({ lateral: 0.62 + 5, vy: 6 });
+    expect(g.aim.rawX).toBeCloseTo(0.1 + cfg.steerMaxX, 9);
+    expect(g.aim.rawY).toBeCloseTo(0.9 + cfg.steerMaxY, 9);
+    expect(g.aim.x).toBeCloseTo(0.05 + cfg.steerMaxX * (1 - cfg.assist), 9);
+  });
+  it('the mouse is not steered', () => {
+    const g = thrown({ lateral: 0.62 + 5, vy: 6 }, true);
+    expect(g.aim.x).toBe(0.05);
+    expect(g.aim.y).toBe(0.85);
+  });
+});
+
 describe('the call is scored', () => {
   it('records whether the pitch thrown was the one called', () => {
     for (const same of [true, false]) {
@@ -170,12 +197,13 @@ describe('the call is scored', () => {
       expect(g.score.matched).toBe(same);
     }
   });
-  it('a throw is scored where the live indicator pointed, not from the event', () => {
+  it('a throw is scored where the locked ring pointed (steering off), not from the event', () => {
     const g = createGame(3, lcg(1));
     skipCall(g);
     toWindup(g, hand());
     const live = { rawX: 0.1, rawY: 0.9, x: 0.05, y: 0.85, kmh: 0, scoredKmh: 0 };
-    onThrow(g, cfg, 0, throwAt({ lateral: 1.4, vy: 5 }), 'right', false, live);
+    const off = { ...cfg, steerGainX: 0, steerGainY: 0 };
+    onThrow(g, off, 0, throwAt({ lateral: 1.4, vy: 5 }), 'right', false, live);
     expect(g.aim.x).toBe(0.05);
     expect(g.aim.y).toBe(0.85);
     expect(g.aim.rawX).toBe(0.1);

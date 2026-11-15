@@ -13,8 +13,8 @@ export const meta: SportMeta = {
   needsSpace: true,
   score: { label: 'Score', unit: 'pts', decimals: 0, higherIsBetter: true },
   howTo: [
-    'Read the call above the catcher. Fist for a fastball, open hand for a curve, held still',
-    'Wind up and throw. The ring shows where the pitch will go',
+    'Read the call. Fist for a fastball, open hand for a curve, held still',
+    'Point your glove hand where you want it. Throw with your other arm: faster is faster, and your release nudges it',
     'Throw what was called for bonus points',
   ],
   debugKeys: [

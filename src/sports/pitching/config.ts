@@ -40,13 +40,40 @@ export const pitchingConfig = {
   minThrowSpeed: 2.5,
   acceptAnyStyle: true,
 
-  // Where the pitch goes. Aim comes from the 2D release only: never depth.
-  /** Wrist x relative to the shoulder midpoint for a natural straight throw, sw (per side). */
-  neutralLateral: 0.62,
-  /** Metres of pitch location per shoulder width of release offset. */
-  aimGainX: 0.55,
+  // Where the pitch goes. The glove hand places the ring; the throwing arm only steers a little.
+  // Aim comes from 2D positions only: never depth.
+  /** Glove wrist at rest-in-front-of-chest, relative to the shoulder midpoint, sw toward the glove side. */
+  gloveNeutralX: 0.15,
+  /** Glove wrist height relative to its shoulder at the neutral point, sw (up is positive). */
+  gloveNeutralY: -0.35,
+  /** Metres of pitch location per shoulder width of glove movement (about +-0.5 sw covers the zone). */
+  gloveGainX: 1,
+  gloveGainY: 1,
   /** Largest sideways miss before the zone assist and the curve break, m. */
   maxMiss: 0.9,
+  /** Height range around the zone centre, m. */
+  heightRange: 0.55,
+  /** The glove wrist counts as tracked at or above this pose visibility, 0 to 1. */
+  gloveMinVisibility: 0.5,
+  /** Glove not tracked: the ring holds its last value this long, ms. */
+  gloveGraceMs: 800,
+  /** Then it eases to the centre of the zone with this time constant, ms. */
+  gloveEaseMs: 500,
+  /** The ring holds while the throwing wrist is at or above this speed, sw/s (below minThrowSpeed). */
+  lockSpeed: 2,
+  /** When the hold starts, the ring goes back this far to what it showed before the throw, ms. */
+  lockBackMs: 100,
+  /** A release the ring was not holding for uses the ring value this long before it, ms. */
+  lockFallbackLeadMs: 350,
+  /** Throwing-arm steering on top of the locked aim: m per sw of release offset from neutral. 0 turns it off. */
+  steerGainX: 0.3,
+  /** And per unit of the height proxy offset (m of proxy height, see heightRange). 0 turns it off. */
+  steerGainY: 0.3,
+  /** Steering never moves the pitch more than this on each axis, m. */
+  steerMaxX: 0.15,
+  steerMaxY: 0.15,
+  /** Wrist x relative to the shoulder midpoint for a natural straight throw, sw (per side). */
+  neutralLateral: 0.62,
   /**
    * The release height proxy s = vy / speed maps linearly from proxyLow (lowest) to proxyHigh
    * (highest). Measured for the synthetic overarmThrow at loftDeg 60 and 110 (see sequence.test.ts).
@@ -57,24 +84,14 @@ export const pitchingConfig = {
   /** Mouse throws report vy / speed in 0 to 1 (mouse centre about 0.57). */
   debugProxyLow: 0.1,
   debugProxyHigh: 1,
-  /** Height range around the zone centre, m. */
-  heightRange: 0.55,
   /** Curveball break, m: down, and toward the glove side (away from the throwing hand). */
   curveDrop: 0.22,
   curveSide: 0.12,
   /** Extra sideways break per unit of release path curvature (1/sw). 0 leaves it off. */
   curvatureGain: 0,
   curveSpeedFactor: 0.8,
-  // Live aim (the indicator). Release uses the same value the indicator showed.
-  /** Held wrist height relative to the shoulder (sw) that maps to the lowest and highest aim. */
-  holdAimLow: -0.6,
-  holdAimHigh: 0.9,
-  /** Below this wrist speed the indicator's height follows where the wrist is held, sw/s. */
-  blendSpeedLow: 1,
-  /** Smoothing time constant of the indicator while the arm is slow, ms. */
+  /** Smoothing time constant of the ring while the glove is tracked, ms. */
   aimSmoothMs: 160,
-  /** At or above this fraction of minThrowSpeed the indicator is not smoothed at all. */
-  aimFastFraction: 0.4,
   // Mouse play: no sign step and no power; a fixed good speed per pitch type.
   /** How long after the call appears a pitch can be thrown, ms (the buttons work from the call). */
   mouseReactMs: 700,
@@ -82,8 +99,8 @@ export const pitchingConfig = {
   mouseFastballSpeed: 7.5,
   /** The curveball is also slowed by curveSpeedFactor (about 80 km/h). */
   mouseCurveSpeed: 7,
-  /** The scored location is pulled this fraction of the way toward the lit cell's centre. */
-  assist: 0.35,
+  /** The scored location is pulled this fraction of the way toward the lit cell's centre (light: the aim is deliberate). */
+  assist: 0.15,
 
   // Speed
   speedFloor: 2.5,
@@ -171,8 +188,21 @@ export const pitchingRanges: Record<string, TunableRange> = {
   betweenPitchesMs: { min: 500, max: 5000, step: 100 },
   minThrowSpeed: { min: 1, max: 8, step: 0.1 },
   neutralLateral: { min: 0, max: 1.5, step: 0.02 },
-  aimGainX: { min: 0.1, max: 1.5, step: 0.05 },
   maxMiss: { min: 0.3, max: 2, step: 0.05 },
+  gloveNeutralX: { min: -0.5, max: 0.8, step: 0.02 },
+  gloveNeutralY: { min: -1, max: 0.5, step: 0.02 },
+  gloveGainX: { min: 0.3, max: 2.5, step: 0.05 },
+  gloveGainY: { min: 0.3, max: 2.5, step: 0.05 },
+  gloveMinVisibility: { min: 0.1, max: 0.95, step: 0.05 },
+  gloveGraceMs: { min: 0, max: 3000, step: 50 },
+  gloveEaseMs: { min: 50, max: 2000, step: 50 },
+  lockSpeed: { min: 0.8, max: 3, step: 0.1 },
+  lockBackMs: { min: 0, max: 300, step: 10 },
+  lockFallbackLeadMs: { min: 100, max: 800, step: 10 },
+  steerGainX: { min: 0, max: 1, step: 0.02 },
+  steerGainY: { min: 0, max: 1, step: 0.02 },
+  steerMaxX: { min: 0, max: 0.5, step: 0.01 },
+  steerMaxY: { min: 0, max: 0.5, step: 0.01 },
   proxyLow: { min: -1, max: 0.5, step: 0.05 },
   proxyHigh: { min: -0.5, max: 1, step: 0.05 },
   heightRange: { min: 0.1, max: 1.2, step: 0.05 },
@@ -181,11 +211,7 @@ export const pitchingRanges: Record<string, TunableRange> = {
   curvatureGain: { min: 0, max: 1, step: 0.02 },
   curveSpeedFactor: { min: 0.5, max: 1, step: 0.01 },
   assist: { min: 0, max: 1, step: 0.05 },
-  holdAimLow: { min: -1.5, max: 0.5, step: 0.05 },
-  holdAimHigh: { min: 0, max: 2, step: 0.05 },
-  blendSpeedLow: { min: 0.2, max: 2.5, step: 0.1 },
   aimSmoothMs: { min: 1, max: 600, step: 10 },
-  aimFastFraction: { min: 0.1, max: 1, step: 0.05 },
   calledBonus: { min: 0, max: 10, step: 1 },
   wrongPitchFactor: { min: 0, max: 1, step: 0.05 },
   speedFloor: { min: 0, max: 8, step: 0.1 },

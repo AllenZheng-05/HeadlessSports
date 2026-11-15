@@ -3,6 +3,7 @@ import type { MeterTone, Sport, SportBot, SportContext, SportFactory } from '../
 import { asMouseControl } from '../../input/debug/mouseControl';
 import type { MouseControl } from '../../input/debug/mouseControl';
 import type { GameEvent, Side } from '../../input/types';
+import { POSE_STRIDE, PoseIndex } from '../../tracking/types';
 import { AvatarAnimator } from '../../render/avatar/AvatarAnimator';
 import { AvatarRig } from '../../render/avatar/AvatarRig';
 import { BlobShadow } from '../../render/style/blobShadow';
@@ -12,6 +13,7 @@ import type { Fog } from 'three/webgpu';
 import {
   createAim,
   createLiveInput,
+  gloveSide,
   mouseThrowSpeed,
   pointedAim,
   sideSign,
@@ -70,7 +72,7 @@ export interface PitchingSport extends Sport {
   /** The speech bubble is showing, and what it says. */
   readonly bubble: { visible: boolean; text: string; sub: string };
   /** The live aim indicator: visible, and where it points (scored plane coordinates, m). */
-  readonly aimMarker: { visible: boolean; x: number; y: number };
+  readonly aimMarker: { visible: boolean; x: number; y: number; locked: boolean };
   readonly reading: Reading;
   readonly target: number;
   readonly score: number;
@@ -104,6 +106,7 @@ export const createPitching: SportFactory = (ctx: SportContext): PitchingSport =
   const cfg = pitchingConfig;
   const hand: Side = ctx.calibration?.handedness ?? 'right';
   const sg = sideSign(hand);
+  const gloveHand = gloveSide(hand);
   const isDebug = ctx.input.source === null;
   const mc = isDebug ? asMouseControl(ctx.input) : null;
   const mouse = mc !== null;
@@ -343,7 +346,7 @@ export const createPitching: SportFactory = (ctx: SportContext): PitchingSport =
     }
     if (game.windupSeq !== seenWindup) {
       seenWindup = game.windupSeq;
-      setHint(mouse ? 'Hold to aim, let go to throw' : 'Wind up and throw');
+      setHint(mouse ? 'Hold to aim, let go to throw' : 'Aim with your glove hand, then throw');
     }
     if (game.releaseSeq !== seenRelease) {
       seenRelease = game.releaseSeq;
@@ -507,7 +510,10 @@ export const createPitching: SportFactory = (ctx: SportContext): PitchingSport =
       liveVisible = false;
       return;
     }
-    trackedLive(cfg, st.arms[hand], hand, liveIn);
+    // The glove hand places the ring. It counts as tracked while its wrist is visible.
+    const wristIdx = gloveHand === 'left' ? PoseIndex.LEFT_WRIST : PoseIndex.RIGHT_WRIST;
+    const gloveSeen = st.pose[wristIdx * POSE_STRIDE + 3]! >= cfg.gloveMinVisibility;
+    trackedLive(cfg, st.arms[gloveHand], st.arms[hand].speed, hand, gloveSeen, liveIn, liveScratch);
     const t = st.t;
     // Before the pitch is picked the indicator follows the hand's own reading, else the call.
     let kind: PitchKind = game.kind;
@@ -640,8 +646,13 @@ export const createPitching: SportFactory = (ctx: SportContext): PitchingSport =
     get bubble(): { visible: boolean; text: string; sub: string } {
       return { visible: bubble.visible, text: bubbleMain, sub: bubbleSub };
     },
-    get aimMarker(): { visible: boolean; x: number; y: number } {
-      return { visible: marker.visible, x: liveAim.aim.x, y: liveAim.aim.y };
+    get aimMarker(): { visible: boolean; x: number; y: number; locked: boolean } {
+      return {
+        visible: marker.visible,
+        x: liveAim.aim.x,
+        y: liveAim.aim.y,
+        locked: liveAim.locked,
+      };
     },
     get reading(): Reading {
       return game.reading;
@@ -696,7 +707,7 @@ export const createPitching: SportFactory = (ctx: SportContext): PitchingSport =
         if (e.type !== 'ThrowReleased') continue;
         // Mouse play has no power: a fixed good speed per pitch type.
         const speed = mouse ? mouseThrowSpeed(cfg, game.kind) : e.speed;
-        const haveLive = liveAim.ready && liveAim.forRelease(e.t, !isDebug, liveRelease);
+        const haveLive = liveAim.ready && liveAim.forRelease(cfg, e.t, !isDebug, liveRelease);
         const out = onThrow(
           game,
           cfg,

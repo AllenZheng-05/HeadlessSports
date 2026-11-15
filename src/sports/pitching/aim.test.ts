@@ -3,10 +3,13 @@ import {
   aimPitch,
   baseKmh,
   createAim,
+  gloveAim,
+  gloveSide,
   heightOffset,
   mouseThrowSpeed,
   pointedAim,
   sideSign,
+  steerOffset,
 } from './aim';
 import type { ThrowSample } from './aim';
 import { pitchingConfig } from './config';
@@ -25,22 +28,89 @@ const aim = (
 const noAssist = { ...pitchingConfig, assist: 0 };
 const mid = (pitchingConfig.proxyLow + pitchingConfig.proxyHigh) / 2;
 
-describe('aim: horizontal', () => {
-  it('a natural release is straight for both hands', () => {
+describe('steering: sideways', () => {
+  it('a natural release steers nothing, for both hands', () => {
     expect(aim({}, 'right', 'fastball', 4, noAssist).x).toBeCloseTo(0, 9);
     expect(aim({}, 'left', 'fastball', 4, noAssist).x).toBeCloseTo(0, 9);
   });
-  it('releasing further out moves the pitch that way, for both hands', () => {
+  it('releasing further out steers that way, for both hands', () => {
+    const c = pitchingConfig;
     const r = aim({ lateral: 0.62 + 0.4 }, 'right', 'fastball', 4, noAssist);
-    expect(r.x).toBeCloseTo(0.4 * pitchingConfig.aimGainX, 9);
+    expect(r.x).toBeCloseTo(0.4 * c.steerGainX, 9);
     const l = aim({ lateral: -0.62 - 0.4 }, 'left', 'fastball', 4, noAssist);
-    expect(l.x).toBeCloseTo(-0.4 * pitchingConfig.aimGainX, 9);
+    expect(l.x).toBeCloseTo(-0.4 * c.steerGainX, 9);
     expect(aim({ lateral: 0.62 - 0.4 }, 'right', 'fastball', 4, noAssist).x).toBeLessThan(0);
     expect(aim({ lateral: -0.62 + 0.4 }, 'left', 'fastball', 4, noAssist).x).toBeGreaterThan(0);
   });
-  it('clamps the sideways miss', () => {
-    expect(aim({ lateral: 9 }, 'right', 'fastball', 4, noAssist).x).toBe(pitchingConfig.maxMiss);
-    expect(aim({ lateral: -9 }, 'right', 'fastball', 4, noAssist).x).toBe(-pitchingConfig.maxMiss);
+  it('clamps the steering to a small range', () => {
+    const c = pitchingConfig;
+    expect(aim({ lateral: 9 }, 'right', 'fastball', 4, noAssist).x).toBe(c.steerMaxX);
+    expect(aim({ lateral: -9 }, 'right', 'fastball', 4, noAssist).x).toBe(-c.steerMaxX);
+    expect(c.steerMaxX).toBeLessThanOrEqual(0.2);
+  });
+  it('a gain of 0 turns steering off', () => {
+    const off = { ...noAssist, steerGainX: 0, steerGainY: 0 };
+    const p = { x: 0, y: 0 };
+    steerOffset(off, { speed: 6, vy: 5, lateral: 3, curvature: 0 }, 'right', false, p);
+    expect(p.x).toBe(0);
+    expect(p.y).toBe(0);
+    const a = aim({ lateral: 3, vy: 5 }, 'right', 'fastball', 4, off);
+    expect(a.x).toBeCloseTo(0, 9);
+    expect(a.y).toBeCloseTo(pitchingConfig.zoneCentreY, 9);
+  });
+});
+
+describe('the glove hand places the ring', () => {
+  const c = pitchingConfig;
+  const o = { x: 0, y: 0 };
+  /** The glove wrist relative to its own shoulder that sits at the neutral point. */
+  const neutral = (hand: 'left' | 'right'): { x: number; y: number } => {
+    const g = sideSign(gloveSide(hand));
+    return { x: g * c.gloveNeutralX - g * 0.5, y: c.gloveNeutralY };
+  };
+  it('the glove is the opposite hand', () => {
+    expect(gloveSide('right')).toBe('left');
+    expect(gloveSide('left')).toBe('right');
+  });
+  it('the neutral point is the centre of the zone, for both handedness values', () => {
+    for (const hand of ['right', 'left'] as const) {
+      const n = neutral(hand);
+      gloveAim(c, hand, n.x, n.y, o);
+      expect(o.x).toBeCloseTo(0, 9);
+      expect(o.y).toBeCloseTo(c.zoneCentreY, 9);
+    }
+  });
+  it('moving the glove to screen right moves the ring to screen right, for both handedness values', () => {
+    for (const hand of ['right', 'left'] as const) {
+      const n = neutral(hand);
+      gloveAim(c, hand, n.x + 0.3, n.y, o);
+      expect(o.x).toBeCloseTo(0.3 * c.gloveGainX, 9);
+      gloveAim(c, hand, n.x - 0.3, n.y, o);
+      expect(o.x).toBeCloseTo(-0.3 * c.gloveGainX, 9);
+    }
+  });
+  it('moving the glove up moves the ring up, and down moves it down', () => {
+    for (const hand of ['right', 'left'] as const) {
+      const n = neutral(hand);
+      gloveAim(c, hand, n.x, n.y + 0.3, o);
+      expect(o.y).toBeCloseTo(c.zoneCentreY + 0.3 * c.gloveGainY, 9);
+      gloveAim(c, hand, n.x, n.y - 0.3, o);
+      expect(o.y).toBeCloseTo(c.zoneCentreY - 0.3 * c.gloveGainY, 9);
+    }
+  });
+  it('a comfortable box of about half a shoulder width covers the zone and a margin of balls', () => {
+    const n = neutral('right');
+    gloveAim(c, 'right', n.x + 0.5, n.y + 0.5, o);
+    expect(o.x).toBeGreaterThan(c.zoneWidth / 2 + c.nearMiss);
+    expect(o.y - c.zoneCentreY).toBeGreaterThan(c.zoneHeight / 2 + c.nearMiss);
+  });
+  it('is limited to the reachable range', () => {
+    gloveAim(c, 'right', 99, 99, o);
+    expect(o.x).toBe(c.maxMiss);
+    expect(o.y).toBeCloseTo(c.zoneCentreY + c.heightRange, 9);
+    gloveAim(c, 'right', -99, -99, o);
+    expect(o.x).toBe(-c.maxMiss);
+    expect(o.y).toBeCloseTo(c.zoneCentreY - c.heightRange, 9);
   });
 });
 
@@ -58,10 +128,14 @@ describe('aim: vertical', () => {
     expect(heightOffset(c, c.debugProxyLow, true)).toBeCloseTo(-c.heightRange, 9);
     expect(heightOffset(c, c.debugProxyHigh, true)).toBeCloseTo(c.heightRange, 9);
   });
-  it('a higher vy / speed throws higher', () => {
+  it('a higher vy / speed steers higher, within the steering clamp', () => {
     const lo = aim({ vy: -2.5 }, 'right', 'fastball', 4, noAssist).y;
     const hi = aim({ vy: 2.2 }, 'right', 'fastball', 4, noAssist).y;
     expect(hi).toBeGreaterThan(lo);
+    expect(hi - pitchingConfig.zoneCentreY).toBeLessThanOrEqual(pitchingConfig.steerMaxY + 1e-9);
+    expect(lo - pitchingConfig.zoneCentreY).toBeGreaterThanOrEqual(
+      -pitchingConfig.steerMaxY - 1e-9,
+    );
   });
 });
 

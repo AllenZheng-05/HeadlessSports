@@ -48,26 +48,45 @@ export function heightOffset(cfg: PitchingConfig, proxy: number, debug: boolean)
   return (u * 2 - 1) * cfg.heightRange;
 }
 
+/** The throwing arm's small correction on top of the locked aim, m. Positive x is screen right. */
+export function steerOffset(
+  cfg: PitchingConfig,
+  e: ThrowSample,
+  hand: Side,
+  debug: boolean,
+  out: Point,
+): Point {
+  const s = sideSign(hand);
+  const proxy = e.vy / Math.max(e.speed, 1e-3);
+  out.x = clamp(
+    (e.lateral - s * cfg.neutralLateral) * cfg.steerGainX,
+    -cfg.steerMaxX,
+    cfg.steerMaxX,
+  );
+  out.y = clamp(heightOffset(cfg, proxy, debug) * cfg.steerGainY, -cfg.steerMaxY, cfg.steerMaxY);
+  return out;
+}
+
 /**
- * The shared tail of every aim: the sideways position and height offset become a pitch location
- * (with the curveball break and the zone assist). The release and the live indicator both end
- * here, so they cannot disagree.
+ * The shared tail of every aim: a base point on the plate plane (the glove's aim, m) becomes a pitch
+ * location (with the curveball break and the zone assist). The live ring and the no-ring fallback
+ * both end here, so they cannot disagree.
  */
 export function placeAim(
   cfg: PitchingConfig,
   hand: Side,
   kind: PitchKind,
   targetCell: number,
-  lateral: number,
-  yOffset: number,
+  baseX: number,
+  baseY: number,
   speed: number,
   curvature: number,
   out: Aim,
   scratch: Point,
 ): Aim {
   const s = sideSign(hand);
-  let x = clamp((lateral - s * cfg.neutralLateral) * cfg.aimGainX, -cfg.maxMiss, cfg.maxMiss);
-  let y = cfg.zoneCentreY + yOffset;
+  let x = clamp(baseX, -cfg.maxMiss, cfg.maxMiss);
+  let y = baseY;
   let kmh = baseKmh(cfg, speed);
   if (kind === 'curve') {
     // Down, and toward the glove side: away from the throwing hand.
@@ -87,8 +106,9 @@ export function placeAim(
 }
 
 /**
- * Where a pitch crosses the plate plane, from the release event and the called cell. `debug`
- * selects the proxy range for mouse throws. Positive x is screen right. No depth.
+ * Where a pitch crosses the plate plane when there is no ring to read (the glove was never seen at
+ * all): the middle of the zone plus the throwing arm's steering. `debug` selects the proxy range
+ * for mouse throws. Positive x is screen right. No depth.
  */
 export function aimPitch(
   cfg: PitchingConfig,
@@ -100,14 +120,16 @@ export function aimPitch(
   out: Aim,
   scratch: Point,
 ): Aim {
-  const proxy = e.vy / Math.max(e.speed, 1e-3);
+  steerOffset(cfg, e, hand, debug, scratch);
+  const sx = scratch.x;
+  const sy = scratch.y;
   return placeAim(
     cfg,
     hand,
     kind,
     targetCell,
-    e.lateral,
-    heightOffset(cfg, proxy, debug),
+    sx,
+    cfg.zoneCentreY + sy,
     e.speed,
     e.curvature,
     out,
@@ -115,45 +137,62 @@ export function aimPitch(
   );
 }
 
+/** The glove hand is the side opposite the throwing hand. */
+export const gloveSide = (hand: Side): Side => (hand === 'right' ? 'left' : 'right');
+
 /** What the live aim reads each tracking frame. Filled in place. */
 export interface LiveInput {
-  /** Wrist x relative to the shoulder midpoint, sw (the same quantity as a release's `lateral`). */
-  lateral: number;
-  /** Height offset from the zone centre, m. */
-  yOffset: number;
-  /** Wrist speed, sw/s. */
+  /** Where the glove hand points on the plate plane, m (before the curve break and the assist). */
+  baseX: number;
+  baseY: number;
+  /** The glove wrist is tracked right now. */
+  gloveTracked: boolean;
+  /** Throwing wrist speed, sw/s. */
   speed: number;
 }
 
 export function createLiveInput(): LiveInput {
-  return { lateral: 0, yOffset: 0, speed: 0 };
+  return { baseX: 0, baseY: 0, gloveTracked: false, speed: 0 };
 }
 
 /**
- * The throwing arm now. Sideways is the release formula exactly. Height blends from where the
- * wrist is held (while slow) to the release proxy vy / speed as the arm speeds up, and is the
- * release proxy alone at throw speed, so at the moment of release the live aim and the release aim
- * are the same number.
+ * The glove hand to an aim point. `wristX` / `wristY` are the glove wrist relative to its own
+ * shoulder (sw, x toward screen right, y up: the `ArmState` convention). The neutral point is the
+ * hand in front of the chest; moving it right, left, up or down moves the aim the same way on
+ * screen, for either handedness.
  */
+export function gloveAim(
+  cfg: PitchingConfig,
+  hand: Side,
+  wristX: number,
+  wristY: number,
+  out: Point,
+): Point {
+  const g = sideSign(gloveSide(hand));
+  // Relative to the shoulder midpoint: the glove-side shoulder is half a shoulder width out.
+  const lateral = wristX + g * 0.5;
+  out.x = clamp((lateral - g * cfg.gloveNeutralX) * cfg.gloveGainX, -cfg.maxMiss, cfg.maxMiss);
+  out.y =
+    cfg.zoneCentreY +
+    clamp((wristY - cfg.gloveNeutralY) * cfg.gloveGainY, -cfg.heightRange, cfg.heightRange);
+  return out;
+}
+
+/** Fill the live input from the glove arm and the throwing arm's speed. */
 export function trackedLive(
   cfg: PitchingConfig,
-  arm: { wristX: number; wristY: number; vy: number; speed: number },
+  glove: { wristX: number; wristY: number },
+  throwSpeed: number,
   hand: Side,
+  gloveTracked: boolean,
   out: LiveInput,
+  scratch: Point,
 ): LiveInput {
-  const s = sideSign(hand);
-  out.lateral = arm.wristX + s * 0.5;
-  out.speed = arm.speed;
-  const span = Math.max(1e-6, cfg.holdAimHigh - cfg.holdAimLow);
-  const u = clamp((arm.wristY - cfg.holdAimLow) / span, 0, 1);
-  const held = (u * 2 - 1) * cfg.heightRange;
-  const moving = heightOffset(cfg, arm.vy / Math.max(arm.speed, 1e-3), false);
-  const w = clamp(
-    (arm.speed - cfg.blendSpeedLow) / Math.max(1e-6, cfg.minThrowSpeed - cfg.blendSpeedLow),
-    0,
-    1,
-  );
-  out.yOffset = held + (moving - held) * w;
+  gloveAim(cfg, hand, glove.wristX, glove.wristY, scratch);
+  out.baseX = scratch.x;
+  out.baseY = scratch.y;
+  out.gloveTracked = gloveTracked;
+  out.speed = throwSpeed;
   return out;
 }
 

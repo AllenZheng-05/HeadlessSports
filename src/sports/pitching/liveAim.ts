@@ -7,17 +7,27 @@ import type { Point } from './zone';
 const RING = 64;
 
 /**
- * The continuous aim: where the pitch would cross the plate if released now. It is computed with the
- * same `placeAim` as the release, lightly smoothed while the arm is slow (steady under camera
- * tracking) and not smoothed at throw speed. Every sample is kept for a moment, so a release is
- * scored from exactly what the indicator showed at the release time.
+ * The continuous aim: where the pitch would cross the plate if released now, placed by the glove
+ * hand. It is computed with the same `placeAim` as the release fallback and lightly smoothed (steady
+ * under camera tracking).
+ *
+ * Locking: while the throwing wrist is at or above `lockSpeed` the ring holds. When that begins, it
+ * is rewound `lockBackMs` (the glove arm may already be tucking as the throwing arm starts), then
+ * held until the throwing wrist slows again. A release is scored from the ring value at the release
+ * time, which is that held value. This is the speed-onset rule rather than a fixed lead before the
+ * release: it adapts to slow and fast throws. If the ring was somehow not held at the release time
+ * (a fast arm that never crossed the lock speed in a sample), the sample `fallbackLeadMs` earlier is
+ * used instead.
+ *
+ * Glove lost: the ring holds its last value for `gloveGraceMs`, then eases to the centre of the
+ * zone. It never stops the pitch.
  */
 export class LiveAim {
   /** The current (smoothed) aim: what the marker shows. */
   readonly aim: Aim = createAim();
   private readonly raw: Aim = createAim();
   private readonly ringT = new Float64Array(RING);
-  private readonly ringSpeed = new Float32Array(RING);
+  private readonly ringFrozen = new Uint8Array(RING);
   private readonly ringRawX = new Float32Array(RING);
   private readonly ringRawY = new Float32Array(RING);
   private readonly ringX = new Float32Array(RING);
@@ -28,18 +38,31 @@ export class LiveAim {
   private lastKind: PitchKind = 'fastball';
   private lastTarget = -1;
   private valid = false;
+  private frozen = false;
+  private lastGloveT = -1;
+  private everGlove = false;
+  private heldBaseX = 0;
+  private heldBaseY = 0;
 
-  /** Forget everything (a new pitch, or the hand was lost). */
+  /** Forget everything (a new pitch). */
   reset(): void {
     this.count = 0;
     this.head = 0;
     this.valid = false;
     this.lastT = -1;
+    this.frozen = false;
+    this.everGlove = false;
+    this.lastGloveT = -1;
   }
 
   /** Whether `aim` holds a real reading. */
   get ready(): boolean {
     return this.valid;
+  }
+
+  /** Whether the ring is held because the throwing arm is moving. */
+  get locked(): boolean {
+    return this.frozen;
   }
 
   /** Fold in one reading taken at game time `t`. Ignores a repeated timestamp. */
@@ -53,38 +76,57 @@ export class LiveAim {
     scratch: Point,
   ): void {
     if (this.valid && t === this.lastT) return;
-    placeAim(
-      cfg,
-      hand,
-      kind,
-      target,
-      input.lateral,
-      input.yOffset,
-      input.speed,
-      0,
-      this.raw,
-      scratch,
-    );
     const a = this.aim;
-    const r = this.raw;
     const snap = !this.valid || kind !== this.lastKind || target !== this.lastTarget;
-    const fast = input.speed >= cfg.minThrowSpeed * cfg.aimFastFraction;
-    let k = 1;
-    if (!snap && !fast) {
-      const dt = Math.max(0, t - this.lastT);
-      k = 1 - Math.exp(-dt / Math.max(1, cfg.aimSmoothMs));
+    const dt = this.valid ? Math.max(0, t - this.lastT) : 0;
+
+    const wantLock = input.speed >= cfg.lockSpeed && this.valid;
+    if (wantLock) {
+      if (!this.frozen) {
+        // The throw has started: go back to what the ring showed just before it.
+        if (this.at(t - cfg.lockBackMs, this.raw)) {
+          a.rawX = this.raw.rawX;
+          a.rawY = this.raw.rawY;
+          a.x = this.raw.x;
+          a.y = this.raw.y;
+        }
+      }
+      this.frozen = true;
+    } else {
+      this.frozen = false;
+      // Where the glove is, or where it was, or the centre of the zone.
+      let bx = input.baseX;
+      let by = input.baseY;
+      let tau = cfg.aimSmoothMs;
+      if (input.gloveTracked) {
+        this.lastGloveT = t;
+        this.everGlove = true;
+      } else if (this.everGlove && t - this.lastGloveT <= cfg.gloveGraceMs) {
+        // Hold the last value: aim at where the ring is now (its pre-curve, pre-assist base).
+        bx = this.heldBaseX;
+        by = this.heldBaseY;
+      } else {
+        bx = 0;
+        by = cfg.zoneCentreY;
+        tau = cfg.gloveEaseMs;
+      }
+      this.heldBaseX = bx;
+      this.heldBaseY = by;
+      placeAim(cfg, hand, kind, target, bx, by, input.speed, 0, this.raw, scratch);
+      const r = this.raw;
+      const k = snap ? 1 : 1 - Math.exp(-dt / Math.max(1, tau));
+      a.rawX += (r.rawX - a.rawX) * k;
+      a.rawY += (r.rawY - a.rawY) * k;
+      a.x += (r.x - a.x) * k;
+      a.y += (r.y - a.y) * k;
     }
-    a.rawX += (r.rawX - a.rawX) * k;
-    a.rawY += (r.rawY - a.rawY) * k;
-    a.x += (r.x - a.x) * k;
-    a.y += (r.y - a.y) * k;
     this.lastT = t;
     this.lastKind = kind;
     this.lastTarget = target;
     this.valid = true;
     const h = this.head;
     this.ringT[h] = t;
-    this.ringSpeed[h] = input.speed;
+    this.ringFrozen[h] = this.frozen ? 1 : 0;
     this.ringRawX[h] = a.rawX;
     this.ringRawY[h] = a.rawY;
     this.ringX[h] = a.x;
@@ -107,7 +149,7 @@ export class LiveAim {
     this.valid = true;
     const h = this.head;
     this.ringT[h] = t;
-    this.ringSpeed[h] = 99;
+    this.ringFrozen[h] = 0;
     this.ringRawX[h] = x;
     this.ringRawY[h] = y;
     this.ringX[h] = x;
@@ -116,30 +158,17 @@ export class LiveAim {
     if (this.count < RING) this.count++;
   }
 
-  /**
-   * The aim the indicator showed when the arm was fastest within [t0, t1]. A release event is
-   * stamped with the position-time of the peak while its velocity is read a few frames later, so
-   * the release is matched to the fastest sample around it. False when no sample is in the window.
-   */
-  atPeak(t0: number, t1: number, out: Aim): boolean {
+  /** Ring index of the newest sample at or before `t` (else the oldest), or -1 when empty. */
+  private pick(t: number): number {
     const n = this.count;
-    let best = -1;
-    let bestSpeed = -1;
+    if (n === 0) return -1;
+    let pick = (this.head - n + RING) % RING;
     for (let k = 0; k < n; k++) {
       const i = (this.head - n + k + RING) % RING;
-      const t = this.ringT[i]!;
-      if (t < t0 || t > t1) continue;
-      if (this.ringSpeed[i]! >= bestSpeed) {
-        bestSpeed = this.ringSpeed[i]!;
-        best = i;
-      }
+      if (this.ringT[i]! <= t + 1) pick = i;
+      else break;
     }
-    if (best < 0) return false;
-    out.rawX = this.ringRawX[best]!;
-    out.rawY = this.ringRawY[best]!;
-    out.x = this.ringX[best]!;
-    out.y = this.ringY[best]!;
-    return true;
+    return pick;
   }
 
   /**
@@ -147,35 +176,25 @@ export class LiveAim {
    * written into `out`'s position fields. False when nothing has been read.
    */
   at(t: number, out: Aim): boolean {
-    const n = this.count;
-    if (n === 0) return false;
-    let pick = (this.head - n + RING) % RING;
-    for (let k = 0; k < n; k++) {
-      const i = (this.head - n + k + RING) % RING;
-      if (this.ringT[i] <= t + 1) pick = i;
-      else break;
-    }
-    out.rawX = this.ringRawX[pick]!;
-    out.rawY = this.ringRawY[pick]!;
-    out.x = this.ringX[pick]!;
-    out.y = this.ringY[pick]!;
+    const i = this.pick(t);
+    if (i < 0) return false;
+    out.rawX = this.ringRawX[i]!;
+    out.rawY = this.ringRawY[i]!;
+    out.x = this.ringX[i]!;
+    out.y = this.ringY[i]!;
     return true;
   }
 
   /**
-   * The aim for a release event stamped `t`: sideways is what the indicator showed at `t` (the
-   * position-time of the peak), height is what it showed when the arm was fastest around it (the
-   * event's velocity is read a few frames after its timestamp). Both are values the indicator
-   * showed. The mouse has no such lag: pass `peak = false`.
+   * The base aim for a release event stamped `t`. Camera: the ring value at `t`, which is the held
+   * (locked) value; if the ring was not held then, the value `fallbackLeadMs` earlier. The mouse
+   * has no lock: pass `tracked = false`.
    */
-  forRelease(t: number, peak: boolean, out: Aim): boolean {
-    if (!this.at(t, out)) return false;
-    if (!peak) return true;
-    const x = out.x;
-    const rawX = out.rawX;
-    if (!this.atPeak(t - 40, t + 250, out)) return true;
-    out.x = x;
-    out.rawX = rawX;
-    return true;
+  forRelease(cfg: PitchingConfig, t: number, tracked: boolean, out: Aim): boolean {
+    if (!tracked) return this.at(t, out);
+    const i = this.pick(t);
+    if (i < 0) return false;
+    if (this.ringFrozen[i] === 1) return this.at(t, out);
+    return this.at(t - cfg.lockFallbackLeadMs, out);
   }
 }
