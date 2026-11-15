@@ -78,6 +78,21 @@ export function adjustSteps(drawHand: Side, out: number, y: number, settleMs = 4
   ];
 }
 
+/**
+ * The draw hand disappears for `ms` (behind the head at full draw, say) and comes back. Fist and
+ * wrist stay where they were: a tracker that loses the hand does not move it.
+ */
+export function dropoutSteps(drawHand: Side, ms: number): ScriptStep[] {
+  const vis = (v: number): Partial<BodyControls> =>
+    drawHand === 'left' ? { leftHandVisible: v } : { rightHandVisible: v };
+  return [
+    { dur: 40, to: vis(0), label: 'hand-lost' },
+    { dur: ms, label: 'hand-gone' },
+    { dur: 40, to: vis(1), label: 'hand-back' },
+    { dur: 200, label: 'hand-settle' },
+  ];
+}
+
 /** Open the draw hand: the release. */
 export function releaseSteps(drawHand: Side): ScriptStep[] {
   return [{ dur: 160, to: fist(drawHand, 0), label: 'release' }, ...idle(250)];
@@ -119,6 +134,8 @@ export function createArcheryBot(
   let lastKey = '';
   let lastProgressMs = -1;
   let handBack = false;
+  // The first arrow of the round loses the draw hand for a moment at full draw: it must not fire.
+  let dropoutDone = false;
 
   const progress = (nowMs: number): boolean => {
     const key = `${view.phase}|${view.arrowsShot}|${Math.round(view.draw * 8)}`;
@@ -194,6 +211,11 @@ export function createArcheryBot(
           }
           if (view.draw < 0.9) {
             enqueue(idle(150));
+            return;
+          }
+          if (!dropoutDone) {
+            dropoutDone = true;
+            enqueue(dropoutSteps(drawHand, 300));
             return;
           }
           const miss = Math.hypot(view.hitX, view.hitY);

@@ -21,20 +21,23 @@ describe('bow arm up', () => {
     expect(bowArmUp(1.2, 0.1, cfg)).toBe(true);
     expect(bowArmUp(-1.2, 0.1, cfg)).toBe(true);
     expect(bowArmUp(0.2, -1.4, cfg)).toBe(false); // hanging
-    expect(bowArmUp(0.3, 0.3, cfg)).toBe(false); // too close to the shoulder
-    expect(bowArmUp(0.5, 1.2, cfg)).toBe(false); // too high
-    expect(bowArmUp(1.2, -1.2, cfg)).toBe(false); // too low
+    expect(bowArmUp(0.1, 0.05, cfg)).toBe(false); // too close to the shoulder
+    expect(bowArmUp(0.5, 1.5, cfg)).toBe(false); // too high
+    expect(bowArmUp(1.2, -1.4, cfg)).toBe(false); // too low
     // Hysteresis: a sagging, short arm still holds a nocked arrow but does not start one.
-    expect(bowArmUp(0.3, 0.4, cfg)).toBe(false);
-    expect(bowArmUp(0.3, 0.4, cfg, true)).toBe(true);
-    expect(bowArmUp(0.8, -1.25, cfg)).toBe(false);
-    expect(bowArmUp(0.8, -1.25, cfg, true)).toBe(true);
+    expect(bowArmUp(0.2, -0.28, cfg)).toBe(false);
+    expect(bowArmUp(0.2, -0.28, cfg, true)).toBe(true);
+    expect(bowArmUp(0.8, -1.3, cfg)).toBe(false);
+    expect(bowArmUp(0.8, -1.3, cfg, true)).toBe(true);
+    // Side-on: the bow arm points at the camera, so the wrist stays near the shoulder in 2D.
+    expect(bowArmUp(0.2, 0.1, cfg)).toBe(true);
+    expect(bowArmUp(0.1, -0.3, cfg)).toBe(false);
     // Hands at rest by the sides are never "up".
     expect(bowArmUp(0.2, -1.5, cfg, true)).toBe(false);
   });
 
   it('uses the thresholds from the config', () => {
-    const loose = { ...cfg, bowMinReach: 0.3, bowMaxDrop: 1.5 };
+    const loose = { ...cfg, bowMinReach: 0.3, bowMaxDrop: 1.5, bowRaisedReach: 9 };
     expect(bowArmUp(0.3, 0.1, loose)).toBe(true);
     expect(bowArmUp(0.5, 1.4, loose)).toBe(true);
   });

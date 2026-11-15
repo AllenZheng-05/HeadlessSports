@@ -12,12 +12,19 @@ export const archeryConfig = {
 
   // Bow arm
   /** Bow wrist must be at least this far from its shoulder, sw. */
-  bowMinReach: 0.55,
+  bowMinReach: 0.4,
   /** ... and no further than this above or below shoulder height, sw. */
-  bowMaxDrop: 1.15,
+  bowMaxDrop: 1.2,
   /** Same two limits once the arrow is nocked (looser, so a sagging arm does not drop it), sw. */
-  bowHoldMinReach: 0.4,
+  bowHoldMinReach: 0.25,
   bowHoldMaxDrop: 1.35,
+  /**
+   * Side-on stance: the bow arm points at the camera, so its wrist sits close to the shoulder in 2D.
+   * Also counts as up when the wrist is at least this far (sw) from the shoulder and no lower than
+   * `bowRaisedY` (sw, positive up) relative to it.
+   */
+  bowRaisedReach: 0.15,
+  bowRaisedY: -0.2,
   /** Lowering the bow arm this long while drawing puts the arrow back, ms. */
   bowDropMs: 900,
 
@@ -57,14 +64,46 @@ export const archeryConfig = {
    * `drawFull - drawStart`; 0% itself follows the closest the hands came since the nock.
    */
   drawStart: 0.5,
-  drawFull: 1.85,
+  drawFull: 1.65,
   drawSmoothS: 0.08,
   /** Below this draw the arrow is put back instead of shot. */
   minDraw: 0.2,
   /** The shot uses draw and aim from this long before the open event, ms. */
   releaseLookbackMs: 120,
-  /** Hand lost this long while drawing puts the arrow back, ms. */
+  /** The draw hand model is not seen (pose still fine) this long while drawing puts the arrow back, ms. */
   lostHandCancelMs: 3500,
+
+  // Tracking loss: never shoot because something was lost
+  /** A wrist lost (out of frame, occluded, low confidence): the draw and aim hold for this long, ms. */
+  lostGraceMs: 700,
+  /** Past the grace the bow eases down over this long and the arrow goes back, ms. */
+  letDownMs: 600,
+  /** Smoothing time of that let-down, s. */
+  letDownS: 0.3,
+  /** After tracking returns or the wrists jump, no release is accepted for this long, ms. */
+  reacquireMs: 250,
+  /** A wrist distance change bigger than this between two steps is a glitch, not a move, sw. */
+  jumpSw: 0.9,
+  /** Wrists below this pose visibility count as lost. */
+  minWristVisibility: 0.25,
+  /** An open hand must stay open and tracked this long before it releases, ms. */
+  releaseConfirmMs: 40,
+  /** Kinematic release: the wrists close in faster than this (sw/s) for this long ... */
+  collapseSpeed: 5,
+  collapseConfirmMs: 60,
+  /** ... from at least this much draw. */
+  collapseMinDraw: 0.5,
+  /** ... and only if both wrists read at least this visible throughout the collapse window. */
+  collapseMinVisibility: 0.6,
+  /** A collapse faster than this (sw/s) is a tracking glitch, not a human release. */
+  collapseMaxSpeed: 14,
+  /** Look-back for "had this much draw lately" in the kinematic release, ms. */
+  collapseRecentMs: 250,
+  /**
+   * A hand that was closed before a tracking gap and comes back reading open, with wrists tracked,
+   * must stay open this long before it releases (less trusted than a live open edge), ms.
+   */
+  reopenConfirmMs: 200,
   /** How long the "pull back further" hint stays, ms. */
   furtherHintMs: 1500,
 
@@ -142,6 +181,22 @@ export const archeryRanges: Record<string, TunableRange> = {
   nockPullWindowMs: { min: 200, max: 4000, step: 100 },
   nockPullBowStableMs: { min: 0, max: 2000, step: 50 },
   lostHandCancelMs: { min: 500, max: 8000, step: 250 },
+  bowRaisedReach: { min: 0, max: 0.6, step: 0.05 },
+  bowRaisedY: { min: -1, max: 0.5, step: 0.05 },
+  lostGraceMs: { min: 200, max: 2500, step: 50 },
+  letDownMs: { min: 100, max: 2000, step: 50 },
+  letDownS: { min: 0.05, max: 1, step: 0.05 },
+  reacquireMs: { min: 0, max: 800, step: 25 },
+  jumpSw: { min: 0.3, max: 2, step: 0.05 },
+  minWristVisibility: { min: 0.05, max: 0.8, step: 0.05 },
+  releaseConfirmMs: { min: 0, max: 200, step: 10 },
+  collapseSpeed: { min: 2, max: 12, step: 0.5 },
+  collapseConfirmMs: { min: 10, max: 200, step: 10 },
+  collapseMinDraw: { min: 0.2, max: 0.95, step: 0.05 },
+  collapseMinVisibility: { min: 0.25, max: 0.95, step: 0.05 },
+  collapseMaxSpeed: { min: 6, max: 40, step: 1 },
+  collapseRecentMs: { min: 50, max: 600, step: 10 },
+  reopenConfirmMs: { min: 40, max: 600, step: 20 },
   drawStart: { min: 0.2, max: 1.5, step: 0.05 },
   drawFull: { min: 1, max: 3.2, step: 0.05 },
   minDraw: { min: 0.05, max: 0.8, step: 0.05 },

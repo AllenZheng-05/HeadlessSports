@@ -14,6 +14,7 @@ class Rig {
     valid: true,
     bowUp: true,
     dist: 0.7,
+    minVis: 1,
     present: true,
     known: true,
     closed: false,
@@ -224,7 +225,7 @@ describe('release', () => {
     expect(r.m.draw).toBeGreaterThan(0.95);
     expect(r.m.hint).toBe('aim');
     r.m.noteOpened(r.now);
-    expect(r.run(20, { closed: false })).toBe(StepEvent.Shot);
+    expect(r.run(80, { closed: false })).toBe(StepEvent.Shot);
     expect(r.m.phase).toBe('locked');
     expect(r.m.shot.draw).toBeGreaterThan(0.95);
     expect(r.m.shot.yaw).toBeCloseTo(0.05);
@@ -238,7 +239,7 @@ describe('release', () => {
     expect(r.m.draw).toBeLessThan(cfg.minDraw);
     expect(r.m.hint).toBe('pull');
     r.m.noteOpened(r.now);
-    expect(r.run(20, { closed: false })).toBe(StepEvent.Unnock);
+    expect(r.run(80, { closed: false })).toBe(StepEvent.Unnock);
     expect(r.m.phase).toBe('ready');
     expect(r.m.hint).toBe('further');
     r.run(cfg.furtherHintMs + 200);
@@ -254,7 +255,7 @@ describe('release', () => {
     // The hand opens at dragStart and drags the aim; the debounced event arrives 100 ms late.
     r.run(100, { yaw: 0.2, dist: 1.0 });
     r.m.noteOpened(dragStart + 30);
-    expect(r.run(20, { closed: false })).toBe(StepEvent.Shot);
+    expect(r.run(80, { closed: false })).toBe(StepEvent.Shot);
     expect(r.m.shot.yaw).toBeCloseTo(0.1);
     expect(r.m.shot.draw).toBeGreaterThan(0.9);
   });
@@ -264,7 +265,7 @@ describe('release', () => {
     r.nock();
     r.pull();
     r.m.noteOpened(r.now);
-    r.run(20, { closed: false });
+    r.run(80, { closed: false });
     const draw = r.m.shot.draw;
     r.m.noteClosed();
     r.run(500, { closed: true, dist: 0.7 });
@@ -412,5 +413,252 @@ describe('fallback for a fist that is never seen', () => {
     r.run(100, { ...blind, dist: 1.5 });
     r.run(cfg.fallbackHoldMs - 600, { ...blind, dist: 1.5 });
     expect(r.m.phase).toBe('drawing');
+  });
+});
+
+describe('tracking loss never shoots', () => {
+  const LOST = { valid: false, bowUp: false, dist: -1 } as const;
+  const BACK = { valid: true, bowUp: true } as const;
+
+  /** A rig at full draw, hand closed, ready to be tortured. */
+  function atFullDraw(): Rig {
+    const r = new Rig();
+    r.nock();
+    r.pull(2.2);
+    expect(r.m.draw).toBeGreaterThan(0.95);
+    return r;
+  }
+
+  it('a wrist lost for 300 ms at full draw returns with no shot and the draw carried on', () => {
+    const r = atFullDraw();
+    r.run(300, LOST);
+    expect(r.m.phase).toBe('drawing');
+    expect(r.m.hint).toBe('lost');
+    expect(r.m.tracking).toBe(false);
+    // Held, not collapsed: the draw is still full while the wrist is gone.
+    expect(r.m.draw).toBeGreaterThan(0.95);
+    r.run(300, { ...BACK, dist: 2.2 });
+    expect(r.m.phase).toBe('drawing');
+    expect(r.m.tracking).toBe(true);
+    expect(r.m.draw).toBeGreaterThan(0.95);
+    expect(r.events).toEqual([StepEvent.Nock]);
+    // And the draw still works afterwards: a real release fires.
+    r.m.noteOpened(r.now);
+    expect(r.run(100, { closed: false })).toBe(StepEvent.Shot);
+  });
+
+  it('a hand that reappears reading open does not shoot', () => {
+    const r = atFullDraw();
+    r.run(400, { ...LOST, present: false, known: true });
+    // Back, but the half-seen hand is classified open: the event comes with the first frames.
+    r.m.noteOpened(r.now);
+    // Nothing within the guard window (the hand-back guard is reacquireMs).
+    r.run(cfg.reacquireMs - 25, { ...BACK, dist: 2.2, present: true, closed: false });
+    expect(r.m.phase).toBe('drawing');
+    expect(r.events).toEqual([StepEvent.Nock]);
+  });
+
+  it('a hand that came back open, and stays open, shoots after the guard and the confirm, not before', () => {
+    const r = atFullDraw();
+    r.run(400, { ...LOST, present: false, known: true });
+    r.m.noteOpened(r.now);
+    r.run(cfg.reacquireMs + cfg.reopenConfirmMs - 60, {
+      ...BACK,
+      dist: 2.2,
+      present: true,
+      closed: false,
+    });
+    expect(r.events).toEqual([StepEvent.Nock]);
+    expect(r.run(150, {})).toBe(StepEvent.Shot);
+    expect(r.m.phase).toBe('locked');
+    expect(r.m.shot.draw).toBeGreaterThan(0.9);
+  });
+
+  it('a hand that comes back open only briefly, then closed, does not shoot; a later real open does', () => {
+    const r = atFullDraw();
+    r.run(400, { ...LOST, present: false, known: true });
+    r.run(cfg.reacquireMs + 20 + 100, { ...BACK, dist: 2.2, present: true, closed: false });
+    r.run(400, { closed: true });
+    expect(r.events).toEqual([StepEvent.Nock]);
+    expect(r.m.phase).toBe('drawing');
+    r.m.noteOpened(r.now);
+    expect(r.run(100, { closed: false })).toBe(StepEvent.Shot);
+  });
+
+  it('a hand that opened while the wrists were lost shoots once they are back and it stays open', () => {
+    const r = atFullDraw();
+    r.run(400, { ...LOST, closed: false });
+    r.run(cfg.reacquireMs + cfg.reopenConfirmMs - 60, { ...BACK, dist: 2.2 });
+    expect(r.events).toEqual([StepEvent.Nock]);
+    expect(r.run(150, {})).toBe(StepEvent.Shot);
+
+    // Back open for a moment only, then closed: carries on.
+    const r2 = atFullDraw();
+    r2.run(400, { ...LOST, closed: false });
+    r2.run(cfg.reacquireMs + 20 + 100, { ...BACK, dist: 2.2 });
+    r2.run(400, { closed: true });
+    expect(r2.events).toEqual([StepEvent.Nock]);
+    expect(r2.m.phase).toBe('drawing');
+  });
+
+  it('a wrist that reappears far from where it left does not shoot', () => {
+    const r = atFullDraw();
+    r.run(400, LOST);
+    // Came back right next to the bow hand: a 1.6 sw gap that must not read as a release.
+    r.run(1000, { ...BACK, dist: 0.6 });
+    expect(r.events).toEqual([StepEvent.Nock]);
+    expect(r.m.phase).toBe('drawing');
+    // The draw follows the new position instead of firing.
+    expect(r.m.draw).toBeLessThan(0.1);
+  });
+
+  it('a wrist reappearing in the middle of a fast pull-in is not read as a release either', () => {
+    const r = atFullDraw();
+    r.run(200, LOST);
+    for (let d = 2.2; d > 0.8; d -= 6 * DT) r.run(DT * 1000, { ...BACK, dist: d });
+    expect(r.events).not.toContain(StepEvent.Shot);
+  });
+
+  it('lost for longer than the grace lets the bow down and puts the arrow back', () => {
+    const r = atFullDraw();
+    r.run(cfg.lostGraceMs - 50, LOST);
+    expect(r.m.phase).toBe('drawing');
+    expect(r.m.draw).toBeGreaterThan(0.95);
+    r.run(250, LOST);
+    // Easing down, not shooting.
+    expect(r.m.draw).toBeLessThan(0.95);
+    expect(r.m.phase).toBe('drawing');
+    r.run(cfg.letDownMs, LOST);
+    expect(r.m.phase).toBe('ready');
+    expect(r.events).toEqual([StepEvent.Nock, StepEvent.Cancel]);
+    expect(r.events).not.toContain(StepEvent.Shot);
+  });
+
+  it('a hand reappearing mid-let-down carries on without shooting', () => {
+    const r = atFullDraw();
+    r.run(cfg.lostGraceMs + 200, LOST);
+    r.run(500, { ...BACK, dist: 2.2 });
+    expect(r.m.phase).toBe('drawing');
+    expect(r.m.draw).toBeGreaterThan(0.9);
+    expect(r.events).toEqual([StepEvent.Nock]);
+  });
+
+  it('a one-frame wrist jump at full draw does not shoot', () => {
+    const r = atFullDraw();
+    // One tracking frame (4 fixed steps at 30 Hz) with the wrist somewhere else.
+    r.run((4 * 1000) / 120, { dist: 0.7 });
+    r.run(1000, { dist: 2.2 });
+    expect(r.events).toEqual([StepEvent.Nock]);
+    expect(r.m.phase).toBe('drawing');
+    expect(r.m.draw).toBeGreaterThan(0.95);
+    // The same glitch the other way (a spike outward) is harmless too.
+    r.run((4 * 1000) / 120, { dist: 3.6 });
+    r.run(500, { dist: 2.2 });
+    expect(r.events).toEqual([StepEvent.Nock]);
+  });
+
+  it('a fist that opens and is lost at once is not a release', () => {
+    const r = atFullDraw();
+    r.m.noteOpened(r.now);
+    r.run(10, { closed: false });
+    r.run(300, { present: false, closed: false });
+    r.run(cfg.reacquireMs - 25, { present: true, closed: false });
+    expect(r.events).toEqual([StepEvent.Nock]);
+  });
+
+  it('a hand model that is gone while the wrists are fine keeps the draw following the wrists', () => {
+    const r = atFullDraw();
+    r.run(300, { present: false });
+    expect(r.m.hint).toBe('lost');
+    for (let d = 2.2; d > 1.4; d -= 1 * DT) r.run(DT * 1000, { dist: d, present: false });
+    r.run(300, { dist: 1.4, present: false });
+    expect(r.m.draw).toBeLessThan(0.85);
+    expect(r.m.phase).toBe('drawing');
+    expect(r.events).toEqual([StepEvent.Nock]);
+  });
+});
+
+describe('a real release still shoots', () => {
+  it('shoots from the open event, timestamped at the event, with the pre-drag draw', () => {
+    const r = new Rig();
+    r.nock();
+    r.pull(2.2);
+    const openAt = r.now;
+    r.m.noteOpened(openAt);
+    expect(r.run(100, { closed: false })).toBe(StepEvent.Shot);
+    expect(r.m.releaseT).toBe(openAt);
+    expect(r.m.shot.draw).toBeGreaterThan(0.95);
+  });
+
+  it('shoots on a fast collapse of the wrist distance even if the fist is never read open', () => {
+    const r = new Rig();
+    r.nock();
+    r.pull(2.2);
+    // The draw hand model is absent (a closed fist sliding would not count): the wrists alone decide.
+    r.run(300, { present: false });
+    // A triangular speed profile peaking about 90 ms in; the hand goes from 2.2 to 0.9 sw.
+    const t0 = r.now;
+    let dist = 2.2;
+    let peakT = 0;
+    let peakV = 0;
+    let ev: StepEventValue = StepEvent.None;
+    for (let i = 0; i < 60 && ev === StepEvent.None; i++) {
+      const tt = i * DT * 1000;
+      const v = Math.max(0, 14 - Math.abs(tt - 90) * 0.15); // sw/s
+      if (v > peakV) {
+        peakV = v;
+        peakT = t0 + tt;
+      }
+      dist = Math.max(0.9, dist - v * DT);
+      ev = r.run(DT * 1000, { dist });
+    }
+    expect(ev).toBe(StepEvent.Shot);
+    expect(r.m.shot.draw).toBeGreaterThan(0.9);
+    expect(Math.abs(r.m.releaseT - peakT)).toBeLessThan(70);
+  });
+
+  /** Wrists sliding together from full draw at `speed` sw/s for `ms`, with the given patch. */
+  function slide(speed: number, ms: number, patch: Partial<DrawSample>): Rig {
+    const r = new Rig();
+    r.nock();
+    r.pull(2.2);
+    r.run(300, { present: false });
+    let dist = 2.2;
+    for (let i = 0; i < Math.round(ms / (DT * 1000)); i++) {
+      dist = Math.max(0.2, dist - speed * DT);
+      r.run(DT * 1000, { dist, ...patch });
+    }
+    r.run(300, patch);
+    return r;
+  }
+
+  it('does not shoot on an occlusion slide at low wrist visibility', () => {
+    const r = slide(8, 150, { present: false, minVis: 0.4 });
+    expect(r.events).toEqual([StepEvent.Nock]);
+    expect(r.m.phase).toBe('drawing');
+  });
+
+  it('does not shoot on a slide faster than a hand can move, even at high visibility', () => {
+    const r = slide(25, 150, { present: false, minVis: 1 });
+    expect(r.events).toEqual([StepEvent.Nock]);
+    expect(r.m.phase).toBe('drawing');
+  });
+
+  it('does not shoot on a closed fist sliding in', () => {
+    const r = slide(8, 150, { present: true, known: true, closed: true, minVis: 1 });
+    expect(r.events).toEqual([StepEvent.Nock]);
+  });
+
+  it('shoots on the same slide at a human speed with high visibility and no hand model', () => {
+    const r = slide(8, 150, { present: false, minVis: 1 });
+    expect(r.events).toEqual([StepEvent.Nock, StepEvent.Shot]);
+  });
+
+  it('does not shoot on a slow relaxation of the draw', () => {
+    const r = new Rig();
+    r.nock();
+    r.pull(2.2);
+    for (let d = 2.2; d > 1.0; d -= 1.5 * DT) r.run(DT * 1000, { dist: d });
+    expect(r.events).toEqual([StepEvent.Nock]);
   });
 });

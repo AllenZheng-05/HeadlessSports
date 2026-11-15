@@ -141,6 +141,9 @@ test.describe('archery', () => {
     const s = await sportState(page);
     console.info(`archery bot rings: ${s.rings.join(', ')} (score ${g.result?.score})`);
     expect(s.rings).toHaveLength(2);
+    // The bot's draw hand drops out for 300 ms at the first full draw: the arrow stays nocked
+    // (no put-back to ready) and flies only once it is released.
+    expect(s.phaseLog.slice(0, 3)).toEqual(['ready', 'drawing', 'flying']);
     expect(problems).toEqual([]);
   });
 

@@ -17,13 +17,25 @@ export const saturate = (v: number): number => (v < 0 ? 0 : v > 1 ? 1 : v);
 export function bowArmUp(
   wristX: number,
   wristY: number,
-  cfg: Pick<ArcheryConfig, 'bowMinReach' | 'bowMaxDrop' | 'bowHoldMinReach' | 'bowHoldMaxDrop'>,
+  cfg: Pick<
+    ArcheryConfig,
+    | 'bowMinReach'
+    | 'bowMaxDrop'
+    | 'bowHoldMinReach'
+    | 'bowHoldMaxDrop'
+    | 'bowRaisedReach'
+    | 'bowRaisedY'
+  >,
   holding = false,
 ): boolean {
   // Hysteresis: easy to enter, harder to lose once the arrow is nocked.
   const minReach = holding ? cfg.bowHoldMinReach : cfg.bowMinReach;
   const maxDrop = holding ? cfg.bowHoldMaxDrop : cfg.bowMaxDrop;
-  return Math.hypot(wristX, wristY) >= minReach && Math.abs(wristY) <= maxDrop;
+  const reach = Math.hypot(wristX, wristY);
+  if (Math.abs(wristY) > maxDrop) return false;
+  if (reach >= minReach) return true;
+  // Side-on: the arm points at the camera, so the wrist stays near the shoulder in 2D.
+  return reach >= cfg.bowRaisedReach && wristY >= cfg.bowRaisedY;
 }
 
 /** How far the bow wrist is out from its shoulder, sw, outward positive for either side. */
@@ -117,6 +129,13 @@ export function wristDistanceRawException(
   const dx = (pose[l]! - pose[r]!) * aspect;
   const dy = pose[l + 1]! - pose[r + 1]!;
   return Math.hypot(dx, dy) / shoulderWidth;
+}
+
+/** The lower of the two wrists' pose visibility, 0..1. */
+export function wristMinVisibility(pose: Float32Array): number {
+  const l = pose[PoseIndex.LEFT_WRIST * POSE_STRIDE + 3]!;
+  const r = pose[PoseIndex.RIGHT_WRIST * POSE_STRIDE + 3]!;
+  return l < r ? l : r;
 }
 
 /**

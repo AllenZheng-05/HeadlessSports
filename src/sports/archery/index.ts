@@ -10,6 +10,7 @@ import {
   swayAmplitude,
   swayOffset,
   wristDistanceRawException,
+  wristMinVisibility,
   targetPitch,
   targetYaw,
 } from './aim';
@@ -53,7 +54,7 @@ const HINTS: Record<Hint, string> = {
   nock: 'Close your other fist next to it to nock',
   pull: 'Pull back to draw',
   aim: 'Aim with your bow arm, open your hand to release',
-  lost: 'Show me your hand',
+  lost: "I can't see your hands. Bring them back and keep drawing",
   further: 'Pull back further',
 };
 
@@ -123,6 +124,7 @@ export const createArchery: SportFactory = (ctx: SportContext): ArcherySport => 
     valid: false,
     bowUp: false,
     dist: 0,
+    minVis: 0,
     present: false,
     known: false,
     closed: false,
@@ -201,7 +203,13 @@ export const createArchery: SportFactory = (ctx: SportContext): ArcherySport => 
     }
     const drawing = phase === 'drawing';
     if (drawing) {
-      ctx.hud.setMeter('draw', dm.draw, 'Draw', dm.draw >= cfg.minDraw ? 'good' : 'warn');
+      const lost = mouse === null && !machine.tracking;
+      ctx.hud.setMeter(
+        'draw',
+        dm.draw,
+        lost ? 'Draw (hold on)' : 'Draw',
+        !lost && dm.draw >= cfg.minDraw ? 'good' : 'warn',
+      );
       meterOn = true;
     } else if (meterOn) {
       meterOn = false;
@@ -333,7 +341,12 @@ export const createArchery: SportFactory = (ctx: SportContext): ArcherySport => 
       );
     } else {
       const dh = s.hands[drawHand];
-      const dist = wristDistanceRawException(s.pose, s.aspect, s.shoulderWidth);
+      const dist = wristDistanceRawException(
+        s.pose,
+        s.aspect,
+        s.shoulderWidth,
+        cfg.minWristVisibility,
+      );
       const valid = s.hasPose && s.tracking && dist >= 0;
       const bowUp =
         valid && bowArmUp(bowArm.wristX, bowArm.wristY, cfg, machine.phase === 'drawing');
@@ -356,6 +369,7 @@ export const createArchery: SportFactory = (ctx: SportContext): ArcherySport => 
       sample.valid = valid;
       sample.bowUp = bowUp;
       sample.dist = dist;
+      sample.minVis = wristMinVisibility(s.pose);
       sample.present = dh.present;
       sample.known = dh.known;
       sample.closed = dh.closed;

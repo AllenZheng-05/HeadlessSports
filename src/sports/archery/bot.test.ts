@@ -3,8 +3,15 @@ import { runScript, syntheticCalibration } from '../../input/testing/runScript';
 import type { GameEvent, InputState, Side } from '../../input/types';
 import type { ScriptStep } from '../../tracking/synthetic/script';
 import { drawBow, idle } from '../../tracking/synthetic/scripts/moves';
-import { bowArmUp, otherSide, targetPitch, targetYaw, wristDistanceRawException } from './aim';
-import { adjustSteps, nockSteps, pullSteps, releaseSteps } from './bot';
+import {
+  bowArmUp,
+  otherSide,
+  targetPitch,
+  targetYaw,
+  wristDistanceRawException,
+  wristMinVisibility,
+} from './aim';
+import { adjustSteps, dropoutSteps, nockSteps, pullSteps, releaseSteps } from './bot';
 import { archeryConfig } from './config';
 import { DrawMachine, StepEvent } from './draw';
 import type { StepEventValue } from './draw';
@@ -16,6 +23,7 @@ interface Frame {
   valid: boolean;
   bowUp: boolean;
   dist: number;
+  minVis: number;
   present: boolean;
   known: boolean;
   closed: boolean;
@@ -52,6 +60,7 @@ function play(steps: ScriptStep[], drawHand: Side): Outcome {
           valid,
           bowUp: valid && bowArmUp(arm.wristX, arm.wristY, cfg),
           dist,
+          minVis: wristMinVisibility(s.pose),
           present: hand.present,
           known: hand.known,
           closed: hand.closed,
@@ -143,6 +152,21 @@ for (const drawHand of ['right', 'left'] as const) {
       expect(o.events).toEqual([StepEvent.Nock, StepEvent.Shot]);
       expect(o.shot!.draw).toBeGreaterThan(0.3);
       expect(o.shot!.draw).toBeLessThan(0.8);
+    });
+
+    it('a draw hand that drops out for 300 ms at full draw does not shoot, and still releases', () => {
+      const o = play(
+        [
+          ...nockSteps(drawHand),
+          ...pullSteps(drawHand, 0, 1),
+          ...idle(600),
+          ...dropoutSteps(drawHand, 300),
+          ...releaseSteps(drawHand),
+        ],
+        drawHand,
+      );
+      expect(o.events).toEqual([StepEvent.Nock, StepEvent.Shot]);
+      expect(o.shot!.draw).toBeGreaterThan(0.8);
     });
 
     it('does not nock with the bow arm hanging', () => {
