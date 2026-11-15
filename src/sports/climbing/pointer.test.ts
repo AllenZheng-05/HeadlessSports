@@ -3,9 +3,16 @@ import { climbingConfig } from './config';
 import type { ClimbingConfig } from './config';
 import { KIND_JUG } from './layout';
 import type { HoldField } from './layout';
-import { createPointerControl, pointerPress, pointerRelease, pointerStep } from './pointer';
+import {
+  createPointerControl,
+  pointerPress,
+  pointerRelease,
+  pointerStep,
+  pointerTarget,
+} from './pointer';
 import type { PointerControl } from './pointer';
 import { wallToHand } from './reach';
+import { createScreenMap, updateScreenMap, wallToScreen } from './screenMap';
 import { createClimbState, createStepInput, step } from './rules';
 import type { ClimbState, StepInput } from './rules';
 
@@ -53,12 +60,25 @@ let ctl: PointerControl;
 /** Mouse position, mirrored image coordinates. */
 const mouse = { x: 0.5, y: 0.5 };
 const img = { x: 0, y: 0 };
+/** Steps taken after the first grab with no hand on the wall (must stay 0 in normal play). */
+let zeroGripSteps = 0;
+const stepRules = (): void => {
+  step(state, cfg, field, input, DT);
+  if (
+    state.grabs > 0 &&
+    state.status === 'climbing' &&
+    !state.left.holding &&
+    !state.right.holding
+  ) {
+    zeroGripSteps++;
+  }
+};
 
 const run = (seconds: number): void => {
   const n = Math.round(seconds / DT);
   for (let i = 0; i < n; i++) {
     pointerStep(ctl, state, cfg, field, input, mouse.x, mouse.y, DT);
-    step(state, cfg, field, input, DT);
+    stepRules();
   }
 };
 
@@ -80,7 +100,7 @@ const drag = (dy: number, seconds = 0.5, dx = 0): void => {
     mouse.y += dy / n;
     mouse.x += dx / n;
     pointerStep(ctl, state, cfg, field, input, mouse.x, mouse.y, DT);
-    step(state, cfg, field, input, DT);
+    stepRules();
   }
   run(0.3);
 };
@@ -91,6 +111,7 @@ beforeEach(() => {
   state = createClimbState(cfg, 60);
   input = createStepInput();
   ctl = createPointerControl();
+  zeroGripSteps = 0;
   mouse.x = 0.5;
   mouse.y = 0.5;
 });
@@ -152,7 +173,7 @@ describe('press, drag, release', () => {
     expect(state.left.cursorX).toBeCloseTo((0.3 - 0.5) * cfg.reachWidth, 3);
   });
 
-  it('the other hand grabs a second hold and the first hand never lets go', () => {
+  it('grabbing a second hold with the other hand makes the first hand let go, never leaving no grip', () => {
     const a = field.add(0.3, state.y + 0.5);
     const b = field.add(-0.3, state.y + 0.9);
     press(a);
@@ -161,25 +182,41 @@ describe('press, drag, release', () => {
     const releases = state.releaseSeq;
     expect(press(b)).toBe(true);
     expect(state.left.hold).toBe(b);
-    expect(state.right.hold).toBe(a);
-    expect(state.releaseSeq).toBe(releases);
+    expect(state.left.holding).toBe(true);
+    expect(state.right.holding).toBe(false);
+    expect(state.releaseSeq).toBe(releases + 1);
+    expect(zeroGripSteps).toBe(0);
+  });
+
+  it('the other hand keeps its grip until the new grab has taken', () => {
+    const a = field.add(0.3, state.y + 0.5);
+    const b = field.add(-0.3, state.y + 0.9);
+    press(a);
+    pointerRelease(ctl);
+    wallToHand(cfg, field.holdX(b) - state.x, field.holdY(b) - state.y, img);
+    mouse.x = img.x;
+    mouse.y = img.y;
+    run(0.05);
+    expect(pointerPress(ctl, state, cfg, field, mouse.x, mouse.y)).toBe(true);
+    // Right after the press the left hand is still closing, so the right hand still holds.
+    pointerStep(ctl, state, cfg, field, input, mouse.x, mouse.y, DT);
+    expect(input.right.closed).toBe(true);
+    run(0.4);
+    expect(state.left.holding).toBe(true);
+    expect(state.right.holding).toBe(false);
   });
 
   it('a hand that already holds lets go of its old hold for the new one', () => {
     const a = field.add(0.3, state.y + 0.5);
-    const b = field.add(-0.3, state.y + 0.8);
     const c = field.add(0.3, state.y + 1.0);
     press(a);
     pointerRelease(ctl);
-    press(b);
-    pointerRelease(ctl);
+    // Hand the mouse back to the holding hand (as if the other grab had not happened).
+    ctl.active = 1;
     const releases = state.releaseSeq;
-    expect(ctl.active).toBe(1);
     expect(press(c)).toBe(true);
     expect(state.right.hold).toBe(c);
     expect(state.releaseSeq).toBe(releases + 1);
-    expect(state.left.hold).toBe(b);
-    expect(state.left.holding).toBe(true);
   });
 
   it('a press that is not on a hold does nothing', () => {
@@ -198,7 +235,7 @@ describe('press, drag, release', () => {
     expect(pointerRelease(ctl)).toBe(false);
     run(1);
     expect(state.left.holding).toBe(true);
-    expect(state.right.holding).toBe(true);
+    expect(state.right.holding).toBe(false);
     expect(state.grabs).toBe(grabs);
     expect(state.releaseSeq).toBe(releases);
     expect(ctl.active).toBe(active);
@@ -213,34 +250,36 @@ describe('press, drag, release', () => {
     expect(state.right.hold).toBe(a);
   });
 
-  it('dragging never makes the other hand let go of its hold', () => {
-    const a = field.add(0.3, state.y + 0.5);
-    const b = field.add(-0.3, state.y + 0.9);
+  it('the old hold no longer limits the pull once the other hand has let go', () => {
+    const y0 = state.y;
+    const a = field.add(0.3, y0 + 0.5);
+    const b = field.add(-0.3, y0 + 0.9);
     press(a);
     pointerRelease(ctl);
     press(b);
-    const releases = state.releaseSeq;
-    // A huge pull: the body is stopped by the reach of the other hand.
+    // A huge pull: the body goes past where the old hold (a) would have stopped it (a.y + 0.5).
     drag(1.5, 1);
     expect(state.left.holding).toBe(true);
-    expect(state.right.holding).toBe(true);
-    expect(state.releaseSeq).toBe(releases);
+    expect(state.right.holding).toBe(false);
+    expect(state.y).toBeGreaterThan(y0 + 1.1);
+    expect(state.status).toBe('climbing');
+    expect(zeroGripSteps).toBe(0);
   });
 
-  it('resting on two hands with the button up refills stamina', () => {
+  it('one grip drains stamina at the eased mouse rate', () => {
     const a = field.add(0.3, state.y + 0.5);
-    const b = field.add(-0.3, state.y + 0.9);
     press(a);
+    drag(0.3);
     pointerRelease(ctl);
-    press(b);
-    pointerRelease(ctl);
-    run(1);
-    const s = state.stamina;
+    state.oneHandDrainMult = cfg.mouseOneHandDrainMult;
+    run(0.5);
+    const s0 = state.stamina;
     run(2);
-    expect(state.stamina).toBeGreaterThanOrEqual(s);
+    const rate = (s0 - state.stamina) / 2;
+    expect(rate).toBeCloseTo(cfg.drainOneHand * cfg.mouseOneHandDrainMult, 3);
   });
 
-  it('climbs hand over hand with a hand always on the wall', () => {
+  it('climbs hand over hand with a hand always on the wall (one grip at a time)', () => {
     const y0 = state.y;
     for (let k = 0; k < 8; k++) {
       const i = field.add(k % 2 === 0 ? 0.3 : -0.3, y0 + 0.45 + k * 0.4);
@@ -251,8 +290,68 @@ describe('press, drag, release', () => {
       expect(pointerRelease(ctl)).toBe(true);
       expect(state.left.holding || state.right.holding).toBe(true);
     }
-    expect(state.left.holding && state.right.holding).toBe(true);
+    expect(state.left.holding || state.right.holding).toBe(true);
     expect(state.y - y0).toBeGreaterThan(2);
     expect(state.status).toBe('climbing');
+    expect(zeroGripSteps).toBe(0);
+  });
+});
+
+describe('with a screen map (real pointer position)', () => {
+  const at = { x: 0, y: 0 };
+  const aim = (i: number): void => {
+    wallToScreen(ctl.map!, field.holdX(i), field.holdY(i), at);
+  };
+  beforeEach(() => {
+    const map = createScreenMap();
+    // Camera 2.5 m above the start shoulders, looking at a wall 3.2 m away.
+    updateScreenMap(map, 0.1, state.y + 0.8, 2.75, -0.45 + 0.07, 45, 16 / 9);
+    ctl.map = map;
+  });
+
+  it('takes the hold under the cursor, wherever it is on screen', () => {
+    const a = field.add(0.3, state.y + 0.5);
+    const b = field.add(-0.4, state.y + 0.9);
+    const far = field.add(0.3, state.y + 1.9);
+    aim(a);
+    expect(pointerTarget(ctl, state, cfg, field, at.x, at.y)).toBe(a);
+    aim(b);
+    expect(pointerTarget(ctl, state, cfg, field, at.x, at.y)).toBe(b);
+    // Visible on screen but beyond the reach of the shoulders: not takeable.
+    aim(far);
+    expect(at.y).toBeGreaterThanOrEqual(0);
+    expect(pointerTarget(ctl, state, cfg, field, at.x, at.y)).toBe(-1);
+  });
+
+  it('a press on the hold grabs it and a drag moves the body as far as the pointer moves', () => {
+    const a = field.add(0.3, state.y + 0.5);
+    aim(a);
+    mouse.x = at.x;
+    mouse.y = at.y;
+    run(0.05);
+    expect(pointerPress(ctl, state, cfg, field, mouse.x, mouse.y)).toBe(true);
+    run(0.4);
+    expect(state.right.hold).toBe(a);
+    const y0 = state.y;
+    const metresPerUnit = ctl.map!.halfH * 2;
+    drag(0.1, 0.4);
+    expect(state.y - y0).toBeCloseTo(0.1 * metresPerUnit, 1);
+  });
+
+  it('the free hand follows the pointer to the world position under it', () => {
+    const a = field.add(0.3, state.y + 0.5);
+    aim(a);
+    mouse.x = at.x;
+    mouse.y = at.y;
+    run(0.05);
+    expect(pointerPress(ctl, state, cfg, field, mouse.x, mouse.y)).toBe(true);
+    run(0.4);
+    pointerRelease(ctl);
+    wallToScreen(ctl.map!, -0.2, state.y + 0.7, at);
+    mouse.x = at.x;
+    mouse.y = at.y;
+    run(0.3);
+    expect(state.x + state.left.cursorX).toBeCloseTo(-0.2, 3);
+    expect(state.y + state.left.cursorY).toBeCloseTo(state.y + 0.7, 3);
   });
 });

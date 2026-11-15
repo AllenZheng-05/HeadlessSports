@@ -2,14 +2,21 @@ import type { ClimbingConfig } from './config';
 import type { HoldField } from './layout';
 import { handToWall, wallToHand } from './reach';
 import type { Vec2 } from './reach';
+import { screenToWall } from './screenMap';
+import type { ScreenMap } from './screenMap';
 import { shoulderDrop } from './rules';
 import type { ClimbState, HandInput, HandSlot, StepInput } from './rules';
 
 /**
  * Mouse-only climbing. One hand is selected. Pressing on a hold grabs it with that hand (letting go
- * of its old hold first); while the button stays down the hand is locked on the hold and moving the
- * mouse drags the climber (a pull-up on that hand). Releasing keeps the grip and passes control to
- * the other hand. A press that is not on a hold does nothing.
+ * of its old hold first); once the grab has taken, a new hold also makes the other hand let go, so
+ * the drag pulls the body up freely. While the button stays down the hand is locked on the hold and
+ * moving the mouse drags the climber (a pull-up on that hand). Releasing keeps the grip and passes
+ * control to the free hand. A press that is not on a hold does nothing.
+ *
+ * With a `ScreenMap` the pointer is a true screen position: the hold under the cursor is the one
+ * taken, and a drag moves the body as far as the pointer moves on the wall. Without one (unit tests)
+ * the pointer is a hand position in the reach box around the shoulders.
  *
  * The hands are fed to the normal rules as hand input, so the body still comes from the held hands.
  */
@@ -42,6 +49,10 @@ export interface PointerControl {
   bodyY: number;
   lastPX: number;
   lastPY: number;
+  /** Screen to wall mapping, or null for the plain reach-box mapping. */
+  map: ScreenMap | null;
+  /** The other hand must let go as soon as the active hand holds its new hold. */
+  freeOther: boolean;
   left: PointerHand;
   right: PointerHand;
 }
@@ -60,12 +71,38 @@ export function createPointerControl(): PointerControl {
     bodyY: 0,
     lastPX: 0,
     lastPY: 0,
+    map: null,
+    freeOther: false,
     left: createHand(),
     right: createHand(),
   };
 }
 
 const tmp: Vec2 = { x: 0, y: 0 };
+const tmpW: Vec2 = { x: 0, y: 0 };
+
+/** World wall point under the pointer (relative to the shoulders when there is no screen map). */
+function pointerWall(
+  ctl: PointerControl,
+  state: ClimbState,
+  cfg: ClimbingConfig,
+  px: number,
+  py: number,
+  out: Vec2,
+): Vec2 {
+  if (ctl.map !== null) return screenToWall(ctl.map, px, py, out);
+  handToWall(cfg, px, py, out);
+  out.x += state.x;
+  out.y += state.y;
+  return out;
+}
+
+/** True when a hold is inside the reach box, so a grab on it will not be let go again. */
+function inReach(state: ClimbState, cfg: ClimbingConfig, field: HoldField, i: number): boolean {
+  const ux = Math.abs(field.holdX(i) - state.x) / (cfg.reachWidth / 2);
+  const uy = Math.abs(field.holdY(i) - state.y - cfg.reachOffsetY) / (cfg.reachHeight / 2);
+  return ux <= 1 && uy <= 1;
+}
 
 /** The hold a press at this image position would take for the active hand, or -1. */
 export function pointerTarget(
@@ -77,8 +114,11 @@ export function pointerTarget(
   py: number,
 ): number {
   const other = ctl.active === 0 ? state.right : state.left;
-  handToWall(cfg, px, py, tmp);
-  return field.findNearest(state.x + tmp.x, state.y + tmp.y, other.hold, -1);
+  pointerWall(ctl, state, cfg, px, py, tmpW);
+  const i = field.findNearest(tmpW.x, tmpW.y, other.hold, -1);
+  // On screen the whole wall is visible; only holds in reach can be taken.
+  if (i >= 0 && ctl.map !== null && !inReach(state, cfg, field, i)) return -1;
+  return i;
 }
 
 /**
@@ -102,6 +142,7 @@ export function pointerPress(
   mine.closingMs = 0;
   if (slot.holding && slot.hold === i) mine.phase = HELD;
   else mine.phase = slot.holding ? REGRAB : CLOSING;
+  ctl.freeOther = mine.phase !== HELD;
   ctl.dragging = true;
   ctl.bodyX = state.x;
   ctl.bodyY = state.y;
@@ -172,6 +213,7 @@ function drive(
   bx: number,
   by: number,
   dt: number,
+  letGo: boolean,
 ): void {
   const hand = idx === 0 ? ctl.left : ctl.right;
   const slot: HandSlot = idx === 0 ? state.left : state.right;
@@ -205,6 +247,11 @@ function drive(
     }
     return;
   }
+  if (slot.holding && letGo && ctl.active !== idx) {
+    // The other hand lets go: open where it is, so it hangs from the body from now on.
+    setFromWall(cfg, slot.cursorX, slot.cursorY, false, out);
+    return;
+  }
   if (slot.holding) {
     // Gripping: the hand stays on its hold, placed so the body sits at (bx, by).
     setFromWall(cfg, field.holdX(slot.hold) - bx, field.holdY(slot.hold) - by, true, out);
@@ -214,8 +261,13 @@ function drive(
     // The free hand follows the mouse, open.
     out.present = true;
     out.closed = false;
-    out.x = px;
-    out.y = py;
+    if (ctl.map !== null) {
+      pointerWall(ctl, state, cfg, px, py, tmpW);
+      setFromWall(cfg, tmpW.x - state.x, tmpW.y - state.y, false, out);
+    } else {
+      out.x = px;
+      out.y = py;
+    }
     return;
   }
   // The idle empty hand stays where it is.
@@ -239,11 +291,21 @@ export function pointerStep(
 ): void {
   const mine = ctl.active === 0 ? ctl.left : ctl.right;
   const mySlot = ctl.active === 0 ? state.left : state.right;
+  const otherSlot = ctl.active === 0 ? state.right : state.left;
+  if (mine.phase === CLOSING && mySlot.holding) {
+    mine.target = mySlot.hold;
+    mine.phase = HELD;
+  }
+  // The other hand lets go only once this hand really holds, so there is always a grip.
+  const letGo = ctl.freeOther && ctl.dragging && mine.phase === HELD && mySlot.holding;
+  if (letGo && !otherSlot.holding) ctl.freeOther = false;
   let bx = state.x;
   let by = state.y;
   if (ctl.dragging && mine.phase === HELD && mySlot.holding) {
-    ctl.bodyX -= (px - ctl.lastPX) * cfg.reachWidth;
-    ctl.bodyY += (py - ctl.lastPY) * cfg.reachHeight;
+    const sx = ctl.map !== null ? ctl.map.halfW * 2 : cfg.reachWidth;
+    const sy = ctl.map !== null ? ctl.map.halfH * 2 : cfg.reachHeight;
+    ctl.bodyX -= (px - ctl.lastPX) * sx;
+    ctl.bodyY += (py - ctl.lastPY) * sy;
     clampBody(ctl, state, cfg, field, shoulderDrop(cfg));
     bx = ctl.bodyX;
     by = ctl.bodyY;
@@ -254,6 +316,6 @@ export function pointerStep(
   }
   ctl.lastPX = px;
   ctl.lastPY = py;
-  drive(ctl, 0, state, cfg, field, input.left, px, py, bx, by, dt);
-  drive(ctl, 1, state, cfg, field, input.right, px, py, bx, by, dt);
+  drive(ctl, 0, state, cfg, field, input.left, px, py, bx, by, dt, letGo);
+  drive(ctl, 1, state, cfg, field, input.right, px, py, bx, by, dt, letGo);
 }

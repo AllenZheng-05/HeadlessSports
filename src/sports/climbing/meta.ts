@@ -19,7 +19,7 @@ export const meta: SportMeta = {
     'Reach up with the other hand. Rest on the ledges.',
   ],
   debugKeys: [
-    'Press and hold a hold to grab it, then drag down to pull up',
-    'Letting go of the button keeps your grip and switches hands',
+    'Press and hold a hold to grab it. Your other hand lets go, so drag down to pull up',
+    'Letting go of the button keeps your grip and switches to the free hand',
   ],
 };

@@ -70,6 +70,8 @@ export interface ClimbState {
   lastGrabSide: 0 | 1;
   releaseSeq: number;
   lastRelease: ReleaseKind;
+  /** Scales the one-hand stamina drain (mouse play grips with one hand at a time). */
+  oneHandDrainMult: number;
 }
 
 /** Distance from the shoulder centre down to the feet. */
@@ -114,6 +116,7 @@ export function createClimbState(cfg: ClimbingConfig, roundSeconds: number): Cli
     lastGrabSide: 0,
     releaseSeq: 0,
     lastRelease: 'none',
+    oneHandDrainMult: 1,
   };
 }
 
@@ -276,7 +279,7 @@ export function step(
     } else if (n === 1) {
       const hold = state.left.holding ? state.left.hold : state.right.hold;
       const mult = field.holdKind(hold) === KIND_CRIMP ? cfg.crimpDrainMult : 1;
-      state.stamina -= cfg.drainOneHand * mult * dt;
+      state.stamina -= cfg.drainOneHand * mult * state.oneHandDrainMult * dt;
     }
     if (state.stamina > 1) state.stamina = 1;
     if (state.stamina <= 0) {

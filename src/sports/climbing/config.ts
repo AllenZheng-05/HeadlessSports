@@ -28,6 +28,8 @@ export const climbingConfig = {
   // Stamina, per second.
   drainTwoHands: 0.02,
   drainOneHand: 0.035,
+  /** Mouse play grips with one hand at a time, so the one-hand drain is scaled by this. */
+  mouseOneHandDrainMult: 0.6,
   crimpDrainMult: 1.6,
   ledgeRefillPerSecond: 0.35,
   restRefillPerSecond: 0.01,
@@ -90,6 +92,7 @@ export const climbingRanges: Record<string, TunableRange> = {
   followRate: { min: 2, max: 60, step: 1 },
   drainTwoHands: { min: 0, max: 0.3, step: 0.005 },
   drainOneHand: { min: 0, max: 0.3, step: 0.005 },
+  mouseOneHandDrainMult: { min: 0.2, max: 1.5, step: 0.05 },
   crimpDrainMult: { min: 1, max: 4, step: 0.1 },
   ledgeRefillPerSecond: { min: 0, max: 2, step: 0.05 },
   restRefillPerSecond: { min: 0, max: 0.2, step: 0.005 },

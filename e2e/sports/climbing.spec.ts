@@ -21,6 +21,9 @@ interface ClimbingHook {
     pointerDragging: boolean;
     pointerHoldAt(x: number, y: number): number;
     aimImage(side: 'left' | 'right'): { x: number; y: number } | null;
+    holdIndex: { left: number; right: number };
+    holdScreen(index: number): { x: number; y: number };
+    nextHold(side: 'left' | 'right'): number;
   } | null;
   drawCalls: number;
 }
@@ -139,26 +142,28 @@ test.describe('rock climbing', () => {
       expect(grabbed.grabs).toBe(prev.grabs + 1);
       // Still the same hand while the button is down.
       expect(grabbed.active).toBe(mover);
-      // Drag down: the body is pulled up while both hands stay on the wall.
+      // The other hand let go of its hold the moment this hand took a new one.
+      expect(grabbed[other], `n=${n} other`).toBe(false);
+      // Drag down: the body is pulled up by the hand that holds.
       const hBefore = grabbed.height;
       await page.mouse.move(aim!.x * vp.width, (aim!.y + 0.28) * vp.height, { steps: 8 });
       await page.waitForTimeout(250);
       const pulled = await read();
       expect(pulled.dragging, `n=${n} pulled`).toBe(true);
       expect(pulled[mover]).toBe(true);
-      if (n > 1) expect(pulled[other]).toBe(true);
+      expect(pulled[other]).toBe(false);
       expect(pulled.height).toBeGreaterThanOrEqual(hBefore - 0.01);
       await page.mouse.up();
       await page.waitForTimeout(200);
       const now = await read();
       // Releasing keeps the grip and the mouse changes hands.
       expect(now[mover]).toBe(true);
-      if (n > 1) expect(now[other]).toBe(true);
+      expect(now[other]).toBe(false);
       expect(now.active, `n=${n} mover=${mover} grabs=${now.grabs}`).toBe(other);
       expect(now.grabs).toBe(prev.grabs + 1);
       prev = now;
     }
-    expect(prev.left && prev.right).toBe(true);
+    expect(prev.left || prev.right).toBe(true);
     expect(prev.height - h0).toBeGreaterThan(0.6);
     await page.screenshot({ path: `${SHOTS}/climbing-debug.png` });
 
@@ -179,7 +184,8 @@ test.describe('rock climbing', () => {
     await page.mouse.up();
     await page.waitForTimeout(300);
     const after = await read();
-    expect(after.left && after.right).toBe(true);
+    expect(after.left).toBe(prev.left);
+    expect(after.right).toBe(prev.right);
     expect(after.grabs).toBe(prev.grabs);
     expect(after.active).toBe(prev.active);
 
@@ -189,6 +195,71 @@ test.describe('rock climbing', () => {
       () => (window as unknown as { __game: ClimbingHook }).__game.result,
     );
     expect(result?.score ?? 0).toBeGreaterThan(0);
+    expect(problems).toEqual([]);
+  });
+
+  test('the hold under the real cursor is the one that gets grabbed, at any window size and height', async ({
+    page,
+  }) => {
+    const problems = watch(page);
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await page.goto('/?sport=climbing&input=debug&skipGate=1&timeScale=1');
+    await waitPhase(page, 'playing');
+    await page.waitForTimeout(500);
+
+    const sizes = [
+      { width: 1280, height: 720 },
+      { width: 1280, height: 720 },
+      { width: 900, height: 900 },
+      { width: 1600, height: 600 },
+      { width: 1000, height: 650 },
+      { width: 1280, height: 720 },
+    ];
+    let side: 'left' | 'right' = 'right';
+    let lastHeight = 0;
+    for (let n = 0; n < sizes.length; n++) {
+      const vp = sizes[n]!;
+      await page.setViewportSize(vp);
+      await page.waitForTimeout(500);
+      const pick = await page.evaluate((sd) => {
+        const s = (window as unknown as { __game: ClimbingHook }).__game.sport!;
+        const index = s.nextHold(sd);
+        return { index, screen: index >= 0 ? s.holdScreen(index) : null, h: s.height };
+      }, side);
+      expect(pick.index, `n=${n}`).toBeGreaterThanOrEqual(0);
+      const px = pick.screen!.x * vp.width;
+      const py = pick.screen!.y * vp.height;
+      expect(px).toBeGreaterThan(0);
+      expect(px).toBeLessThan(vp.width);
+      expect(py).toBeGreaterThan(0);
+      expect(py).toBeLessThan(vp.height);
+      await page.mouse.move(px, py);
+      await page.waitForTimeout(150);
+      // The hold under the tip of the real cursor is the one a press would take.
+      const hover = await page.evaluate(
+        ([x, y]) =>
+          (window as unknown as { __game: ClimbingHook }).__game.sport!.pointerHoldAt(x!, y!),
+        [pick.screen!.x, pick.screen!.y],
+      );
+      expect(hover, `n=${n} hover`).toBe(pick.index);
+      await page.mouse.down();
+      await page.waitForTimeout(300);
+      const held = await page.evaluate(
+        () => (window as unknown as { __game: ClimbingHook }).__game.sport!.holdIndex,
+      );
+      expect(held[side], `n=${n} ${side} grabbed`).toBe(pick.index);
+      await page.mouse.move(px, py + 0.2 * vp.height, { steps: 8 });
+      await page.waitForTimeout(300);
+      await page.mouse.up();
+      await page.waitForTimeout(250);
+      lastHeight = pick.h;
+      side = side === 'right' ? 'left' : 'right';
+    }
+    const end = await page.evaluate(
+      () => (window as unknown as { __game: ClimbingHook }).__game.sport!.height,
+    );
+    expect(end).toBeGreaterThan(lastHeight);
+    expect(end).toBeGreaterThan(1);
     expect(problems).toEqual([]);
   });
 

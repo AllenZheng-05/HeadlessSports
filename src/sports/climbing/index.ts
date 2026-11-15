@@ -1,6 +1,6 @@
 import type { Sport, SportContext, SportFactory } from '../../core/sport';
 import { AvatarAnimator } from '../../render/avatar/AvatarAnimator';
-import { Group } from 'three/webgpu';
+import { Group, Vector3 } from 'three/webgpu';
 import { createClimbBot } from './bot';
 import { climbingConfig, climbingRanges } from './config';
 import { Layout, mulberry32 } from './layout';
@@ -15,6 +15,7 @@ import {
 import { asMouseControl } from '../../input/debug/mouseControl';
 import { wallToHand } from './reach';
 import type { Vec2 } from './reach';
+import { createScreenMap, updateScreenMap, wallToScreen } from './screenMap';
 import {
   RIG_SHOULDER_HEIGHT,
   createClimbState,
@@ -44,6 +45,12 @@ export interface ClimbingSport extends Sport {
   pointerHoldAt(x: number, y: number): number;
   /** Image position (mirrored normalised) where this hand should go to take the next hold. */
   aimImage(side: 'left' | 'right'): { x: number; y: number } | null;
+  /** Hold index each hand is on, -1 when free. */
+  readonly holdIndex: { left: number; right: number };
+  /** Screen position (0..1 over the window, y down) where a hold is drawn, as the camera is now. */
+  holdScreen(index: number): { x: number; y: number };
+  /** The hold a bot would take next with this hand, or -1. */
+  nextHold(side: 'left' | 'right'): number;
 }
 
 const SHOULDER_X = 0.2;
@@ -94,6 +101,23 @@ export const createClimbing: SportFactory = (ctx: SportContext): ClimbingSport =
   let camAnchor = state.y;
 
   const cursor: Vec2 = { x: 0, y: 0 };
+  const map = createScreenMap();
+  const holdPlaneZ = cfg.wallZ + 0.07;
+  /** Camera distance so the vertical span fits below + above the focus. */
+  const camDist = (): number =>
+    (cfg.cameraBelowM + cfg.cameraAboveM) / 2 / Math.tan((cfg.cameraFov * Math.PI) / 360);
+  /** Point the screen map at the camera as it is now (what the player sees). */
+  const syncMap = (): void => {
+    updateScreenMap(
+      map,
+      camera.position.x,
+      camera.position.y,
+      camera.position.z,
+      holdPlaneZ,
+      camera.fov,
+      camera.aspect,
+    );
+  };
   // Mouse play (camera-off input only): press and hold a hold to grab it, drag to pull, release to
   // pass control to the other hand. The sport places the hands itself; no keys are read.
   const ptr = asMouseControl(ctx.input);
@@ -103,7 +127,12 @@ export const createClimbing: SportFactory = (ctx: SportContext): ClimbingSport =
     ptr.setPointerFollow(false);
     pointer.seenPresses = ptr.pointerPresses;
     pointer.seenReleases = ptr.pointerReleases;
+    pointer.map = map;
+    // One grip at a time while pulling: the one-hand drain is eased so a round can still be climbed.
+    state.oneHandDrainMult = cfg.mouseOneHandDrainMult;
     ptr.selectHand('right');
+    camera.position.set(state.x * 0.3, camY, cfg.wallZ + camDist());
+    syncMap();
   }
   let shownActive = -1;
   let shownDragging = false;
@@ -300,8 +329,36 @@ export const createClimbing: SportFactory = (ctx: SportContext): ClimbingSport =
       const other = idx === 1 ? state.left : state.right;
       const i = chooseHold(layout, cfg, state.x, state.y, idx, other.hold);
       if (i < 0) return null;
+      if (ptr) {
+        syncMap();
+        const s = wallToScreen(map, layout.holdX(i), layout.holdY(i), cursor);
+        return { x: s.x, y: s.y };
+      }
       const p = wallToHand(cfg, layout.holdX(i) - state.x, layout.holdY(i) - state.y, cursor);
       return { x: p.x, y: p.y };
+    },
+
+    holdIndex: {
+      get left(): number {
+        return state.left.hold;
+      },
+      get right(): number {
+        return state.right.hold;
+      },
+    },
+
+    // Test hook, called on demand. Deliberately independent of the screen map: it projects the
+    // hold through the real render camera, so a map that disagrees with the picture is caught.
+    holdScreen(index): { x: number; y: number } {
+      camera.updateMatrixWorld(true);
+      const v = new Vector3(layout.holdX(index), layout.holdY(index), holdPlaneZ).project(camera);
+      return { x: (v.x + 1) / 2, y: (1 - v.y) / 2 };
+    },
+
+    nextHold(side): number {
+      const idx = side === 'right' ? 1 : 0;
+      const other = idx === 1 ? state.left : state.right;
+      return chooseHold(layout, cfg, state.x, state.y, idx, other.hold);
     },
 
     start(): void {
@@ -332,6 +389,8 @@ export const createClimbing: SportFactory = (ctx: SportContext): ClimbingSport =
       input.right.y = hands.right.y;
       layout.ensure(state.y + cfg.cameraAboveM + 4);
       if (ptr) {
+        // The pointer is read against the camera the player is looking through right now.
+        syncMap();
         // Take each new press and release in order, then drive both hands from the mouse.
         while (
           pointer.seenPresses < ptr.pointerPresses ||
@@ -369,9 +428,8 @@ export const createClimbing: SportFactory = (ctx: SportContext): ClimbingSport =
       if (state.status !== 'fell') camAnchor = state.y;
       const target = camAnchor + (cfg.cameraAboveM - cfg.cameraBelowM) / 2;
       camY = smoothDamp(camY, target, camVel, cfg.cameraSmoothS, Math.min(dt, 0.1));
-      const dist =
-        (cfg.cameraBelowM + cfg.cameraAboveM) / 2 / Math.tan((cfg.cameraFov * Math.PI) / 360);
-      camera.position.set(state.x * 0.3, camY, cfg.wallZ + dist);
+      camera.position.set(state.x * 0.3, camY, cfg.wallZ + camDist());
+      if (ptr) syncMap();
       wall.update(camY);
 
       // Which holds light up: the one each free hand would grab, and the ones held.
