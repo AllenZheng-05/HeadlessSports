@@ -6,6 +6,7 @@ import { judgeSwing, noSwingResolveMs, swingInWindow } from './judge';
 import type { Judgement, SwingInput } from './judge';
 import { planPitch } from './pitch';
 import type { Pitch } from './pitch';
+import { metresToFeet } from './units';
 
 export type ResultKind = 'hit' | 'foul' | 'miss' | 'strike';
 
@@ -17,7 +18,7 @@ export interface PitchResult {
   judgement: Judgement | null;
   /** Banner text. */
   label: string;
-  /** Scored metres (rounded), 0 unless it was a hit. Excludes the home-run bonus. */
+  /** Scored distance in whole feet, 0 unless it was a hit. Excludes the home-run bonus. */
   distance: number;
   homer: boolean;
   /** Game ms the ball left the bat (hits and fouls). */
@@ -298,7 +299,7 @@ export class BattingRound {
       const tr = simulateHit(j.exitSpeed, j.launchDeg, this.cfg);
       result.trajectory = tr;
       result.headingDeg = j.sprayDeg;
-      result.distance = Math.round(tr.total);
+      result.distance = metresToFeet(tr.total);
       result.homer = tr.homer;
       if (tr.homer) result.label = 'Home run!';
       this.applyAtMs = Math.max(clock, j.contactMs);
@@ -343,7 +344,7 @@ export class BattingRound {
         s.score += cfg.homerBonus;
       }
       const air = result.trajectory === null ? 0 : result.trajectory.airS * 1000;
-      pause = Math.max(pause, (air + 400) * scale);
+      pause = Math.max(pause, (air * cfg.airBeatScale + 400) * scale);
     } else if (result.kind === 'foul') {
       s.fouls++;
     } else {

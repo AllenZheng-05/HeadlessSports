@@ -75,14 +75,17 @@ function simulateFly(exitSpeed: number, launchDeg: number, cfg: BattingConfig): 
   let vx = exitSpeed * Math.cos(a);
   let vy = exitSpeed * Math.sin(a);
   let x = 0;
-  let y = cfg.hitStartHeight;
+  // Simulated in a space `heightScale` taller than the world; heights are divided on the way out.
+  const hs = cfg.heightScale;
+  const fenceTop = cfg.fenceHeight * hs;
+  let y = cfg.hitStartHeight * hs;
   const g = cfg.gravity;
   const k = cfg.drag;
   const h = SAMPLE_DT / SUBSTEPS;
   const maxSamples = Math.ceil(MAX_FLIGHT_S / SAMPLE_DT);
   const ds: number[] = [x];
-  const ys: number[] = [y];
-  let maxHeight = y;
+  const ys: number[] = [y / hs];
+  let maxHeight = y / hs;
   let homer = false;
   let fenceChecked = false;
   let landed = false;
@@ -104,7 +107,7 @@ function simulateFly(exitSpeed: number, launchDeg: number, cfg: BattingConfig): 
         fenceChecked = true;
         const f = (cfg.fenceDistance - px) / Math.max(1e-9, x - px);
         const yAt = py + (y - py) * f;
-        if (yAt > cfg.fenceHeight) homer = true;
+        if (yAt > fenceTop) homer = true;
         else {
           // Into the wall: the ball drops there.
           blocked = true;
@@ -114,7 +117,7 @@ function simulateFly(exitSpeed: number, launchDeg: number, cfg: BattingConfig): 
           vy = Math.min(vy, 0);
         }
       }
-      if (y > maxHeight) maxHeight = y;
+      if (y / hs > maxHeight) maxHeight = y / hs;
       if (y <= 0 && vy < 0) {
         const f = py / Math.max(1e-9, py - y);
         carry = px + (x - px) * f;
@@ -125,19 +128,19 @@ function simulateFly(exitSpeed: number, launchDeg: number, cfg: BattingConfig): 
     }
     if (landed) break;
     ds.push(x);
-    ys.push(y);
+    ys.push(y / hs);
     if (blocked) vx = 0;
   }
   if (!landed) carry = x;
   const airS = (ds.length - 1) * SAMPLE_DT + SAMPLE_DT * 0.5;
   const cos = Math.cos(a);
   let roll = blocked ? 0 : cfg.rollFactor * cos * cos * carry;
-  if (homer) roll = Math.min(roll, 6);
+  if (homer) roll = Math.min(roll, cfg.homerRollMax);
   // Close the air path at the landing point, then roll out.
   ds.push(carry);
   ys.push(cfg.ballRadius);
   const rollSamples = Math.ceil(ROLL_S / SAMPLE_DT);
-  const bounce = Math.min(1.2, Math.abs(impactVy) * 0.04);
+  const bounce = Math.min(1.2, (Math.abs(impactVy) / Math.sqrt(hs)) * 0.04);
   for (let i = 1; i <= rollSamples; i++) {
     const u = i / rollSamples;
     ds.push(carry + roll * (1 - (1 - u) * (1 - u)));

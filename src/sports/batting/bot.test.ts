@@ -92,7 +92,7 @@ describe.each([1, 2, 3])('bot closed loop, short round, seed %i', (seed) => {
           results
             .map(
               (r) =>
-                `${r.kind} ${r.label} err=${r.judgement?.timingError.toFixed(0) ?? '-'}ms dist=${r.distance}m`,
+                `${r.kind} ${r.label} err=${r.judgement?.timingError.toFixed(0) ?? '-'}ms dist=${r.distance}ft`,
             )
             .join(' | '),
       );

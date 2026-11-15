@@ -1,8 +1,21 @@
 import type { TunableRange } from '../../core/sport';
 
+/** The home-run distance, in feet. */
+export const HOMER_FEET = 350;
+/** Metres in the fence the model was first tuned with (246 ft). */
+const OLD_FENCE_M = 75;
+/**
+ * Scale from the original distance model to the 350 ft one. Lengths scale by S, speeds and times by
+ * sqrt(S) and drag by 1/S (the same projectile path stretched), so every swing goes S times as far
+ * and clears or misses the fence by the same proportion as before.
+ */
+export const DISTANCE_SCALE = (HOMER_FEET * 0.3048) / OLD_FENCE_M;
+const SPEED_SCALE = Math.sqrt(DISTANCE_SCALE);
+
 /**
  * Every number of the batting sport, in one mutable object registered with the tunables panel.
  * Times are game ms, lengths metres, angles degrees, speeds m/s unless a name says otherwise.
+ * The score is whole feet (see units.ts); `homerBonus` is in feet too.
  */
 export const battingConfig = {
   // ---- round ----
@@ -18,6 +31,11 @@ export const battingConfig = {
   resultBeatMs: 1400,
   /** Longest result beat after a long fly (the player gets to watch it land). */
   maxResultBeatMs: 3000,
+  /**
+   * Flights last sqrt(distance scale) longer than they did at 246 ft; the beat only waits for the
+   * flight as it was then, so the gap between pitches does not grow (maxResultBeatMs caps it anyway).
+   */
+  airBeatScale: 1 / SPEED_SCALE,
   /** The batter settles into the stance and the "Get ready" cue shows. */
   resetMs: 900,
   /** The pitcher stands set, hands together, before the wind-up. */
@@ -92,8 +110,8 @@ export const battingConfig = {
   startSpeedGain: 1.5,
   powerFloor: 3,
   powerCeil: 9,
-  minExit: 18,
-  maxExit: 46,
+  minExit: 18 * SPEED_SCALE,
+  maxExit: 46 * SPEED_SCALE,
   qualityPerfect: 1,
   qualityGood: 0.82,
   qualityWeak: 0.5,
@@ -105,17 +123,26 @@ export const battingConfig = {
 
   // ---- flight ----
   /** Quadratic drag, 1/m. */
-  drag: 0.0046,
+  drag: 0.0046 / DISTANCE_SCALE,
   /** Launch angles below this roll along the ground. */
   groundMaxDeg: 5,
   /** Time constant of the ground roll, seconds. */
-  rollTau: 0.85,
+  rollTau: 0.85 * SPEED_SCALE,
   /** Roll after landing for a fly ball: factor times cos(launch)^2 times the carry. */
   rollFactor: 0.14,
   hitStartHeight: 1,
-  fenceDistance: 75,
+  /** 350 ft. */
+  fenceDistance: HOMER_FEET * 0.3048,
   fenceHeight: 1.2,
-  homerBonus: 20,
+  /**
+   * The path is simulated this much taller than it is drawn (start height and wall top included),
+   * so it is an exact scaled copy of the old one; heights are divided by it on the way out.
+   */
+  heightScale: DISTANCE_SCALE,
+  /** A home run rolls on after landing by at most this much (m). */
+  homerRollMax: 6 * DISTANCE_SCALE,
+  /** Score bonus for a home run, in feet (the old 66 ft bonus scaled with the distances). */
+  homerBonus: Math.round(66 * DISTANCE_SCALE),
 
   // ---- camera ----
   /**
@@ -129,7 +156,9 @@ export const battingConfig = {
   /** The camera sits this far toward the plate side of the batter (opposite to the batter). */
   cameraSide: 0.3,
   /** Hit balls that travel further than this are tracked by the camera. */
-  cameraFollowFrom: 30,
+  cameraFollowFrom: 30 * DISTANCE_SCALE,
+  /** The camera follow reaches full weight at this distance from the plate (m). */
+  cameraFollowFull: 40 * DISTANCE_SCALE,
   cameraFollowWeight: 0.8,
 
   // ---- batter's stance and swing (visual only) ----
@@ -182,8 +211,9 @@ export const battingRanges: Record<string, TunableRange> = {
   baseLaunch: { min: 0, max: 40, step: 1 },
   launchPerMetre: { min: 20, max: 150, step: 5 },
   sprayPerMs: { min: 0, max: 0.5, step: 0.01 },
-  drag: { min: 0, max: 0.01, step: 0.0002 },
-  homerBonus: { min: 0, max: 100, step: 5 },
+  drag: { min: 0, max: 0.01, step: 0.0001 },
+  homerBonus: { min: 0, max: 470, step: 5 },
+  homerRollMax: { min: 0, max: 20, step: 0.5 },
   botOnsetOffsetMs: { min: 0, max: 2000, step: 10 },
   botJitterMs: { min: 0, max: 150, step: 5 },
 };

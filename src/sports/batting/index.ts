@@ -1,4 +1,5 @@
 import type { Sport, SportBot, SportContext, SportFactory } from '../../core/sport';
+import { asMouseControl } from '../../input/debug/mouseControl';
 import type { Side } from '../../input/types';
 import { AvatarAnimator } from '../../render/avatar/AvatarAnimator';
 import { AvatarRig } from '../../render/avatar/AvatarRig';
@@ -19,12 +20,14 @@ import { battingConfig, battingRanges } from './config';
 import { hitWorldPosition } from './flight';
 import { batHeightM } from './judge';
 import type { Judgement, SwingInput } from './judge';
+import { MouseSwinger } from './mouseSwing';
 import { ballPosition } from './pitch';
 import type { Pitch, Vec3 } from './pitch';
 import { BattingRound } from './round';
 import type { PitchResult, RoundSummary } from './round';
 import { BatterPose, batterX, batterYaw, batterZ } from './stance';
 import { buildWorld } from './world';
+import { formatFeet } from './units';
 
 /** The pitcher's shirt: a teal from the sky and turf family, clearly not the batter's coral. */
 const PITCHER_COLOR = 0x4fb6c2;
@@ -178,6 +181,10 @@ export const createBatting: SportFactory = (ctx: SportContext): Sport & BattingP
     queue.speed[i] = speed;
     queue.height[i] = height;
   };
+  // Camera-off play: a click is the whole control (see mouseSwing.ts). No keys, no aiming.
+  const mouse = asMouseControl(ctx.input);
+  mouse?.setManualMode(true);
+  const swinger = mouse === null ? null : new MouseSwinger(mouse, cfg);
   const offStart = ctx.input.on('SwingStarted', (e) => push(0, e.t, e.speed, e.height));
   const offPeak = ctx.input.on('SwingPeak', (e) => push(1, e.t, e.speed, e.height));
 
@@ -185,7 +192,7 @@ export const createBatting: SportFactory = (ctx: SportContext): Sport & BattingP
   const refreshScore = (s: RoundSummary): void => {
     if (s.score === shownScore) return;
     shownScore = s.score;
-    ctx.hud.setScore(`${s.score} m`);
+    ctx.hud.setScore(formatFeet(s.score));
   };
 
   const timingText = (j: Judgement): string => {
@@ -198,7 +205,9 @@ export const createBatting: SportFactory = (ctx: SportContext): Sport & BattingP
     ctx.hud.setBanner(null);
     ctx.hud.setHint(
       index === 1
-        ? 'Get ready. Hold both hands together like a bat.'
+        ? mouse === null
+          ? 'Get ready. Hold both hands together like a bat.'
+          : 'Get ready. Click to swing.'
         : `Get ready. Pitch ${index} of ${total}`,
     );
   };
@@ -251,7 +260,7 @@ export const createBatting: SportFactory = (ctx: SportContext): Sport & BattingP
     if (r.kind === 'hit') {
       const q = j!.quality;
       ctx.audio.play('thud', { pitch: q === 'perfect' ? 1.15 : q === 'good' ? 1 : 0.8 });
-      ctx.hud.setBanner(`${r.label} ${r.distance} m`, 1800);
+      ctx.hud.setBanner(`${r.label} ${formatFeet(r.distance)}`, 1800);
       if (r.homer) {
         ctx.audio.play('cheer');
         ctx.hud.flash('great');
@@ -283,11 +292,11 @@ export const createBatting: SportFactory = (ctx: SportContext): Sport & BattingP
   };
 
   const onFinish = (s: RoundSummary): void => {
-    const lines = [`${s.hits} of ${s.pitches} pitches hit`, `Longest hit ${s.best} m`];
+    const lines = [`${s.hits} of ${s.pitches} pitches hit`, `Longest hit ${formatFeet(s.best)}`];
     lines.push(s.homers === 1 ? '1 home run' : `${s.homers} home runs`);
     ctx.finish({
       score: s.score,
-      headline: `${s.score} m`,
+      headline: formatFeet(s.score),
       lines,
       detail: {
         pitches: s.pitches,
@@ -401,7 +410,9 @@ export const createBatting: SportFactory = (ctx: SportContext): Sport & BattingP
     }
     // Camera: steady for the pitch and short hits, a gentle follow on long flies.
     const want =
-      flying && hitDist > 0 ? cfg.cameraFollowWeight * Math.min(1, 0.3 + hitDist / 40) : 0;
+      flying && hitDist > 0
+        ? cfg.cameraFollowWeight * Math.min(1, 0.3 + hitDist / cfg.cameraFollowFull)
+        : 0;
     follow += (want - follow) * (1 - Math.exp(-Math.min(0.1, dt) * (want > follow ? 3 : 1.5)));
     if (follow > 1e-3 && visible) {
       lookNow.set(
@@ -431,15 +442,20 @@ export const createBatting: SportFactory = (ctx: SportContext): Sport & BattingP
   return {
     start(): void {
       started = true;
-      ctx.hud.setScore('0 m');
-      ctx.hud.setSubScore(ctx.best === null ? null : `Best ${ctx.best} m`);
-      ctx.hud.setHint('Hold both hands together like a bat. Swing as the ball arrives.');
+      ctx.hud.setScore(formatFeet(0));
+      ctx.hud.setSubScore(ctx.best === null ? null : `Best ${formatFeet(ctx.best)}`);
+      ctx.hud.setHint(
+        mouse === null
+          ? 'Hold both hands together like a bat. Swing as the ball arrives.'
+          : 'Click to swing as the ball reaches the plate.',
+      );
     },
 
     fixedUpdate(_dt: number, nowMs: number): void {
       clock = nowMs;
       if (!started) return;
       if (round === null) round = makeRound(nowMs);
+      swinger?.poll(round, nowMs, ctx.paused);
       for (let i = 0; i < queue.n; i++) {
         if (queue.kind[i] === 0) {
           round.onSwingStarted(
@@ -499,6 +515,7 @@ export const createBatting: SportFactory = (ctx: SportContext): Sport & BattingP
     },
 
     dispose(): void {
+      mouse?.setManualMode(false);
       offStart();
       offPeak();
       unregister();

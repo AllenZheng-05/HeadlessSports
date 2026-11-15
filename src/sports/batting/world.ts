@@ -22,6 +22,9 @@ const DEG = Math.PI / 180;
 const FENCE_SPAN_DEG = 48;
 const FENCE_STEP_DEG = 4;
 const CHALK_Y = 0.025;
+const M_PER_FT = 0.3048;
+/** Distance boards and arcs, in feet from the plate (the fence is at 350). */
+const BOARD_FEET: readonly number[] = [100, 200, 300];
 
 /** [x, z, radiusX, height, radiusZ]: soft hills, all beyond the fence so the whole fence shows. */
 const HILLS: readonly (readonly [number, number, number, number, number])[] = [
@@ -154,8 +157,8 @@ export function buildWorld(scene: Scene, cfg: BattingConfig, batterX: number): W
       ),
     );
   }
-  parts.push(arc(25, 45, 0.18, PALETTE.chalk));
-  parts.push(arc(50, 45, 0.18, PALETTE.chalk));
+  parts.push(arc(BOARD_FEET[0]! * M_PER_FT, 45, 0.18, PALETTE.chalk));
+  parts.push(arc(BOARD_FEET[1]! * M_PER_FT, 45, 0.18, PALETTE.chalk));
 
   const chord = 2 * fenceR * Math.sin((FENCE_STEP_DEG / 2) * DEG) * 1.02;
   for (let d = -FENCE_SPAN_DEG; d <= FENCE_SPAN_DEG; d += FENCE_STEP_DEG) {
@@ -166,14 +169,15 @@ export function buildWorld(scene: Scene, cfg: BattingConfig, batterX: number): W
     parts.push(box(chord, 0.12, 0.45, x, cfg.fenceHeight + 0.06, z, -phi, PALETTE.chalk));
   }
 
-  // Distance boards at 25, 50 and 75 m: one, two and three chalk dots.
+  // Distance boards at 100, 200 and 300 ft: one, two and three chalk dots.
   const boardHeading = 28 * DEG;
-  [25, 50, 75].forEach((dist, i) => {
+  BOARD_FEET.forEach((feet, i) => {
+    const dist = feet * M_PER_FT;
     for (const sgn of [-1, 1]) {
       const phi = boardHeading * sgn;
       const x = dist * Math.sin(phi);
       const z = plateZ - dist * Math.cos(phi);
-      const poleH = 2.0 + (dist === 75 ? 0.8 : 0);
+      const poleH = 2.0 + (i === BOARD_FEET.length - 1 ? 0.8 : 0);
       parts.push(box(0.1, poleH, 0.1, x, poleH / 2, z, 0, PALETTE.chalk));
       parts.push(box(0.9, 0.9, 0.12, x, poleH + 0.25, z, -phi, ACCENTS.batting));
       for (let k = 0; k <= i; k++) {

@@ -58,61 +58,83 @@ async function waitResolved(page: Page, count: number, timeout = 20000): Promise
   );
 }
 
+/** How far ahead of the ball a click must be sent, learned from clicks that do nothing. */
+interface ClickTiming {
+  lead: number;
+}
+
 /**
- * Press S inside the page, on the animation frame where the swing will start `offsetMs` after the
- * ball arrives minus the bat's travel time. The key is applied on the next update, so the press is
- * made one measured frame early. Waits for the next pitch to be in its wind-up first and sets the
- * mouse height so the bat meets the ball.
+ * Measure how long a real press from the test process takes to reach the sport, in page ms. The
+ * Playwright round trip is far from free with the software renderer while the scene is drawing (100
+ * to 300 ms), so it is measured with the same call, under the same load. The probe presses are made
+ * between pitches, where the sport ignores a click, then two frames are added for the input to be
+ * applied and delivered. Does nothing when there is no safe moment left.
  */
-function swingAt(page: Page, offsetMs: number): Promise<{ arrival: number; clock: number }> {
-  return page.evaluate(
-    (offset) =>
-      new Promise<{ arrival: number; clock: number }>((resolve, reject) => {
-        const g = (
-          window as unknown as {
-            __game: {
-              sport: BattingProbe;
-              debugInput: {
-                press(c: string): void;
-                release(c: string): void;
-                moveTo(x: number, y: number): void;
-              };
-            };
-          }
-        ).__game;
+async function calibrateClick(page: Page, timing: ClickTiming): Promise<void> {
+  await page.evaluate(() => {
+    const w = window as unknown as { __md?: number; __mdOn?: boolean };
+    if (w.__mdOn) return;
+    w.__mdOn = true;
+    window.addEventListener('mousedown', () => (w.__md = performance.now()), true);
+  });
+  const size = page.viewportSize()!;
+  await page.mouse.move(size.width / 2, size.height / 2);
+  const lat: number[] = [];
+  for (let i = 0; i < 3; i++) {
+    const t0 = await page.evaluate(() => {
+      const s = (window as unknown as { __game: { sport: BattingProbe } }).__game.sport;
+      return s.stage === 'result' || s.stage === 'reset' ? performance.now() : -1;
+    });
+    if (t0 < 0) break;
+    await page.mouse.down();
+    await page.mouse.up();
+    const md = await page.evaluate(() => (window as unknown as { __md: number }).__md);
+    if (i >= 1) lat.push(md - t0);
+  }
+  if (lat.length === 0) return;
+  const frame = await page.evaluate(
+    () =>
+      new Promise<number>((resolve) => {
+        const a = performance.now();
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve(performance.now() - a)));
+      }),
+  );
+  timing.lead = Math.max(...lat) + frame;
+}
+
+/**
+ * Click the mouse (real `page.mouse` presses) so that the bat meets the ball `offsetMs` after it
+ * arrives, leading by the measured click timing. Waits for the next pitch first. Returns the arrival
+ * that was aimed at.
+ */
+async function clickAt(page: Page, offsetMs: number, timing: ClickTiming): Promise<number> {
+  await calibrateClick(page, timing);
+  const arrival = await page.evaluate(
+    () =>
+      new Promise<number>((resolve, reject) => {
+        const g = (window as unknown as { __game: { sport: BattingProbe } }).__game;
         const started = performance.now();
-        let lastClock = -1;
-        let frameMs = 16;
-        let armed = false;
-        let arrival = 0;
         const tick = (): void => {
           const s = g.sport;
-          if (performance.now() - started > 15000) {
-            reject(new Error('no pitch to swing at'));
-            return;
-          }
-          if (lastClock >= 0 && s.clockMs > lastClock) frameMs = s.clockMs - lastClock;
-          lastClock = s.clockMs;
-          if (!armed && s.arrivalMs > 0 && s.arrivalMs - s.clockMs > 400) {
-            armed = true;
-            // Bat 0.1 m below the ball: hands height (sw) = (ball - 0.1 - 0.95) / 0.4; mouse y = 0.5 - sw / 2.
-            const sw = (s.targetHeightM - 0.1 - 0.95) / 0.4;
-            g.debugInput.moveTo(0.5, 0.5 - sw / 2);
-          }
-          // The arrival is read live: a long stall shifts the timeline, and the arrival with it.
-          arrival = s.arrivalMs;
-          if (armed && arrival > 0 && s.clockMs >= arrival + offset - 130 - frameMs) {
-            g.debugInput.press('KeyS');
-            g.debugInput.release('KeyS');
-            resolve({ arrival, clock: s.clockMs });
-            return;
-          }
-          requestAnimationFrame(tick);
+          if (s.arrivalMs > 0 && s.arrivalMs - s.clockMs > 400) resolve(s.arrivalMs);
+          else if (performance.now() - started > 15000) reject(new Error('no pitch to swing at'));
+          else requestAnimationFrame(tick);
         };
         tick();
       }),
-    offsetMs,
   );
+  // The arrival is read live: a long stall shifts the timeline, and the arrival with it.
+  await page.waitForFunction(
+    ([offset, ahead, travel]) => {
+      const s = (window as unknown as { __game: { sport: BattingProbe } }).__game.sport;
+      return s.arrivalMs > 0 && s.clockMs >= s.arrivalMs + offset - travel - ahead;
+    },
+    [offsetMs, timing.lead, 130] as const,
+    { timeout: 15000, polling: 'raf' },
+  );
+  await page.mouse.down();
+  await page.mouse.up();
+  return arrival;
 }
 
 for (const hand of ['right', 'left'] as const) {
@@ -131,6 +153,7 @@ for (const hand of ['right', 'left'] as const) {
       expect(r?.detail?.pitches).toBe(3);
       expect(r?.detail?.hits ?? 0).toBeGreaterThanOrEqual(1);
       expect(r?.score ?? 0).toBeGreaterThan(0);
+      expect(r?.headline).toMatch(/^\d+ ft$/);
       expect(problems).toEqual([]);
     });
 
@@ -207,26 +230,25 @@ for (const hand of ['right', 'left'] as const) {
       expect(problems).toEqual([]);
     });
 
-    test('keyboard and mouse: a well-timed press hits, a late press is too late', async ({
-      page,
-    }) => {
+    test('mouse: a well-timed click hits, a late click is too late', async ({ page }) => {
       const problems = watch(page);
-      // A small viewport keeps the software renderer fast, so a frame (the press's timing resolution)
+      // A small viewport keeps the software renderer fast, so a frame (the click's timing resolution)
       // is short compared with the timing window.
       await page.setViewportSize({ width: 480, height: 270 });
       await page.goto(`/?sport=batting&input=debug&skipGate=1&short=1&hand=${hand}`);
       await waitPhase(page, 'playing');
+      const timing: ClickTiming = { lead: 150 };
 
       // Pitch 1: contact on the ball.
-      await swingAt(page, 0);
+      await clickAt(page, 0, timing);
       await waitResolved(page, 1);
       const first = (await resolved(page))[0]!;
       expect(first.kind).toBe('hit');
       expect(first.distance).toBeGreaterThan(0);
       expect(Math.abs(first.timingError ?? 999)).toBeLessThanOrEqual(160);
 
-      // Pitch 2: the bat arrives about 260 ms after the ball.
-      await swingAt(page, 260);
+      // Pitch 2: the bat arrives about 290 ms after the ball (a click, no aiming: only timing matters).
+      await clickAt(page, 290, timing);
       await waitResolved(page, 2);
       const second = (await resolved(page))[1]!;
       expect(second.kind).toBe('miss');
