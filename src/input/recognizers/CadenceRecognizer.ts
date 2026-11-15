@@ -1,207 +1,330 @@
 import { POSE_STRIDE, PoseIndex } from '../../tracking/types';
 import type { InputState, Side } from '../types';
+import { CadenceCue, CUE_RING } from './CadenceCue';
 import { recognizerConfig } from './config';
-import type { RecognizerConfig } from './config';
+import type { CadenceCueConfig, RecognizerConfig } from './config';
 import type { Emit, Recognizer } from './types';
 import { visible } from './util';
 
-const MAX_HISTORY = 16;
-/** Per-frame blend toward a larger hip-to-knee drop (the standing baseline grows quickly). */
-const BASELINE_ATTACK = 0.3;
-/** Time constant (s) of the baseline shrinking toward a smaller drop (slow). */
-const BASELINE_TAU_S = 5;
-/** A lift on one side only counts when the other knee is below this fraction of it. */
-const SYMMETRY = 0.6;
-/** A new step must rise above the last valley by this fraction of `minLift`. */
-const RISE_FRACTION = 0.5;
+/** Cue indices. */
+const ARM = 0;
+const THIGH = 1;
+const FOOT = 2;
+const BOB = 3;
+const CUES = 4;
 
-const SIDES: readonly Side[] = ['left', 'right'];
+const SHOULDERS = [PoseIndex.LEFT_SHOULDER, PoseIndex.RIGHT_SHOULDER];
+const ELBOWS = [PoseIndex.LEFT_ELBOW, PoseIndex.RIGHT_ELBOW];
+const WRISTS = [PoseIndex.LEFT_WRIST, PoseIndex.RIGHT_WRIST];
 const HIPS = [PoseIndex.LEFT_HIP, PoseIndex.RIGHT_HIP];
 const KNEES = [PoseIndex.LEFT_KNEE, PoseIndex.RIGHT_KNEE];
+const ANKLES = [PoseIndex.LEFT_ANKLE, PoseIndex.RIGHT_ANKLE];
+const HAND_SIDES: readonly Side[] = ['left', 'right'];
 
 /**
- * Running in place. Knee lift = how far the knee has risen above its standing position relative
- * to the hip (sw). A step is a lift above `minLift` that falls back below half its peak; the Step
- * event is stamped at the lift peak. Writes `state.cadence` in place.
+ * Running in place, from a front-on camera. The knees lift mostly toward the camera, so the legs
+ * alone move very little in the image; the upper body moves much more. Four cues are watched, any
+ * of which can carry the detection (see `CadenceCue` for the per-cue peak finding):
+ *
+ * - arm: wrist and elbow height relative to the shoulders, left minus right (arms swing in antiphase)
+ * - thigh: knee drop below the hip and hip-to-knee projected length, left minus right (a knee
+ *   coming toward the camera rises toward the hip and the thigh foreshortens)
+ * - foot: ankle height relative to the hip, left minus right, only when the ankles are well seen
+ * - bob: shoulder and hip midpoint height, one rise per step
+ *
+ * Each cue reports a rate and a confidence. Cues whose rates agree support each other; running
+ * starts when their summed confidence passes `runThreshold` and ends when it falls under
+ * `stopThreshold` (a cue goes stale when its next step is overdue). Depth is never used.
+ *
+ * `Step` events come from the most confident agreeing cue (the "leader", stamped at its peak), so
+ * one cue sets the rhythm at a time. When running starts, the leader's steps so far are emitted
+ * at once. Writes `state.cadence` in place. A wrist moving faster than `armBlankSpeed` (a throw)
+ * switches the arm cue off, so a throw is never taken for a pump.
  */
 export class CadenceRecognizer implements Recognizer {
   readonly name = 'cadence';
+  /** Latest per-cue rate (steps/s), confidence and streak, for tests and the debug page. */
+  readonly cueRate = new Float64Array(CUES);
+  readonly cueConf = new Float64Array(CUES);
+  readonly cueStreak = new Int32Array(CUES);
   private readonly config: RecognizerConfig;
-  private readonly baseline = new Float64Array(2);
-  private readonly hasBaseline = [false, false];
-  private readonly lift = new Float64Array(2);
-  private readonly valid = [false, false];
-  private readonly active = [false, false];
-  /** Lowest lift seen since the last step ended; a new step must rise clearly above it. */
-  private readonly valley = new Float64Array(2);
-  private readonly peak = new Float64Array(2);
-  private readonly peakT = new Float64Array(2);
-  private readonly otherAtPeak = new Float64Array(2);
-  /** Lift one frame before and after the peak sample, and the frame spacing, for refining the peak time. */
-  private readonly peakPrev = new Float64Array(2);
-  private readonly peakNext = new Float64Array(2);
-  private readonly peakDt = new Float64Array(2);
-  private readonly prevLift = new Float64Array(2);
-  private prevT = Number.NaN;
-  private lastStepT = Number.NEGATIVE_INFINITY;
+  private readonly cues: readonly CadenceCue[] = [
+    new CadenceCue(false),
+    new CadenceCue(false),
+    new CadenceCue(false),
+    new CadenceCue(true),
+  ];
+  private readonly stepped = new Uint8Array(CUES);
+  private readonly cfgs: CadenceCueConfig[] = [];
+  private running = false;
+  private leader = -1;
   private lastT = Number.NaN;
-  /** Ring of the most recent step intervals (ms) and amplitudes. */
-  private readonly intervals = new Float64Array(MAX_HISTORY);
-  private readonly amplitudes = new Float64Array(MAX_HISTORY);
-  private historyCount = 0;
-  private historyHead = 0;
+  private lastEmitT = Number.NEGATIVE_INFINITY;
+  private lastPeakT = Number.NEGATIVE_INFINITY;
+  private armOffUntil = Number.NEGATIVE_INFINITY;
+  private smoothRate = 0;
+  private smoothAmp = 0;
+  /** Alternates for the bob cue, which has no side of its own. */
+  private altSide = 0;
 
   constructor(config: RecognizerConfig = recognizerConfig) {
     this.config = config;
   }
 
+  get isRunning(): boolean {
+    return this.running;
+  }
+
   update(state: InputState, emit: Emit): void {
     const c = this.config.cadence;
-    const p = state.pose;
+    const t = state.t;
+    const dtMs = Number.isFinite(this.lastT) ? Math.max(0, t - this.lastT) : 0;
+    this.lastT = t;
     const sw = state.shoulderWidth;
-    const dtS = Number.isFinite(this.lastT) ? Math.max(0, state.t - this.lastT) / 1000 : 0;
-    this.lastT = state.t;
+    const usable = state.hasPose && sw > 0;
 
-    for (let i = 0; i < 2; i++) {
-      const ok = sw > 0 && visible(p, HIPS[i]) && visible(p, KNEES[i]);
-      this.valid[i] = ok;
-      if (!ok) {
-        this.lift[i] = 0;
-        this.active[i] = false;
-        continue;
-      }
-      const drop = (p[KNEES[i] * POSE_STRIDE + 1] - p[HIPS[i] * POSE_STRIDE + 1]) / sw;
-      if (!this.hasBaseline[i]) {
-        this.baseline[i] = drop;
-        this.hasBaseline[i] = true;
-      } else if (drop > this.baseline[i]) {
-        this.baseline[i] += (drop - this.baseline[i]) * BASELINE_ATTACK;
-      } else if (this.baseline[i] - drop < c.minLift * 0.5) {
-        this.baseline[i] -= (this.baseline[i] - drop) * Math.min(1, dtS / BASELINE_TAU_S);
-      }
-      this.lift[i] = Math.max(0, this.baseline[i] - drop);
-    }
-
-    const frameDt = Number.isFinite(this.prevT) ? state.t - this.prevT : 0;
-    for (let i = 0; i < 2; i++) {
-      if (!this.valid[i]) continue;
-      const lift = this.lift[i];
-      if (!this.active[i]) {
-        if (lift < this.valley[i]) this.valley[i] = lift;
-        if (lift > c.minLift && lift - this.valley[i] > c.minLift * RISE_FRACTION) {
-          this.active[i] = true;
-          this.peak[i] = lift;
-          this.peakT[i] = state.t;
-          this.otherAtPeak[i] = this.lift[1 - i];
-          this.peakPrev[i] = this.prevLift[i];
-          this.peakNext[i] = Number.NaN;
-          this.peakDt[i] = frameDt;
-        }
-        continue;
-      }
-      if (lift > this.peak[i]) {
-        this.peak[i] = lift;
-        this.peakT[i] = state.t;
-        this.otherAtPeak[i] = this.lift[1 - i];
-        this.peakPrev[i] = this.prevLift[i];
-        this.peakNext[i] = Number.NaN;
-        this.peakDt[i] = frameDt;
-      } else if (Number.isNaN(this.peakNext[i])) {
-        this.peakNext[i] = lift;
-        if (lift < this.peak[i] * 0.5) this.endStep(i, emit);
-      } else if (lift < this.peak[i] * 0.5) {
-        this.endStep(i, emit);
-      }
-    }
-    for (let i = 0; i < 2; i++) this.prevLift[i] = this.lift[i];
-    this.prevT = state.t;
-
-    this.updateCadence(state);
-  }
-
-  private endStep(i: number, emit: Emit): void {
-    this.active[i] = false;
-    this.valley[i] = this.lift[i];
-    this.finishStep(i, emit);
-  }
-
-  /** Peak time of lift `i`, refined below frame resolution by a parabola through three samples. */
-  private refinedPeakT(i: number): number {
-    const a = this.peakPrev[i];
-    const b = this.peak[i];
-    const c = this.peakNext[i];
-    const dt = this.peakDt[i];
-    if (Number.isNaN(c) || !(dt > 0)) return this.peakT[i];
-    const denom = a - 2 * b + c;
-    if (!(denom < -1e-9)) return this.peakT[i];
-    const offset = Math.max(-0.5, Math.min(0.5, (0.5 * (a - c)) / denom));
-    return this.peakT[i] + offset * dt;
-  }
-
-  private finishStep(i: number, emit: Emit): void {
-    const c = this.config.cadence;
-    const t = this.refinedPeakT(i);
-    const amp = this.peak[i];
-    if (this.otherAtPeak[i] > amp * SYMMETRY) return; // both knees up: squat or jump, not a step
-    const interval = t - this.lastStepT;
-    if (interval < c.minStepMs) return;
-    if (interval <= c.maxStepMs) {
-      this.intervals[this.historyHead] = interval;
-      this.amplitudes[this.historyHead] = amp;
-      this.historyHead = (this.historyHead + 1) % MAX_HISTORY;
-      if (this.historyCount < MAX_HISTORY) this.historyCount++;
+    this.stepped.fill(0);
+    if (usable) {
+      this.pushArm(state, t, sw, c);
+      this.pushThigh(state, t, sw, c);
+      this.pushFoot(state, t, sw, c);
+      this.pushBob(state, t, sw, c);
     } else {
-      // A long pause: start the average afresh.
-      this.historyCount = 0;
-      this.historyHead = 0;
-      this.intervals[0] = 0;
+      for (let i = 0; i < CUES; i++) this.cues[i].suspend();
     }
-    this.lastStepT = t;
-    emit({ type: 'Step', t, side: SIDES[i], amplitude: amp });
+
+    // Evaluate the cues and find the biggest group of agreeing ones.
+    const cfgs = this.cfgs;
+    cfgs[ARM] = c.arm;
+    cfgs[THIGH] = c.thigh;
+    cfgs[FOOT] = c.foot;
+    cfgs[BOB] = c.bob;
+    let bestK = -1;
+    let bestS = 0;
+    for (let i = 0; i < CUES; i++) {
+      const cue = this.cues[i];
+      cue.evaluate(t, cfgs[i], c);
+      this.cueRate[i] = cue.rate;
+      this.cueConf[i] = cue.conf;
+      this.cueStreak[i] = cue.streak;
+    }
+    for (let k = 0; k < CUES; k++) {
+      if (!this.cues[k].active) continue;
+      const rk = this.cues[k].rate;
+      let s = 0;
+      for (let j = 0; j < CUES; j++) {
+        if (this.cues[j].active && Math.abs(this.cues[j].rate - rk) <= c.agreement * rk) {
+          s += this.cues[j].conf;
+        }
+      }
+      if (s > bestS) {
+        bestS = s;
+        bestK = k;
+      }
+    }
+    const wasRunning = this.running;
+    let running = bestK >= 0 && bestS >= (wasRunning ? c.stopThreshold : c.runThreshold);
+    if (running && t - this.lastPeakT > c.decayMs) running = false;
+    this.running = running;
+
+    if (!running) {
+      this.leader = -1;
+      this.smoothRate = 0;
+      this.smoothAmp = 0;
+      state.cadence.stepsPerSecond = 0;
+      state.cadence.amplitude = 0;
+      return;
+    }
+
+    // Fuse the rate and the effort over the agreeing group; pick the leader.
+    const rBest = this.cues[bestK].rate;
+    let wSum = 0;
+    let rateSum = 0;
+    let effortSum = 0;
+    let topConf = 0;
+    let top = bestK;
+    for (let j = 0; j < CUES; j++) {
+      const cue = this.cues[j];
+      if (!cue.active || Math.abs(cue.rate - rBest) > c.agreement * rBest) continue;
+      wSum += cue.conf;
+      rateSum += cue.conf * cue.rate;
+      effortSum += cue.conf * (cue.swing / cfgs[j].nominalSwing);
+      if (cue.conf > topConf) {
+        topConf = cue.conf;
+        top = j;
+      }
+    }
+    const leaderKeeps =
+      this.leader >= 0 &&
+      this.cues[this.leader].active &&
+      Math.abs(this.cues[this.leader].rate - rBest) <= c.agreement * rBest &&
+      this.cues[this.leader].conf >= 0.6 * topConf;
+    if (!leaderKeeps) this.leader = top;
+
+    const rate = Math.min(c.softCap, rateSum / wSum);
+    const effort = Math.min(1, effortSum / wSum);
+    if (!wasRunning) {
+      this.smoothRate = rate;
+      this.smoothAmp = effort;
+    } else {
+      const a = c.rateSmoothMs > 0 ? 1 - Math.exp(-dtMs / c.rateSmoothMs) : 1;
+      this.smoothRate += (rate - this.smoothRate) * a;
+      this.smoothAmp += (effort - this.smoothAmp) * a;
+    }
+    const amplitude = this.smoothAmp * c.amplitudeScale;
+    state.cadence.stepsPerSecond = this.smoothRate;
+    state.cadence.amplitude = amplitude;
+
+    const lead = this.cues[this.leader];
+    if (!wasRunning) {
+      // The steps so far, oldest first, so the game has an interval to work from at once.
+      const n = Math.min(lead.streak, CUE_RING);
+      for (let k = n - 1; k >= 0; k--) {
+        this.emitStep(emit, this.leader, lead.peakTime(k), lead.peakSign(k), amplitude);
+      }
+    } else if (this.stepped[this.leader] === 1) {
+      this.emitStep(emit, this.leader, lead.peakTime(0), lead.peakSign(0), amplitude);
+    }
   }
 
-  private updateCadence(state: InputState): void {
+  private emitStep(emit: Emit, cue: number, t: number, sign: number, amplitude: number): void {
     const c = this.config.cadence;
-    const cad = state.cadence;
-    const n = Math.min(this.historyCount, Math.max(1, Math.floor(c.smoothing)), MAX_HISTORY);
-    if (n < 1 || this.historyCount < 1) {
-      cad.stepsPerSecond = 0;
-      cad.amplitude = 0;
+    if (t - this.lastEmitT < c.minStepMs) return;
+    this.lastEmitT = t;
+    let side: Side;
+    if (cue === BOB) {
+      this.altSide ^= 1;
+      side = HAND_SIDES[this.altSide];
+    } else if (cue === ARM) {
+      // The arm opposite a leg swings with it: a left-arm maximum is the right leg's step.
+      side = sign > 0 ? 'right' : 'left';
+    } else {
+      side = sign > 0 ? 'left' : 'right';
+    }
+    emit({ type: 'Step', t, side, amplitude });
+  }
+
+  /** Mark a frame on which `cue` confirmed a step. */
+  private mark(cue: number, t: number, stepped: boolean): void {
+    if (!stepped) return;
+    this.stepped[cue] = 1;
+    this.lastPeakT = t;
+  }
+
+  private pushArm(state: InputState, t: number, sw: number, c: RecognizerConfig['cadence']): void {
+    const cue = this.cues[ARM];
+    const p = state.pose;
+    if (state.arms.left.speed > c.armBlankSpeed || state.arms.right.speed > c.armBlankSpeed) {
+      this.armOffUntil = t + c.armBlankMs;
+      cue.blank();
       return;
     }
-    let sumI = 0;
-    let sumA = 0;
-    for (let k = 1; k <= n; k++) {
-      const idx = (this.historyHead - k + MAX_HISTORY) % MAX_HISTORY;
-      sumI += this.intervals[idx];
-      sumA += this.amplitudes[idx];
-    }
-    const meanInterval = sumI / n;
-    if (!(meanInterval > 0)) {
-      cad.stepsPerSecond = 0;
-      cad.amplitude = 0;
+    if (t < this.armOffUntil) {
+      cue.suspend();
       return;
     }
-    const since = state.t - this.lastStepT;
-    // A step is only detected a little after its peak, so allow for that before decaying.
-    const fullUntil = Math.min(meanInterval * 1.6, c.decayMs * 0.75);
-    let factor = 1;
-    if (since > fullUntil) factor = Math.max(0, 1 - (since - fullUntil) / (c.decayMs - fullUntil));
-    const rate = Math.min(c.softCap, 1000 / meanInterval) * factor;
-    cad.stepsPerSecond = rate;
-    cad.amplitude = rate > 0 ? sumA / n : 0;
+    let sum = 0;
+    let mode = 0;
+    for (let i = 0; i < 2; i++) {
+      if (!visible(p, WRISTS[i]) || !visible(p, SHOULDERS[i])) continue;
+      const arm = i === 0 ? state.arms.left : state.arms.right;
+      let a = arm.wristY;
+      if (visible(p, ELBOWS[i])) {
+        const elbowUp = (p[SHOULDERS[i] * POSE_STRIDE + 1] - p[ELBOWS[i] * POSE_STRIDE + 1]) / sw;
+        a = (a + c.arm.elbowWeight * elbowUp) / (1 + c.arm.elbowWeight);
+      }
+      // Left minus right, halved: the two arms swing in antiphase.
+      sum += i === 0 ? a : -a;
+      mode |= 1 << i;
+    }
+    if (mode === 0) {
+      cue.suspend();
+      return;
+    }
+    // With one arm hidden the other's height alone, on the same scale as an arm against a still one.
+    this.mark(ARM, t, cue.push(t, sum * 0.5, mode, c.arm, c));
+  }
+
+  private pushThigh(
+    state: InputState,
+    t: number,
+    sw: number,
+    c: RecognizerConfig['cadence'],
+  ): void {
+    const cue = this.cues[THIGH];
+    const p = state.pose;
+    const asp = state.aspect;
+    let sum = 0;
+    let mode = 0;
+    for (let i = 0; i < 2; i++) {
+      if (!visible(p, HIPS[i]) || !visible(p, KNEES[i])) continue;
+      const dx = (p[KNEES[i] * POSE_STRIDE] - p[HIPS[i] * POSE_STRIDE]) * asp;
+      const dy = p[KNEES[i] * POSE_STRIDE + 1] - p[HIPS[i] * POSE_STRIDE + 1];
+      const lift =
+        -(dy + c.thigh.lengthWeight * Math.hypot(dx, dy)) / (1 + c.thigh.lengthWeight) / sw;
+      sum += i === 0 ? lift : -lift;
+      mode |= 1 << i;
+    }
+    if (mode === 0) {
+      cue.suspend();
+      return;
+    }
+    this.mark(THIGH, t, cue.push(t, sum * 0.5, mode, c.thigh, c));
+  }
+
+  private pushFoot(state: InputState, t: number, sw: number, c: RecognizerConfig['cadence']): void {
+    const cue = this.cues[FOOT];
+    const p = state.pose;
+    let sum = 0;
+    let mode = 0;
+    for (let i = 0; i < 2; i++) {
+      if (!visible(p, HIPS[i]) || !visible(p, ANKLES[i], c.footMinVisibility)) continue;
+      const up = -(p[ANKLES[i] * POSE_STRIDE + 1] - p[HIPS[i] * POSE_STRIDE + 1]) / sw;
+      sum += i === 0 ? up : -up;
+      mode |= 1 << i;
+    }
+    if (mode === 0) {
+      cue.suspend();
+      return;
+    }
+    this.mark(FOOT, t, cue.push(t, sum * 0.5, mode, c.foot, c));
+  }
+
+  private pushBob(state: InputState, t: number, sw: number, c: RecognizerConfig['cadence']): void {
+    const cue = this.cues[BOB];
+    const p = state.pose;
+    let sum = 0;
+    let n = 0;
+    for (let i = 0; i < 2; i++) {
+      if (visible(p, SHOULDERS[i])) {
+        sum += p[SHOULDERS[i] * POSE_STRIDE + 1];
+        n++;
+      }
+      if (visible(p, HIPS[i])) {
+        sum += p[HIPS[i] * POSE_STRIDE + 1];
+        n++;
+      }
+    }
+    if (n < 4) {
+      cue.suspend();
+      return;
+    }
+    this.mark(BOB, t, cue.push(t, -sum / (n * sw), n, c.bob, c));
   }
 
   reset(): void {
-    this.hasBaseline[0] = this.hasBaseline[1] = false;
-    this.active[0] = this.active[1] = false;
-    this.valley[0] = this.valley[1] = 0;
-    this.lift[0] = this.lift[1] = 0;
-    this.lastStepT = Number.NEGATIVE_INFINITY;
+    for (let i = 0; i < CUES; i++) this.cues[i].reset();
+    this.stepped.fill(0);
+    this.cueRate.fill(0);
+    this.cueConf.fill(0);
+    this.cueStreak.fill(0);
+    this.running = false;
+    this.leader = -1;
     this.lastT = Number.NaN;
-    this.prevT = Number.NaN;
-    this.prevLift[0] = this.prevLift[1] = 0;
-    this.historyCount = 0;
-    this.historyHead = 0;
+    this.lastEmitT = Number.NEGATIVE_INFINITY;
+    this.lastPeakT = Number.NEGATIVE_INFINITY;
+    this.armOffUntil = Number.NEGATIVE_INFINITY;
+    this.smoothRate = 0;
+    this.smoothAmp = 0;
   }
 }

@@ -29,14 +29,35 @@ Original idea (Allen): "open your fist to release" for bowling and javelin. Keep
 
 ## Recognizer library (shared across sports)
 
-Build recognizers as small, independently testable state machines that emit typed events: `FistClosed`/`FistOpened` per hand, `HandHold {x, y, closed}`, `ArmRaisedAboveHead`, `KneeLiftCadence {stepsPerSecond, amplitude}`, `ThrowReleased {t, speed, direction, loft}`, `SwingStarted`/`SwingPeak {t, speed, plane}`, `Punch {hand, speed}`, `Lean {angle}`, `Squat`, `Jump`. Sports compose these; they do not read raw landmarks for gesture logic.
+Build recognizers as small, independently testable state machines that emit typed events: `FistClosed`/`FistOpened` per hand, `HandHold {x, y, closed}`, `ArmRaisedAboveHead`, `Step {side, amplitude}` plus `cadence {stepsPerSecond, amplitude}` (running in place, see below), `ThrowReleased {t, speed, direction, loft}`, `SwingStarted`/`SwingPeak {t, speed, plane}`, `Punch {hand, speed}`, `Lean {angle}`, `Squat`, `Jump`. Sports compose these; they do not read raw landmarks for gesture logic.
+
+## Running in place
+
+Running in place is read from a front-on camera, where the knee lift is mostly along the depth axis: the knees barely move in the image, ankles are often cut off or noisy, and a small jog gives only a few hundredths of a shoulder width of knee travel. A knee-only detector therefore fails for real people. `CadenceRecognizer` fuses four cues that a front view does show, each reduced to a signal in shoulder widths (sw) that rises and falls once per step:
+
+| Cue | Signal | Notes |
+|---|---|---|
+| Arm pump | wrist and elbow height relative to the shoulders, left minus right, halved | Primary cue. Arms swing in antiphase. With the javelin arm held up, the other arm and the rest of the body carry it. |
+| Thigh | knee drop below the hip plus hip-to-knee projected length, left minus right | A knee coming toward the camera rises toward the hip and the thigh foreshortens. |
+| Foot | ankle height relative to the hip, left minus right | Only when ankle visibility is at least `footMinVisibility`. |
+| Torso bob | shoulder and hip midpoint height | One rise per step. Weakest cue; usually corroborates. |
+
+Depth (world z) is not used: it would only be a tie-breaker and the project rule is never to base scoring on it.
+
+**Per cue** (`CadenceCue`): high-pass (`highpassMs`, removes posture and weight-shift drift), low-pass (`lowpassMs`), then a zigzag peak detector. A peak is confirmed when the signal retraces `threshold` from its extreme and the swing from the previous extreme is at least `minSwing` (half of it for the first peak after a rest). For the left-minus-right cues both maxima and minima are steps; for the bob only maxima. The peak time is the midpoint of the flank crossings, not the noisy top. Peaks form a streak: an interval outside `minStepMs`..`maxStepMs` (about 1.3 to 6 steps/s), or one that differs from the last by more than `maxIntervalRatio`, starts it over. The cue's rate is the median interval; its confidence is cue weight x streak length (2 steps `peakConf2`, 3 `peakConf3`, 4 or more 1) x regularity x swing size. A cue goes stale when its next step is overdue (`staleFactor` x interval + `staleSlackMs`).
+
+**Fusion:** cues whose rates agree within `agreement` support each other. Running starts when the best group's summed confidence reaches `runThreshold` and ends when it falls under `stopThreshold`. The rate is the confidence-weighted mean of the group, smoothed over `rateSmoothMs` and clamped to `softCap`; the amplitude is the group's effort (swing over the cue's `nominalSwing`) scaled to `amplitudeScale` (0.45 is a full-effort run for the javelin). `Step` events come from the most confident cue in the group (stamped at its peak), so one cue sets the rhythm at a time; when running starts the leader's steps so far are emitted at once.
+
+**Guards:** a wrist faster than `armBlankSpeed` (throw, punch) switches the arm cue off for `armBlankMs` and clears its streak, so a throw is never a pump. Both knees rising together (jump, squat) cancel in the left-minus-right signals. A single arm raise, a weight shift (slow), or standing noise cannot produce three regular peaks in the step band, and one cue with only two peaks is not enough on its own.
+
+**Latency (synthetic, noise on, 30 Hz):** a full-body jog at 3 steps/s is recognised about 0.6 s after the first movement (0.4 s at 5 steps/s) and stops within 0.5 s of stopping. A single cue alone takes about 0.9 to 1.1 s. Thresholds are in sw, tuned on synthetic noise (sigma about 0.012 sw); they need a real-camera pass.
 
 ## The webcam problem
 
 Nobody in this session can stand in front of a camera, and Allen can't do so either at this stage. Gesture recognition can only really be validated by Allen playing, so build the game so that everything else can be verified without a person:
 
 - **A swappable landmark source.** The input layer consumes landmarks through one interface with three implementations: the real tracking worker, a **replayer** for recorded JSON landmark streams, and a **synthetic player** that generates scripted landmark sequences (for example "grab and pull ten holds", "bowl one straight ball", "run up and throw"). Write the synthetic sequences as plausible human motion with realistic timing and some noise, at 30 Hz.
-- **A debug input mode** (`?input=debug`) that maps keyboard and mouse to the same gesture events the recognizers emit, so every sport is playable with no camera at all. It also helps Allen.
+- **A debug input mode** (`?input=debug`) that maps mouse to the same gesture events the recognizers emit, so every sport is playable with no camera at all. It also helps Allen.
 - **A landmark recorder**, so that Allen can record clips of each move. Recognizer tests run against the synthetic sequences for now; mark them as placeholders to be replaced by Allen's recordings.
 - **A debug page** with the camera feed, skeleton overlay, hand crops, recognizer state, and a HUD showing inference time, tracking rate, render frame rate and estimated end-to-end latency.
 - **Headless browser checks with Playwright.** Launch Chromium with a fake camera (`--use-fake-ui-for-media-stream --use-fake-device-for-media-stream`) to confirm the camera, worker and model pipeline starts and runs without errors; the fake feed contains no person, so expect zero detections. Then drive each sport end to end with the synthetic player, assert on the outcome (a score is recorded, a round completes), fail on console errors, and save screenshots. Look at the screenshots to check the scene against the Field Day theme.

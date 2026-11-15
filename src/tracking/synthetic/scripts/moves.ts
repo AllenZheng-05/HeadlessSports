@@ -186,6 +186,81 @@ export function runInPlace(opts: {
   return out;
 }
 
+/**
+ * A jog on the spot as a front-on camera sees it: small 2D knee displacement (most of the lift is
+ * toward the camera), arms pumping in antiphase with the legs, and the whole torso bobbing once
+ * per step. Steps alternate left then right. A 250 ms preparation brings the arms to the
+ * running position and a 300 ms settle returns to standing, so the motion itself starts and ends
+ * cleanly (labelled 'run'; the rest is 'ready' and 'settle').
+ *
+ * kneeLift: thigh lift as a fraction of horizontal (0 keeps the legs still).
+ * armPump: wrist swing amplitude up and down, sw (0 keeps the arms still).
+ * bob: torso rise per step, sw (0 turns it off).
+ * hold: keep that arm up (the javelin arm) instead of pumping it.
+ * startStep: steps already done in this run (a jog continued in a second call keeps its phase and
+ * alternation). prep and settle (both default true) drop the 250 ms 'ready' and 300 ms 'settle'
+ * parts, for chaining bursts into one run.
+ */
+export function jogInPlace(opts: {
+  steps: number;
+  stepsPerSecond: number;
+  kneeLift?: number;
+  armPump?: number;
+  bob?: number;
+  hold?: Hand;
+  startStep?: number;
+  prep?: boolean;
+  settle?: boolean;
+}): ScriptStep[] {
+  const knee = clamp01(opts.kneeLift ?? 0.25);
+  const pump = opts.armPump ?? 0.35;
+  const bob = opts.bob ?? 0.06;
+  const hold = opts.hold;
+  const quarter = 250 / opts.stepsPerSecond;
+  const carryY = -0.6;
+  const armsAt = (leftY: number, rightY: number): Partial<BodyControls> => ({
+    leftWristX: hold === 'left' ? -0.35 : -0.3,
+    leftWristY: hold === 'left' ? 1.1 : leftY,
+    rightWristX: hold === 'right' ? 0.35 : 0.3,
+    rightWristY: hold === 'right' ? 1.1 : rightY,
+  });
+  const out: ScriptStep[] = [];
+  if (opts.prep !== false) {
+    out.push({ dur: 250, to: armsAt(carryY, carryY), label: 'ready' });
+  }
+  const k0 = 4 * (opts.startStep ?? 0);
+  for (let k = k0 + 1; k <= k0 + 4 * opts.steps; k++) {
+    // One stride (left step, right step) is 2 pi of theta; each step is pi.
+    const th = (k * Math.PI) / 4;
+    const s = Math.sin(th);
+    const swing = pump * Math.sin(th + 0.6);
+    out.push({
+      dur: quarter,
+      to: {
+        leftKnee: knee * Math.max(0, s),
+        rightKnee: knee * Math.max(0, -s),
+        jump: bob * (0.5 - 0.5 * Math.cos(2 * th)),
+        ...armsAt(carryY + swing, carryY - swing),
+      },
+      ease: 'linear',
+      label: 'run',
+    });
+  }
+  if (opts.settle === false) return out;
+  out.push({
+    dur: 300,
+    to: {
+      leftKnee: 0,
+      rightKnee: 0,
+      jump: 0,
+      ...wrist('left', -REST_X, REST_Y),
+      ...wrist('right', REST_X, REST_Y),
+    },
+    label: 'settle',
+  });
+  return out;
+}
+
 export function leanTo(angleRad: number, ms = 400): ScriptStep[] {
   return [{ dur: ms, to: { lean: angleRad }, label: 'lean' }];
 }

@@ -87,6 +87,8 @@ describe('moves', () => {
     ['twoHandSwing', moves.twoHandSwing()],
     ['twoHandSwing reverse', moves.twoHandSwing({ direction: -1, power: 0.3, height: 0.1 })],
     ['runInPlace', moves.runInPlace({ steps: 5, stepsPerSecond: 3, amplitude: 1 })],
+    ['jogInPlace', moves.jogInPlace({ steps: 6, stepsPerSecond: 3 })],
+    ['jogInPlace arms held', moves.jogInPlace({ steps: 4, stepsPerSecond: 4, hold: 'right' })],
     ['leanTo', moves.leanTo(0.25)],
     ['sidestep', moves.sidestep(0.3)],
     ['squat', moves.squat()],
