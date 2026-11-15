@@ -10,6 +10,7 @@ export const meta: SportMeta = {
   requiredTrackers: { pose: false, handCrops: false, fullFrameHands: true },
   stance: 'hands-close',
   seatedOk: true,
+  usesHandedness: false,
   needsSpace: false,
   score: { label: 'Height', unit: 'm', decimals: 1, higherIsBetter: true },
   howTo: [
@@ -18,7 +19,7 @@ export const meta: SportMeta = {
     'Reach up with the other hand. Rest on the ledges.',
   ],
   debugKeys: [
-    'Mouse: move the hand, click a hold to grab it',
-    'Each click switches hands. A / D: pick a hand',
+    'Press and hold a hold to grab it, then drag down to pull up',
+    'Letting go of the button keeps your grip and switches hands',
   ],
 };

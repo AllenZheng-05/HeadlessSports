@@ -18,16 +18,11 @@ interface ClimbingHook {
     holding: { left: boolean; right: boolean };
     layoutChecksum: number;
     pointerHand: 'left' | 'right' | null;
+    pointerDragging: boolean;
     pointerHoldAt(x: number, y: number): number;
     aimImage(side: 'left' | 'right'): { x: number; y: number } | null;
   } | null;
   drawCalls: number;
-  debugInput: {
-    press(code: string): void;
-    release(code: string): void;
-    moveTo(x: number, y: number): void;
-    setButton(down: boolean): void;
-  } | null;
 }
 
 function watch(page: Page): string[] {
@@ -89,88 +84,19 @@ test.describe('rock climbing', () => {
     expect(problems).toEqual([]);
   });
 
-  test('is playable from the keyboard and mouse input', async ({ page }) => {
+  test('is playable with the mouse alone: press, drag, release, hand over hand', async ({
+    page,
+  }) => {
     const problems = watch(page);
     await page.goto('/?sport=climbing&input=debug&skipGate=1&short=1');
     await waitPhase(page, 'playing');
     await page.waitForTimeout(500);
     await page.screenshot({ path: `${SHOTS}/climbing-start.png` });
-
-    const grab = async (side: 'left' | 'right'): Promise<{ x: number; y: number }> => {
-      const select = side === 'right' ? 'KeyD' : 'KeyA';
-      const toggle = side === 'right' ? 'KeyE' : 'KeyQ';
-      const aim = await page.evaluate(
-        (s) => (window as unknown as { __game: ClimbingHook }).__game.sport?.aimImage(s) ?? null,
-        side,
-      );
-      expect(aim).not.toBeNull();
-      await page.evaluate(
-        ([sel, a]) => {
-          const d = (window as unknown as { __game: ClimbingHook }).__game.debugInput!;
-          d.press(sel as string);
-          d.moveTo((a as { x: number }).x, (a as { y: number }).y);
-        },
-        [select, aim] as const,
-      );
-      await page.waitForTimeout(250);
-      await page.evaluate(
-        (k) => (window as unknown as { __game: ClimbingHook }).__game.debugInput!.press(k),
-        toggle,
-      );
-      await page.waitForTimeout(300);
-      expect(
-        await page.evaluate(
-          (s) => (window as unknown as { __game: ClimbingHook }).__game.sport!.holding[s],
-          side,
-        ),
-      ).toBe(true);
-      return aim!;
-    };
-    const pull = async (side: 'left' | 'right', from: { x: number; y: number }): Promise<void> => {
-      await page.evaluate(
-        ([sel, x, y]) => {
-          const d = (window as unknown as { __game: ClimbingHook }).__game.debugInput!;
-          d.press(sel as string);
-          d.moveTo(x as number, y as number);
-        },
-        [side === 'right' ? 'KeyD' : 'KeyA', from.x, from.y + 0.25] as const,
-      );
-      await page.waitForTimeout(700);
-    };
-
-    const h0 = await page.evaluate(
-      () => (window as unknown as { __game: ClimbingHook }).__game.sport!.height,
-    );
-    const aimRight = await grab('right');
-    await pull('right', aimRight);
-    const h1 = await page.evaluate(
-      () => (window as unknown as { __game: ClimbingHook }).__game.sport!.height,
-    );
-    expect(h1 - h0).toBeGreaterThan(0.3);
-    const aimLeft = await grab('left');
-    await pull('left', aimLeft);
-    const h2 = await page.evaluate(
-      () => (window as unknown as { __game: ClimbingHook }).__game.sport!.height,
-    );
-    expect(h2 - h0).toBeGreaterThan(0.3);
-    await page.screenshot({ path: `${SHOTS}/climbing-debug.png` });
-
-    await waitPhase(page, 'results', 60000);
-    const result = await page.evaluate(
-      () => (window as unknown as { __game: ClimbingHook }).__game.result,
-    );
-    expect(result?.score ?? 0).toBeGreaterThan(0);
-    expect(problems).toEqual([]);
-  });
-
-  test('is playable with the mouse alone, hand over hand, without letting go', async ({ page }) => {
-    const problems = watch(page);
-    await page.goto('/?sport=climbing&input=debug&skipGate=1&short=1');
-    await waitPhase(page, 'playing');
-    await page.waitForTimeout(500);
+    const vp = page.viewportSize()!;
 
     const read = (): Promise<{
-      active: string | null;
+      active: 'left' | 'right' | null;
+      dragging: boolean;
       left: boolean;
       right: boolean;
       grabs: number;
@@ -182,6 +108,7 @@ test.describe('rock climbing', () => {
         const s = (window as unknown as { __game: ClimbingHook }).__game.sport!;
         return {
           active: s.pointerHand,
+          dragging: s.pointerDragging,
           left: s.holding.left,
           right: s.holding.right,
           grabs: s.grabs,
@@ -190,43 +117,52 @@ test.describe('rock climbing', () => {
           aimR: s.aimImage('right'),
         };
       });
-    const click = async (at: { x: number; y: number }): Promise<void> => {
-      await page.evaluate(
-        ([x, y]) => {
-          const d = (window as unknown as { __game: ClimbingHook }).__game.debugInput!;
-          d.moveTo(x as number, y as number);
-        },
-        [at.x, at.y] as const,
-      );
+    const moveTo = async (x: number, y: number): Promise<void> => {
+      await page.mouse.move(x * vp.width, y * vp.height);
       await page.waitForTimeout(120);
-      await page.evaluate(() => {
-        const d = (window as unknown as { __game: ClimbingHook }).__game.debugInput!;
-        d.setButton(true);
-        d.setButton(false);
-      });
-      await page.waitForTimeout(700);
     };
 
     const h0 = (await read()).height;
     let prev = await read();
     expect(prev.active).toBe('right');
-    for (let n = 1; n <= 6; n++) {
-      const aim = prev.active === 'left' ? prev.aimL : prev.aimR;
+    for (let n = 1; n <= 5; n++) {
+      const mover = prev.active!;
+      const other = mover === 'left' ? 'right' : 'left';
+      const aim = mover === 'left' ? prev.aimL : prev.aimR;
       expect(aim).not.toBeNull();
-      const mover = prev.active;
-      await click(aim!);
+      await moveTo(aim!.x, aim!.y);
+      await page.mouse.down();
+      await page.waitForTimeout(250);
+      const grabbed = await read();
+      expect(grabbed.dragging, `n=${n}`).toBe(true);
+      expect(grabbed[mover]).toBe(true);
+      expect(grabbed.grabs).toBe(prev.grabs + 1);
+      // Still the same hand while the button is down.
+      expect(grabbed.active).toBe(mover);
+      // Drag down: the body is pulled up while both hands stay on the wall.
+      const hBefore = grabbed.height;
+      await page.mouse.move(aim!.x * vp.width, (aim!.y + 0.28) * vp.height, { steps: 8 });
+      await page.waitForTimeout(250);
+      const pulled = await read();
+      expect(pulled.dragging, `n=${n} pulled`).toBe(true);
+      expect(pulled[mover]).toBe(true);
+      if (n > 1) expect(pulled[other]).toBe(true);
+      expect(pulled.height).toBeGreaterThanOrEqual(hBefore - 0.01);
+      await page.mouse.up();
+      await page.waitForTimeout(200);
       const now = await read();
-      // The clicking hand holds, the other one never let go, and the mouse changed hands.
-      expect(now[mover as 'left' | 'right']).toBe(true);
+      // Releasing keeps the grip and the mouse changes hands.
+      expect(now[mover]).toBe(true);
+      if (n > 1) expect(now[other]).toBe(true);
+      expect(now.active, `n=${n} mover=${mover} grabs=${now.grabs}`).toBe(other);
       expect(now.grabs).toBe(prev.grabs + 1);
-      if (n > 1) expect(now[mover === 'left' ? 'right' : 'left']).toBe(true);
-      expect(now.active).toBe(mover === 'left' ? 'right' : 'left');
       prev = now;
     }
     expect(prev.left && prev.right).toBe(true);
-    expect(prev.height - h0).toBeGreaterThan(0.8);
+    expect(prev.height - h0).toBeGreaterThan(0.6);
+    await page.screenshot({ path: `${SHOTS}/climbing-debug.png` });
 
-    // A click that is not on a hold changes nothing.
+    // A press that is not on a hold changes nothing.
     const empty = await page.evaluate(() => {
       const s = (window as unknown as { __game: ClimbingHook }).__game.sport!;
       for (let y = 0.05; y < 1; y += 0.05) {
@@ -237,11 +173,22 @@ test.describe('rock climbing', () => {
       return null;
     });
     expect(empty).not.toBeNull();
-    await click(empty!);
+    await moveTo(empty!.x, empty!.y);
+    await page.mouse.down();
+    await page.waitForTimeout(300);
+    await page.mouse.up();
+    await page.waitForTimeout(300);
     const after = await read();
     expect(after.left && after.right).toBe(true);
     expect(after.grabs).toBe(prev.grabs);
     expect(after.active).toBe(prev.active);
+
+    // The round still ends with a result for the height climbed.
+    await waitPhase(page, 'results', 60000);
+    const result = await page.evaluate(
+      () => (window as unknown as { __game: ClimbingHook }).__game.result,
+    );
+    expect(result?.score ?? 0).toBeGreaterThan(0);
     expect(problems).toEqual([]);
   });
 
