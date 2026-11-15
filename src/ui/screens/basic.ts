@@ -58,8 +58,7 @@ const FAILURE_TEXT: Record<GateFailure, string> = {
   mobile: 'Headless Sports is made for laptops and desktop computers, not phones or tablets.',
   'small-viewport': 'This window is too small. Make the browser window bigger, or go full screen.',
   'no-webgl2': 'This browser cannot draw the 3D graphics (WebGL 2) the game needs.',
-  'no-camera-api':
-    'This browser cannot use a camera. You can still play with the keyboard and mouse.',
+  'no-camera-api': 'This browser cannot use a camera. You can still play with the mouse.',
   'no-workers': 'This browser cannot run background workers, which the game needs.',
   'slow-tracking': 'This computer is too slow to follow your movements smoothly.',
   'slow-rendering': 'This computer is too slow to draw the game smoothly while the camera is on.',
@@ -268,7 +267,7 @@ export function buildCameraError(
   }
   const actions = h('div', 'actions');
   const retry = selectButton('Try again', 'btn');
-  const debug = selectButton('Play with keyboard and mouse', 'btn btn-secondary');
+  const debug = selectButton('Play with the mouse', 'btn btn-secondary');
   retry.addEventListener('click', () => resolve('retry'));
   debug.addEventListener('click', () => resolve('debug'));
   actions.append(retry, debug);

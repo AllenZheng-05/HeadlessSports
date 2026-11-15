@@ -34,7 +34,7 @@ export interface UiHud extends Hud {
   readonly el: HTMLElement;
   setVisible(visible: boolean): void;
   /**
-   * Keyboard and mouse input: hand cursors drawn through `setCursor` sit exactly on the real
+   * Mouse input: hand cursors drawn through `setCursor` sit exactly on the real
    * pointer (clientX/clientY), whatever position the sport passes. Camera mode is unchanged.
    */
   setPointerMode(on: boolean): void;

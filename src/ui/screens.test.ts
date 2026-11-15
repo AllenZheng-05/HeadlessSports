@@ -93,7 +93,9 @@ describe('screens resolve on click', () => {
     const p = ui.showHowTo(bowling, true);
     const text = root.textContent ?? '';
     expect(text).toContain('Clear a 2 by 2 metre space around you.');
-    // keyboard and mouse players have no fist to raise
+    // mouse players have no fist to raise
+    expect(root.querySelector('.debug-title')?.textContent).toBe('With the mouse');
+    expect(text).not.toContain('Keyboard');
     expect(text).not.toContain('Raise a fist to start');
     expect(text).toContain(bowling.debugKeys[0]);
     expect(root.querySelectorAll('.steps li').length).toBe(bowling.howTo.length);
@@ -101,7 +103,7 @@ describe('screens resolve on click', () => {
     await expect(p).resolves.toBe('start');
     const q = ui.showHowTo(FAKE_SPORTS[3]!, false);
     expect(root.textContent).toContain('You can play this one sitting down.');
-    expect(root.textContent).not.toContain('Keyboard and mouse');
+    expect(root.textContent).not.toContain('With the mouse');
     click('.screen-howto .btn-secondary');
     await expect(q).resolves.toBe('back');
   });
@@ -211,7 +213,7 @@ describe('how to play while playing', () => {
     expect(paused).toHaveBeenLastCalledWith(false);
   });
 
-  it('shows the keyboard and mouse keys only for debug input', () => {
+  it('shows the "With the mouse" lines only for debug input', () => {
     ui.showPlaying(bowling);
     click('.howto-open');
     expect(root.querySelector('.howto-overlay .debug-keys')).toBeNull();
@@ -221,7 +223,7 @@ describe('how to play while playing', () => {
     expect(root.querySelector('.howto-overlay .debug-keys')).not.toBeNull();
   });
 
-  it('the how-to card says nothing about raising a fist for keyboard and mouse players', () => {
+  it('the how-to card says nothing about raising a fist for mouse players', () => {
     ui.setInput(createFakeInput('pose', 'debug'));
     void ui.showHowTo(bowling, true);
     expect(root.querySelector('.fist-hint')).toBeNull();
@@ -544,6 +546,36 @@ describe('dominant hand toggle', () => {
   });
 });
 
+describe('sports without a dominant hand', () => {
+  const noHand = { ...FAKE_SPORTS[0]!, usesHandedness: false };
+  const opts = { handedness: 'right' as const, onHandedness: () => undefined };
+
+  it('the how-to card has no dominant hand toggle, the overlay and others still follow the flag', () => {
+    void ui.showHowTo(noHand, true, opts);
+    expect(root.querySelector('.hand-toggle')).toBeNull();
+    void ui.showHowTo({ ...noHand, usesHandedness: true }, true, opts);
+    expect(root.querySelector('.hand-toggle')).not.toBeNull();
+    void ui.showHowTo({ ...noHand, usesHandedness: undefined }, true, opts);
+    expect(root.querySelector('.hand-toggle')).not.toBeNull();
+  });
+
+  it('calibration shows one step fewer and no Hand dot', () => {
+    ui.showCalibration(bowlingFull());
+    const withHand = root.querySelectorAll('.dot').length;
+    ui.showCalibration({ ...bowlingFull(), usesHandedness: false });
+    expect(root.querySelectorAll('.dot').length).toBe(withHand - 1);
+    expect(root.querySelector('.dot[title="Hand"]')).toBeNull();
+  });
+});
+
+describe('mouse mode copy', () => {
+  it('the camera error offers "Play with the mouse"', () => {
+    void ui.showCameraError('camera-denied');
+    expect(root.textContent).toContain('Play with the mouse');
+    expect(root.textContent).not.toContain('keyboard');
+  });
+});
+
 describe('seated toggle on calibration', () => {
   it('is offered only for sports that can be played sitting', () => {
     const plain = ui.showCalibration(FAKE_SPORTS[2]!);
@@ -610,7 +642,7 @@ describe('hand cursor and the input source', () => {
     expect(cursorHidden('camera')).toBe(false);
   });
 
-  it('follows the real pointer for keyboard and mouse input, with no input state involved', () => {
+  it('follows the real pointer for mouse input, with no input state involved', () => {
     expect(cursorHidden(null)).toBe(true); // nothing until the pointer has moved
     window.dispatchEvent(new MouseEvent('pointermove', { clientX: 321, clientY: 123 }));
     ui.update(0.016, 32);

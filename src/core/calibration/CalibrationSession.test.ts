@@ -244,6 +244,24 @@ describe('CalibrationSession full body', () => {
     expect(cal).toEqual(defaultCalibration('full-body'));
   });
 
+  it('usesHandedness false never asks for a raised hand and keeps the default hand', () => {
+    const rig = new Rig(
+      new CalibrationSession('full-body', { usesHandedness: false, defaultHandedness: 'left' }),
+    );
+    const seen = new Set<string>();
+    rig.set(STAND);
+    for (let i = 0; i < 20; i++) {
+      rig.run(100);
+      seen.add(rig.session.update(rig.state, rig.t).step);
+    }
+    expect(seen.has('handedness')).toBe(false);
+    expect(seen.has('hold-still')).toBe(true);
+    rig.set(T_POSE);
+    rig.run(3000);
+    expect(rig.session.done).toBe(true);
+    expect(rig.session.result()?.handedness).toBe('left');
+  });
+
   it('finishes with defaults at the timeout', () => {
     const rig = new Rig(new CalibrationSession('full-body'));
     rig.set({ bodyVisible: 0 });

@@ -31,7 +31,7 @@ function arm(): ArmState {
 
 /**
  * `kind` 'camera' gives the input a camera-like source (hand cursor with hold-to-select); 'debug'
- * has no source, like keyboard and mouse input (the cursor follows the real pointer).
+ * has no source, like mouse input (the cursor follows the real pointer).
  */
 export function createFakeInput(
   mode: 'pose' | 'hands',

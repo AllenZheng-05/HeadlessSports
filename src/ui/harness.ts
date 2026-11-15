@@ -54,7 +54,7 @@ ui.onHowToPlay((open) => {
 window.__ui = hub;
 
 const handParam = params.get('hand');
-// ?input=debug: no landmark source, like keyboard and mouse play.
+// ?input=debug: no landmark source, like mouse play.
 const debugInput = params.get('input') === 'debug';
 const wantsInput =
   handParam !== null ||

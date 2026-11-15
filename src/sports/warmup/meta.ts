@@ -13,5 +13,5 @@ export const meta: SportMeta = {
   needsSpace: false,
   score: { label: 'Time', unit: 's', decimals: 1, higherIsBetter: false },
   howTo: ['Close your fist, then open it.', 'Do it five times as fast as you can.'],
-  debugKeys: ['E: toggle right fist', 'Q: toggle left fist'],
+  debugKeys: ['Press the mouse button to close your fist', 'Let go to open it, then press again'],
 };

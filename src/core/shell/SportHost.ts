@@ -12,6 +12,7 @@ import type { Flags } from '../flags';
 import type { GameLoop } from '../loop';
 import { mulberry32 } from '../random';
 import type { ScoreStore } from '../scores';
+import { scoreKeyOf } from '../sport';
 import type { RoundResult, Sport, SportContext, SportEntry } from '../sport';
 import { Lobby } from './Lobby';
 
@@ -229,7 +230,7 @@ export class SportHost {
 
   private async bestScore(entry: SportEntry): Promise<number | null> {
     try {
-      const best = await this.scores.best(entry.meta.id, entry.meta.score.higherIsBetter);
+      const best = await this.scores.best(scoreKeyOf(entry.meta), entry.meta.score.higherIsBetter);
       return best === null ? null : best.score;
     } catch {
       return null;

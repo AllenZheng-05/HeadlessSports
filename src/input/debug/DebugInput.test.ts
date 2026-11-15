@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { PoseIndex, POSE_STRIDE } from '../../tracking/types';
 import type { GameEvent } from '../types';
-import { DEBUG_KEYS, DebugInput, debugInputConfig } from './DebugInput';
+import { DebugInput, debugInputConfig } from './DebugInput';
 
 function make(target?: EventTarget) {
   const input = new DebugInput({
@@ -22,9 +22,9 @@ describe('DebugInput events', () => {
   it('delivers events only inside update, in order, with the update time', () => {
     const { input, events } = make();
     input.update(0);
-    input.press('KeyQ');
-    input.press('KeyE');
-    input.press('KeyP');
+    input.setHandClosed('left', true);
+    input.setHandClosed('right', true);
+    input.punch();
     expect(events).toHaveLength(0);
     input.update(100);
     expect(events.map((e) => e.type)).toEqual(['FistClosed', 'FistClosed', 'Punch']);
@@ -34,12 +34,11 @@ describe('DebugInput events', () => {
   it('toggles fists and mirrors state', () => {
     const { input, events } = make();
     input.update(0);
-    input.press('KeyQ');
+    input.setHandClosed('left', true);
     input.update(10);
     expect(input.state.hands.left.closed).toBe(true);
     expect(input.state.hands.left.curl).toBeCloseTo(0.8);
-    input.release('KeyQ');
-    input.press('KeyQ');
+    input.setHandClosed('left', false);
     input.update(20);
     expect(input.state.hands.left.closed).toBe(false);
     expect(input.state.hands.left.curl).toBeCloseTo(1.8);
@@ -50,7 +49,7 @@ describe('DebugInput events', () => {
   it('closes the selected hand while the mouse button is held', () => {
     const { input, events } = make();
     input.update(0);
-    input.press('KeyA');
+    input.selectHand('left');
     input.setButton(true);
     input.update(10);
     expect(input.state.hands.left.closed).toBe(true);
@@ -68,13 +67,13 @@ describe('DebugInput events', () => {
     const { input } = make();
     input.update(0);
     const rightBefore = { ...input.state.hands.right };
-    input.press('KeyA');
+    input.selectHand('left');
     input.moveTo(0.2, 0.3);
     input.update(10);
     expect(input.state.hands.left.x).toBeCloseTo(0.2);
     expect(input.state.hands.left.y).toBeCloseTo(0.3);
     expect(input.state.hands.right.x).toBe(rightBefore.x);
-    input.press('KeyD');
+    input.selectHand('right');
     input.moveTo(0.8, 0.6);
     input.update(20);
     expect(input.state.hands.right.x).toBeCloseTo(0.8);
@@ -84,27 +83,26 @@ describe('DebugInput events', () => {
   it('mirrors the neutral lateral for the left hand', () => {
     const { input, events } = make();
     input.update(0);
-    input.press('KeyA');
+    input.selectHand('left');
     input.moveTo(0.5, 0.5);
-    input.press('KeyT');
+    input.startWindup();
     input.update(100);
-    input.release('KeyT');
+    input.releaseThrow();
     input.update(200);
     const rel = of(events, 'ThrowReleased')[0];
     expect(rel.hand).toBe('left');
     expect(rel.lateral).toBeCloseTo(-debugInputConfig.neutralLateral);
   });
 
-  it('selecting a hand does not move it; it follows once the mouse moves', () => {
+  it('selecting a hand puts it under the mouse; the other hand stays where it was', () => {
     const { input } = make();
     input.update(0);
     input.moveTo(0.8, 0.3);
     input.update(10); // right hand follows
-    const leftBefore = { x: input.state.hands.left.x, y: input.state.hands.left.y };
-    input.press('KeyA');
+    input.selectHand('left');
     input.update(20);
-    expect(input.state.hands.left.x).toBe(leftBefore.x);
-    expect(input.state.hands.left.y).toBe(leftBefore.y);
+    expect(input.state.hands.left.x).toBeCloseTo(0.8);
+    expect(input.state.hands.left.y).toBeCloseTo(0.3);
     input.moveTo(0.3, 0.4);
     input.update(30);
     expect(input.state.hands.left.x).toBeCloseTo(0.3);
@@ -112,9 +110,9 @@ describe('DebugInput events', () => {
   });
 
   it('synthesises wrists that land on the cursor for each hand', () => {
-    for (const [key, idx, side] of [
-      ['KeyA', PoseIndex.LEFT_WRIST, 'left'],
-      ['KeyD', PoseIndex.RIGHT_WRIST, 'right'],
+    for (const [pick, idx, side] of [
+      ['left', PoseIndex.LEFT_WRIST, 'left'],
+      ['right', PoseIndex.RIGHT_WRIST, 'right'],
     ] as const) {
       for (const [mx, my] of [
         [0.5, 0.4],
@@ -123,7 +121,7 @@ describe('DebugInput events', () => {
       ] as const) {
         const { input } = make();
         input.update(0);
-        input.press(key);
+        input.selectHand(pick);
         input.moveTo(mx, my);
         input.update(16);
         input.update(32);
@@ -138,14 +136,14 @@ describe('DebugInput events', () => {
   it('raises one arm or both', () => {
     const { input, events } = make();
     input.update(0);
-    input.press('KeyA');
-    input.press('KeyU');
+    input.selectHand('left');
+    input.setArmsRaised('left');
     input.update(10);
-    input.release('KeyU');
+    input.setArmsRaised('none');
     input.update(20);
-    input.press('KeyI');
+    input.setArmsRaised('both');
     input.update(30);
-    input.release('KeyI');
+    input.setArmsRaised('none');
     input.update(40);
     expect(events).toEqual([
       { type: 'ArmRaised', t: 10, hand: 'left', both: false },
@@ -157,14 +155,13 @@ describe('DebugInput events', () => {
     ]);
   });
 
-  function throwFor(holdMs: number, key = 'KeyT', extra?: string, mx = 0.5, my = 0.5) {
+  function throwFor(holdMs: number, style: 'overarm' | 'underarm' = 'overarm', mx = 0.5, my = 0.5) {
     const { input, events } = make();
     input.update(0);
     input.moveTo(mx, my);
-    input.press(key);
+    input.startWindup(undefined, style);
     input.update(100);
-    if (extra) input.press(extra);
-    input.release(key);
+    input.releaseThrow();
     input.update(100 + holdMs);
     return { events, released: of(events, 'ThrowReleased')[0] };
   }
@@ -180,26 +177,24 @@ describe('DebugInput events', () => {
   });
 
   it('computes lateral, loft, velocity and style', () => {
-    const over = throwFor(0, 'KeyT', undefined, 0.75, 0.5).released;
+    const over = throwFor(0, 'overarm', 0.75, 0.5).released;
     expect(over.lateral).toBeCloseTo(debugInputConfig.neutralLateral + 1);
     expect(over.loft).toBeCloseTo(0.6);
     expect(over.style).toBe('overarm');
     expect(over.vy).toBeCloseTo(over.speed * Math.sin(0.6));
     expect(over.vx).toBeCloseTo(over.speed * Math.cos(0.6));
-    const centre = throwFor(0, 'KeyT', undefined, 0.5, 0.5).released;
+    const centre = throwFor(0, 'overarm', 0.5, 0.5).released;
     expect(centre.lateral).toBeCloseTo(debugInputConfig.neutralLateral);
     expect(centre.vx).toBeGreaterThan(0); // the centre is a straight throw, not a dead-centre one
-    const high = throwFor(0, 'KeyT', undefined, 0.5, 0).released;
+    const high = throwFor(0, 'overarm', 0.5, 0).released;
     expect(high.loft).toBeCloseTo(1.4);
-    const under = throwFor(0, 'KeyB', undefined, 0.25, 0.1).released;
+    const under = throwFor(0, 'underarm', 0.25, 0.1).released;
     expect(under.style).toBe('underarm');
     expect(under.loft).toBeCloseTo(0.3);
     expect(under.vx).toBeLessThan(0);
   });
 
-  it('applies curvature from Z and C', () => {
-    expect(throwFor(0, 'KeyT', 'KeyZ').released.curvature).toBeCloseTo(-0.6);
-    expect(throwFor(0, 'KeyT', 'KeyC').released.curvature).toBeCloseTo(0.6);
+  it('has no curvature unless the sport passes one', () => {
     expect(throwFor(0).released.curvature).toBe(0);
   });
 
@@ -207,7 +202,7 @@ describe('DebugInput events', () => {
     const { input, events } = make();
     input.update(0);
     input.moveTo(0.5, 0.25);
-    input.press('KeyS');
+    input.swing();
     input.update(1000);
     expect(events).toEqual([
       { type: 'SwingStarted', t: 1000, speed: 8, height: 0.5, direction: 1 },
@@ -220,11 +215,11 @@ describe('DebugInput events', () => {
     expect((events[1] as { plane: number }).plane).toBeCloseTo(0.2);
   });
 
-  it('swing direction follows the selected hand and Shift is faster', () => {
+  it('swing direction follows the selected hand and full power is faster', () => {
     const { input, events } = make();
     input.update(0);
-    input.press('KeyA');
-    input.press('KeyS', { shift: true });
+    input.selectHand('left');
+    input.swing({ power: 1 });
     input.update(10);
     expect(events[0]).toMatchObject({ type: 'SwingStarted', direction: -1, speed: 11 });
   });
@@ -235,8 +230,7 @@ describe('DebugInput events', () => {
     let t = 0;
     for (let i = 0; i < 6; i++) {
       t += 300;
-      input.release('KeyR');
-      input.press('KeyR');
+      input.step();
       input.update(t);
     }
     const steps = of(events, 'Step');
@@ -251,41 +245,41 @@ describe('DebugInput events', () => {
     expect(input.state.cadence.amplitude).toBe(0);
   });
 
-  it('auto-runs at the configured rate, faster with Shift', () => {
-    const run = (shift: boolean) => {
+  it('auto-runs at the requested rate, faster at a higher rate', () => {
+    const run = (rate: number) => {
       const { input, events } = make();
       input.update(0);
-      input.press('ArrowUp', { shift });
+      input.setRunCadence(rate);
       for (let t = 0; t <= 2000; t += 16) input.update(t);
       return { count: of(events, 'Step').length, input };
     };
-    const normal = run(false);
+    const normal = run(3.2);
     expect(normal.count).toBeGreaterThanOrEqual(6);
     expect(normal.count).toBeLessThanOrEqual(8);
     expect(normal.input.state.cadence.stepsPerSecond).toBeGreaterThan(2.8);
     expect(normal.input.state.cadence.stepsPerSecond).toBeLessThan(3.6);
-    const fast = run(true);
+    const fast = run(4.5);
     expect(fast.count).toBeGreaterThanOrEqual(9);
     expect(fast.count).toBeLessThanOrEqual(11);
   });
 
-  it('moves laterally and leans at the configured rates with clamps and recentre', () => {
+  it('moves laterally and leans with clamps and recentre', () => {
     const { input } = make();
     input.update(0);
-    input.press('ArrowRight');
+    input.setLateral(0.6);
     input.update(500);
     expect(input.state.lateral).toBeCloseTo(0.6);
+    input.setLateral(50);
     input.update(5000);
     expect(input.state.lateral).toBeCloseTo(2.0);
-    input.release('ArrowRight');
-    input.press('ArrowLeft', { shift: true });
+    input.setLean(-0.4);
     input.update(5500);
     expect(input.state.lean).toBeCloseTo(-0.4);
+    input.setLean(-3);
     input.update(9000);
     expect(input.state.lean).toBeCloseTo(-0.45);
     expect(input.state.lateral).toBeCloseTo(2.0);
-    input.release('ArrowLeft');
-    input.press('ArrowDown');
+    input.recentre();
     input.update(9010);
     expect(input.state.lateral).toBe(0);
     expect(input.state.lean).toBe(0);
@@ -294,19 +288,19 @@ describe('DebugInput events', () => {
   it('squat holds rise, jump runs a rise and fall, punch emits', () => {
     const { input, events } = make();
     input.update(0);
-    input.press('KeyK');
+    input.setSquat(true);
     input.update(10);
     expect(input.state.rise).toBeCloseTo(-0.5);
-    input.release('KeyK');
+    input.setSquat(false);
     input.update(20);
     expect(input.state.rise).toBe(0);
-    input.press('KeyJ');
+    input.jump();
     input.update(100);
     input.update(300);
     expect(input.state.rise).toBeCloseTo(0.35, 2);
     input.update(600);
     expect(input.state.rise).toBe(0);
-    input.press('KeyP');
+    input.punch();
     input.update(610);
     expect(events).toEqual([
       { type: 'Squat', t: 10, depth: 0.5 },
@@ -317,42 +311,40 @@ describe('DebugInput events', () => {
 });
 
 describe('DebugInput DOM handling', () => {
-  it('maps mouse and keys from real DOM events and ignores auto-repeat', () => {
+  it('maps mouse movement and the button from real DOM events', () => {
     const { input, events } = make(window);
     input.update(0);
     window.dispatchEvent(new MouseEvent('mousemove', { clientX: 250, clientY: 100 }));
-    window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyE' }));
-    window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyP' }));
-    window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyP', repeat: true }));
-    window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyP' })); // held, no keyup
+    window.dispatchEvent(new MouseEvent('mousedown', { button: 0 }));
     input.update(10);
     expect(input.state.hands.right.x).toBeCloseTo(0.25);
     expect(input.state.hands.right.y).toBeCloseTo(0.2);
-    expect(events.map((e) => e.type)).toEqual(['FistClosed', 'Punch']);
+    expect(events.map((e) => e.type)).toEqual(['FistClosed']);
+    window.dispatchEvent(new MouseEvent('mouseup', { button: 0 }));
+    input.update(20);
+    expect(events.map((e) => e.type)).toEqual(['FistClosed', 'FistOpened']);
     input.stop();
   });
 
-  it('ignores keys typed into inputs', () => {
+  it('ignores keyboard events entirely', () => {
     const { input, events } = make(window);
-    const field = document.createElement('input');
-    document.body.appendChild(field);
     input.update(0);
-    field.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyP', bubbles: true }));
-    input.update(10);
+    for (const code of ['KeyE', 'KeyP', 'KeyT', 'KeyS', 'ArrowUp', 'ArrowRight', 'KeyJ']) {
+      window.dispatchEvent(new KeyboardEvent('keydown', { code }));
+      window.dispatchEvent(new KeyboardEvent('keyup', { code }));
+    }
+    for (let t = 16; t <= 1000; t += 16) input.update(t);
     expect(events).toHaveLength(0);
-    document.body.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyP', bubbles: true }));
-    input.update(20);
-    expect(events).toHaveLength(1);
+    expect(input.state.lateral).toBe(0);
     input.stop();
-    field.remove();
   });
 
   it('stop removes listeners', () => {
     const { input, events } = make(window);
     input.update(0);
     input.stop();
-    window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyP' }));
-    input.press('KeyP');
+    window.dispatchEvent(new MouseEvent('mousedown', { button: 0 }));
+    input.setHandClosed('right', true);
     input.update(10);
     expect(events).toHaveLength(0);
   });
@@ -385,7 +377,7 @@ describe('DebugInput pose synthesis', () => {
     input.update(0);
     const nose = () => input.state.pose[PoseIndex.NOSE * POSE_STRIDE];
     const x0 = nose();
-    input.press('ArrowRight');
+    input.setLateral(1);
     input.update(500);
     expect(nose()).toBeGreaterThan(x0);
   });
@@ -403,35 +395,6 @@ describe('DebugInput pose synthesis', () => {
   });
 });
 
-describe('DEBUG_KEYS', () => {
-  it('lists every binding', () => {
-    const all = DEBUG_KEYS.map((k) => k.keys).join(' | ');
-    for (const needle of [
-      'Mouse',
-      'A / D',
-      'Left button',
-      'Q / E',
-      'U',
-      'I',
-      'T',
-      'B',
-      'Z / C',
-      'S',
-      'R',
-      'Up arrow',
-      'Left / Right arrows',
-      'Shift + Left / Right',
-      'Down arrow',
-      'P',
-      'K',
-      'J',
-    ]) {
-      expect(all).toContain(needle);
-    }
-    expect(DEBUG_KEYS.every((k) => k.action.length > 0)).toBe(true);
-  });
-});
-
 describe('DebugInput update', () => {
   it('keeps both hands present with finite velocities across many updates', () => {
     const { input } = make();
@@ -445,19 +408,19 @@ describe('DebugInput update', () => {
   });
 });
 
-describe('DebugInput pointer mode', () => {
+describe('DebugInput manual mode', () => {
   it('is off by default: the button still closes the hand', () => {
     const { input } = make();
     input.update(0);
     input.setButton(true);
     input.update(10);
     expect(input.state.hands.right.closed).toBe(true);
-    expect(input.pointerClicks).toBe(0);
+    expect(input.pointerPresses).toBe(1);
   });
 
-  it('counts clicks and leaves the fists alone', () => {
+  it('counts presses and leaves the fists alone in manual mode', () => {
     const { input, events } = make();
-    input.setPointerMode(true);
+    input.setManualMode(true);
     input.update(0);
     input.setButton(true);
     input.update(10);
@@ -465,14 +428,14 @@ describe('DebugInput pointer mode', () => {
     input.update(20);
     input.setButton(true);
     input.update(30);
-    expect(input.pointerClicks).toBe(2);
+    expect(input.pointerPresses).toBe(2);
     expect(input.state.hands.right.closed).toBe(false);
     expect(of(events, 'FistClosed')).toHaveLength(0);
   });
 
   it('selects a hand and puts it under the mouse', () => {
     const { input } = make();
-    input.setPointerMode(true);
+    input.setManualMode(true);
     input.update(0);
     input.moveTo(0.2, 0.3);
     input.update(10);

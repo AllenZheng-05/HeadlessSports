@@ -119,6 +119,7 @@ export class CalibrationSession {
   private readonly seated: boolean;
   private readonly config: CalibrationConfig;
   private readonly defaultHandedness: Side;
+  private readonly usesHandedness: boolean;
   private readonly kind: PositionKind;
   private readonly view: CalibrationView = {
     step: 'position',
@@ -155,9 +156,16 @@ export class CalibrationSession {
 
   constructor(
     stance: Stance,
-    options: { seated?: boolean; config?: CalibrationConfig; defaultHandedness?: Side } = {},
+    options: {
+      seated?: boolean;
+      config?: CalibrationConfig;
+      defaultHandedness?: Side;
+      /** False skips the "raise your dominant hand" step (default true). */
+      usesHandedness?: boolean;
+    } = {},
   ) {
     this.seated = options.seated === true;
+    this.usesHandedness = options.usesHandedness !== false;
     this.config = options.config ?? calibrationConfig;
     this.defaultHandedness = options.defaultHandedness ?? 'right';
     this.kind = stance === 'full-body' && this.seated ? 'upper-body' : stance;
@@ -265,8 +273,9 @@ export class CalibrationSession {
     const dark = b !== null && b < this.config.lightingWarnBelow;
     const waited = nowMs - this.stepStartMs;
     if (!dark || waited >= this.config.lightingMaxWaitMs) {
-      this.enterStep(this.kind === 'hands-close' ? 'hold-still' : 'handedness', nowMs);
-      if (this.kind === 'hands-close') {
+      const skipHand = this.kind === 'hands-close' || !this.usesHandedness;
+      this.enterStep(skipHand ? 'hold-still' : 'handedness', nowMs);
+      if (skipHand) {
         this.handedness = this.defaultHandedness;
         v.handedness = this.handedness;
       }

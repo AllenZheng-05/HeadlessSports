@@ -224,7 +224,7 @@ export class HandCursor {
   private readonly target: Point2 = { x: 0.5, y: 0.5 };
   private readonly smooth = new SmoothPoint();
   private readonly resize = (): void => this.refresh();
-  /** Keyboard and mouse input: the mitt sits exactly on the pointer and nothing is held to select. */
+  /** Mouse input: the mitt sits exactly on the pointer and nothing is held to select. */
   private pointerMode = false;
   private hasPointer = false;
   private pointerX = 0;
@@ -302,7 +302,7 @@ export class HandCursor {
   }
 
   /**
-   * Keyboard and mouse input: follow the real pointer (clientX/clientY) with no smoothing, mapping
+   * Mouse input: follow the real pointer (clientX/clientY) with no smoothing, mapping
    * or hold-to-select. Clicks do the pressing.
    */
   setPointerMode(on: boolean): void {

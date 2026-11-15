@@ -51,6 +51,7 @@ export function createTunables(parent: HTMLElement, debug: boolean): UiTunables 
   if (debug) {
     panel = h('aside', 'tunables');
     panel.setAttribute('aria-label', 'Tunables');
+    panel.setAttribute('data-ui', '');
     const head = h('button', 'tunables-toggle', 'Tunables');
     head.type = 'button';
     head.setAttribute('aria-expanded', 'true');

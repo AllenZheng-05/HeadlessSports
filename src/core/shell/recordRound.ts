@@ -1,4 +1,5 @@
 import type { ScoreStore } from '../scores';
+import { scoreKeyOf } from '../sport';
 import type { RoundResult, SportMeta } from '../sport';
 
 export interface RecordedRound {
@@ -19,11 +20,11 @@ export async function recordRound(
 ): Promise<RecordedRound> {
   const higher = meta.score.higherIsBetter;
   if (result.saveScore === false) {
-    const best = await scores.best(meta.id, higher);
+    const best = await scores.best(scoreKeyOf(meta), higher);
     return { isBest: false, best: best === null ? null : best.score };
   }
   const saved = await scores.add(
-    { sportId: meta.id, score: result.score, at, detail: result.detail },
+    { sportId: scoreKeyOf(meta), score: result.score, at, detail: result.detail },
     higher,
   );
   return { isBest: saved.isBest, best: saved.best.score };

@@ -258,6 +258,17 @@ test('the dominant hand toggle works from the keyboard', async ({ page }) => {
   await expect(left).toHaveText('✓ Left');
 });
 
+test('a sport without a dominant hand has no toggle, and says "With the mouse"', async ({
+  page,
+}) => {
+  await page.goto('/ui-harness.html?screen=howto&sport=0&debugkeys=1&toggle=right');
+  await expect(page.locator('.debug-title')).toHaveText('With the mouse');
+  await expect(page.locator('.hand-toggle')).toHaveCount(0);
+  await expect(page.locator('.fist-hint')).toHaveCount(0);
+  await page.goto('/ui-harness.html?screen=howto&sport=1&debugkeys=1&toggle=right');
+  await expect(page.locator('.hand-toggle')).toHaveCount(1);
+});
+
 test('the seated toggle on calibration reports its state', async ({ page }) => {
   const problems = watchErrors(page);
   await page.goto('/ui-harness.html?screen=calibration&sport=3');
@@ -328,9 +339,7 @@ async function cursorCentre(page: Page): Promise<{ x: number; y: number } | null
   return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
 }
 
-test('keyboard and mouse: the cursor sits exactly on the pointer on every screen', async ({
-  page,
-}) => {
+test('mouse: the cursor sits exactly on the pointer on every screen', async ({ page }) => {
   const points = [
     { x: 333, y: 271 },
     { x: 1020, y: 90 },
@@ -350,7 +359,7 @@ test('keyboard and mouse: the cursor sits exactly on the pointer on every screen
   }
 });
 
-test('keyboard and mouse: hovering never selects, clicking does', async ({ page }) => {
+test('mouse: hovering never selects, clicking does', async ({ page }) => {
   await page.goto('/ui-harness.html?screen=menu&input=debug');
   const card = page.locator('.sport-card[data-sport="archery"]');
   const box = (await card.boundingBox()) as Box;

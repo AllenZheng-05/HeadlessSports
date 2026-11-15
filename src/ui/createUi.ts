@@ -237,8 +237,8 @@ export function createUi(root: HTMLElement, options: UiOptions = {}): Ui {
     tunables,
 
     update(dt: number, nowMs: number): void {
-      // Bots and recordings do not navigate menus; mouse and keyboard still work.
-      // Keyboard and mouse: the cursor is the real pointer, not a mapped hand.
+      // Bots and recordings do not navigate menus; the mouse still works.
+      // Mouse: the cursor is the real pointer, not a mapped hand.
       const pointer = input !== null && input.source === null;
       cursor.setPointerMode(pointer);
       hud.setPointerMode(pointer);

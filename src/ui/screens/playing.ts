@@ -58,6 +58,7 @@ export function buildHowToOverlay(
   onResume: () => void,
 ): HowToOverlay {
   const el = h('div', 'howto-overlay');
+  el.setAttribute('data-ui', '');
   el.setAttribute('role', 'dialog');
   el.setAttribute('aria-label', `How to play ${meta.title}`);
   const card = h('div', 'card card-howto card-howto-play');
@@ -186,6 +187,7 @@ export interface PauseOverlay {
 
 export function createPause(parent: HTMLElement): PauseOverlay {
   const el = h('div', 'pause');
+  el.setAttribute('data-ui', '');
   el.hidden = true;
   el.setAttribute('role', 'alert');
   parent.append(el);

@@ -42,6 +42,8 @@ export interface ScreenHost {
 
 export function screenShell(name: string, cardClass = ''): { el: HTMLElement; card: HTMLElement } {
   const el = h('div', `screen screen-${name}`);
+  // Menu-style screens are not the game: a press on them never counts as a game press.
+  el.setAttribute('data-ui', '');
   const card = h('div', `card ${cardClass}`.trim());
   el.append(card);
   return { el, card };

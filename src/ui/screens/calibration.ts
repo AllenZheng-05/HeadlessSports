@@ -6,9 +6,8 @@ import type { CalibrationScreen, CalibrationStep, CalibrationView } from '../typ
 import type { ScreenHost, ScreenSpec } from './shared';
 import { screenShell } from './shared';
 
-const STEPS: readonly CalibrationStep[] = ['position', 'lighting', 'handedness', 'hold-still'];
-const STEP_LABELS: readonly string[] = ['Position', 'Light', 'Hand', 'Hold still'];
-const STEP_TEXT: readonly string[] = STEPS.map((_, i) => `Step ${i + 1} of ${STEPS.length}`);
+const ALL_STEPS: readonly CalibrationStep[] = ['position', 'lighting', 'handedness', 'hold-still'];
+const ALL_LABELS: readonly string[] = ['Position', 'Light', 'Hand', 'Hold still'];
 const RING_R = 52;
 const RING_LEN = 2 * Math.PI * RING_R;
 
@@ -147,6 +146,11 @@ export function buildCalibration(
   release: () => void,
 ): CalibrationBuild {
   const { el, card } = screenShell('calibration', 'card-cal');
+  // A sport with no dominant hand (or hands-only calibration) never shows the "Hand" step.
+  const keep = meta.usesHandedness !== false && meta.stance !== 'hands-close';
+  const STEPS = keep ? ALL_STEPS : ALL_STEPS.filter((s) => s !== 'handedness');
+  const STEP_LABELS = keep ? ALL_LABELS : ALL_LABELS.filter((_, i) => i !== 2);
+  const STEP_TEXT = STEPS.map((_, i) => `Step ${i + 1} of ${STEPS.length}`);
   const row = h('div', 'cal-row');
   const mirrorSlot = h('div', 'cal-mirror');
   const side = h('div', 'cal-side');

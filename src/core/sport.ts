@@ -45,8 +45,21 @@ export interface SportMeta {
   };
   /** Two or three short instructions shown before the round. */
   howTo: string[];
-  /** Short hints for ?input=debug, e.g. 'Mouse: move hand', 'Q / E: grab'. */
+  /**
+   * One to three short "With the mouse" lines shown in mouse mode (`?input=debug`), e.g.
+   * 'Hold to draw, release to shoot'. The field keeps its old name.
+   */
   debugKeys: string[];
+  /**
+   * Does the sport care which hand is dominant? Default true when absent. False hides the
+   * "Dominant hand" toggle on the how-to card and skips the handedness calibration step.
+   */
+  usesHandedness?: boolean;
+  /**
+   * Key under which personal bests and round records are stored. Default: `id`. Change it when
+   * the score's unit or meaning changes, so old saved bests are not misread.
+   */
+  scoreKey?: string;
 }
 
 export interface RoundResult {
@@ -191,4 +204,9 @@ export type SportFactory = (ctx: SportContext) => Sport | Promise<Sport>;
 export interface SportEntry {
   meta: SportMeta;
   load(): Promise<{ default: SportFactory }>;
+}
+
+/** The storage key for a sport's scores: `scoreKey` when set, else `id`. */
+export function scoreKeyOf(meta: { id: string; scoreKey?: string }): string {
+  return meta.scoreKey ?? meta.id;
 }

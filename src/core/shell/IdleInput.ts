@@ -12,7 +12,7 @@ import type { LandmarkSource, TrackerNeeds } from '../../tracking/types';
 
 const noop = (): void => undefined;
 
-/** Placeholder input before the player picks camera or keyboard: tracks nothing, emits nothing. */
+/** Placeholder input before the player picks camera or mouse: tracks nothing, emits nothing. */
 export class IdleInput implements InputProvider {
   readonly state: InputState = createInputState();
   readonly source: LandmarkSource | null = null;

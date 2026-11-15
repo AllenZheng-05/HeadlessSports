@@ -1,10 +1,14 @@
 /**
- * Keyboard-and-mouse `InputProvider` (`?input=debug`). Produces the same continuous state and the
- * same gesture events as the tracked provider, and synthesises a body pose so the athlete moves.
+ * Mouse `InputProvider` (`?input=debug`, the camera-off mode). Produces the same continuous state
+ * and the same gesture events as the tracked provider, and synthesises a body pose so the athlete
+ * moves.
  *
- * Raw input (DOM events and the programmatic press/release/moveTo/setButton) goes into a small
- * preallocated ring and is applied at the start of the next `update(nowMs)`, so handlers always run
- * inside `update`. Events carry `t` = the `nowMs` of that update.
+ * Players use only the mouse; there are no keyboard game controls. A sport drives everything
+ * through the `MouseControl` API (see `./mouseControl.ts`) from mouse position, button and timing.
+ *
+ * Raw input (DOM mouse events, `moveTo` / `setButton` and every `MouseControl` action) goes into a
+ * small preallocated ring and is applied at the start of the next `update(nowMs)`, so handlers
+ * always run inside `update`. Events carry `t` = the `nowMs` of that update.
  */
 import { createEmptyFrame, SyntheticBody } from '../../tracking/synthetic/body';
 import { defaultControls } from '../../tracking/synthetic/controls';
@@ -21,6 +25,7 @@ import type {
   Side,
   Unsubscribe,
 } from '../types';
+import type { MouseControl, ThrowOptions, ThrowStyle } from './mouseControl';
 
 export interface DebugInputConfig {
   /** sw/s at a tap. */
@@ -29,20 +34,14 @@ export interface DebugInputConfig {
   throwMaxSpeed: number;
   /** Hold time for full power, ms. */
   throwChargeMs: number;
-  /** Swing speed, sw/s (Shift held: 11). */
+  /** Swing speed, sw/s at power 0 (power 1 is 1.375x). */
   swingSpeed: number;
   /** SwingPeak follows SwingStarted by this many game ms. */
   swingPeakDelayMs: number;
-  /** Auto-run step rate while ArrowUp is held (Shift held: 4.5). */
-  autoRunStepsPerSecond: number;
-  /** sw per second while an arrow key is held. */
-  lateralRate: number;
-  /** rad per second. */
-  leanRate: number;
+  /** Largest sideways position, sw. */
   maxLateral: number;
+  /** Largest lean, rad. */
   maxLean: number;
-  /** Curvature magnitude applied while Z or C is held. */
-  curve: number;
   /** ThrowReleased lateral (sw) for the mouse at screen centre: a natural straight throw. */
   neutralLateral: number;
 }
@@ -53,56 +52,39 @@ export const debugInputConfig: DebugInputConfig = {
   throwChargeMs: 900,
   swingSpeed: 8,
   swingPeakDelayMs: 90,
-  autoRunStepsPerSecond: 3.2,
-  lateralRate: 1.2,
-  leanRate: 0.8,
   maxLateral: 2.0,
   maxLean: 0.45,
-  curve: 0.6,
   neutralLateral: 0.62,
 };
 
-/** One row per binding, for an on-screen help overlay. */
-export const DEBUG_KEYS: readonly { keys: string; action: string }[] = [
-  { keys: 'Mouse', action: 'Move the selected hand (A / D alone does not move it)' },
-  { keys: 'A / D', action: 'Select left / right hand' },
-  { keys: 'Left button (hold)', action: 'Close the selected hand' },
-  { keys: 'Q / E', action: 'Toggle left / right fist' },
-  { keys: 'U (hold)', action: 'Raise the selected arm' },
-  { keys: 'I (hold)', action: 'Raise both arms' },
-  {
-    keys: 'T (hold, release)',
-    action: 'Overarm throw, longer hold is harder (mouse at centre: straight)',
-  },
-  {
-    keys: 'B (hold, release)',
-    action: 'Underarm throw / bowl, longer hold is harder (mouse at centre: straight)',
-  },
-  { keys: 'Z / C (hold)', action: 'Curve the throw left / right' },
-  { keys: 'S', action: 'Swing (Shift: faster)' },
-  { keys: 'R', action: 'One running step' },
-  { keys: 'Up arrow (hold)', action: 'Auto-run (Shift: faster)' },
-  { keys: 'Left / Right arrows', action: 'Move sideways' },
-  { keys: 'Shift + Left / Right arrows', action: 'Lean' },
-  { keys: 'Down arrow', action: 'Recentre position and lean' },
-  { keys: 'P', action: 'Punch with the selected hand' },
-  { keys: 'K (hold)', action: 'Squat' },
-  { keys: 'J', action: 'Jump' },
-];
-
 const RING = 128;
-const KIND_DOWN = 0;
-const KIND_UP = 1;
 const KIND_MOVE = 2;
 const KIND_BUTTON = 3;
+// MouseControl actions. Numeric arguments travel in a/b/c/d; NaN means "derive it from the pointer".
+const KIND_FIST = 4; // a side, down closed
+const KIND_WINDUP = 5; // a side (-1 selected), b style (0 overarm, 1 underarm)
+const KIND_RELEASE = 6; // a power (-1 charge), b loft, c lateral, d curvature
+const KIND_SWING = 7; // a power, b height, c direction (0 selected hand)
+const KIND_RUN = 8; // a steps per second
+const KIND_STEP = 9;
+const KIND_ARMS = 10; // a 0 none, 1 left, 2 right, 3 both
+const KIND_PUNCH = 11; // a side (-1 selected)
+const KIND_SQUAT = 12; // down
+const KIND_JUMP = 13;
+const KIND_LATERAL = 14; // a
+const KIND_LEAN = 15; // a
+const KIND_RECENTRE = 16;
+const KIND_TARGET = 17; // a side, x, y
 
 interface RawInput {
   kind: number;
-  code: string;
-  shift: boolean;
   x: number;
   y: number;
   down: boolean;
+  a: number;
+  b: number;
+  c: number;
+  d: number;
 }
 
 const ASPECT = 16 / 9;
@@ -122,7 +104,6 @@ const MAX_PENDING = 4;
 const CURL_CLOSED = 0.8;
 const CURL_OPEN = 1.8;
 const SIDES: readonly Side[] = ['left', 'right'];
-const HANDLED_PREVENT = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight']);
 
 function clamp(v: number, lo: number, hi: number): number {
   return v < lo ? lo : v > hi ? hi : v;
@@ -132,19 +113,23 @@ function sideSign(side: Side): number {
   return side === 'left' ? -1 : 1;
 }
 
-function isTextTarget(target: EventTarget | null): boolean {
-  const el = target as { tagName?: unknown; isContentEditable?: unknown } | null;
-  if (!el) return false;
-  if (typeof el.tagName === 'string') {
-    const tag = el.tagName.toUpperCase();
-    if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return true;
-  }
-  return el.isContentEditable === true;
+/** Elements whose presses belong to the interface, not the game. */
+const UI_SELECTOR = 'button, a, input, select, textarea, [data-ui]';
+
+/**
+ * True when a mouse event landed on interface chrome (a button, link, form field, or anything
+ * inside an element marked `data-ui`): such a press or release is never a game press.
+ */
+export function isUiTarget(target: EventTarget | null): boolean {
+  const el = target as { closest?: unknown } | null;
+  if (!el || typeof el.closest !== 'function') return false;
+  return (el as Element).closest(UI_SELECTOR) !== null;
 }
 
-export class DebugInput implements InputProvider {
+export class DebugInput implements InputProvider, MouseControl {
   readonly state: InputState = createInputState();
   readonly source = null;
+  readonly mouseControl = true as const;
 
   private readonly config: DebugInputConfig;
   private readonly target: EventTarget;
@@ -165,22 +150,30 @@ export class DebugInput implements InputProvider {
   private lastT = 0;
 
   // Input state.
-  private readonly held = new Set<string>();
-  private shift = false;
   private selected: Side = 'right';
   private mouseX = 0.5;
   private mouseY = 0.5;
   private mouseFistSide: Side | null = null;
-  /** Opt-in (a sport turns it on): the mouse button only counts clicks and leaves the fists alone. */
+  /** Manual mode (a sport turns it on): the mouse button has no built-in effect on the fists. */
   private pointerOn = false;
-  private clicks = 0;
+  /** Mouse movement moves the selected hand (default). Off: the sport sets hand targets. */
+  private follow = true;
+  // Press tracking (filtered: only presses on the game count).
+  private pressDown = false;
+  private pressT = 0;
+  private presses = 0;
+  private releases = 0;
+  private heldMs = 0;
+  /** A DOM press that counted is waiting for its release, wherever the release lands. */
+  private domPressOpen = false;
+  // Continuous run set by `setRunCadence` (steps per second, 0 off).
+  private autoRate = 0;
 
   // Gestures.
   private raisedOne: Side | null = null;
   private raisedBoth = false;
   private throwStart = -1;
   private throwHand: Side = 'right';
-  private throwKey = '';
   private throwStyle: 'overarm' | 'underarm' = 'overarm';
   private throwReleasedAt = -1e9;
   private throwReleasedStyle: 'overarm' | 'underarm' = 'overarm';
@@ -203,7 +196,6 @@ export class DebugInput implements InputProvider {
   private stepCount = 0;
   private lastStepT = -1e9;
   private autoNext = 0;
-  private autoActive = false;
   private readonly kneeStart = { left: -1e9, right: -1e9 };
   private kneeDur = KNEE_MS;
 
@@ -214,16 +206,6 @@ export class DebugInput implements InputProvider {
   private readonly prevX = { left: 0, right: 0 };
   private readonly prevY = { left: 0, right: 0 };
 
-  private readonly onKeyDown = (e: Event): void => {
-    const ke = e as KeyboardEvent;
-    if (ke.repeat || isTextTarget(ke.target)) return;
-    if (HANDLED_PREVENT.has(ke.code)) ke.preventDefault();
-    this.enqueue(KIND_DOWN, ke.code, ke.shiftKey, 0, 0, false);
-  };
-  private readonly onKeyUp = (e: Event): void => {
-    const ke = e as KeyboardEvent;
-    this.enqueue(KIND_UP, ke.code, ke.shiftKey, 0, 0, false);
-  };
   private readonly onMouseMove = (e: Event): void => {
     const me = e as MouseEvent;
     const vp = this.viewport();
@@ -232,10 +214,21 @@ export class DebugInput implements InputProvider {
     this.moveTo(x, y);
   };
   private readonly onMouseDown = (e: Event): void => {
-    if ((e as MouseEvent).button === 0) this.setButton(true);
+    if ((e as MouseEvent).button !== 0 || isUiTarget(e.target)) return;
+    this.domPressOpen = true;
+    this.setButton(true);
   };
   private readonly onMouseUp = (e: Event): void => {
-    if ((e as MouseEvent).button === 0) this.setButton(false);
+    // A release counts only if its press did, and wherever it lands (so a drag that ends over a
+    // button still lets go).
+    if ((e as MouseEvent).button !== 0 || !this.domPressOpen) return;
+    this.domPressOpen = false;
+    this.setButton(false);
+  };
+  private readonly onBlur = (): void => {
+    if (!this.domPressOpen) return;
+    this.domPressOpen = false;
+    this.setButton(false);
   };
 
   constructor(
@@ -251,7 +244,16 @@ export class DebugInput implements InputProvider {
       options.viewport ??
       (() => ({ left: 0, top: 0, width: window.innerWidth, height: window.innerHeight }));
     for (let i = 0; i < RING; i++) {
-      this.ring.push({ kind: 0, code: '', shift: false, x: 0, y: 0, down: false });
+      this.ring.push({
+        kind: 0,
+        x: 0,
+        y: 0,
+        down: false,
+        a: 0,
+        b: 0,
+        c: 0,
+        d: 0,
+      });
     }
     const s = this.state;
     s.tracking = true;
@@ -270,11 +272,10 @@ export class DebugInput implements InputProvider {
       this.prevX[side] = h.x;
       this.prevY[side] = h.y;
     }
-    this.target.addEventListener('keydown', this.onKeyDown);
-    this.target.addEventListener('keyup', this.onKeyUp);
     this.target.addEventListener('mousemove', this.onMouseMove);
     this.target.addEventListener('mousedown', this.onMouseDown);
     this.target.addEventListener('mouseup', this.onMouseUp);
+    this.target.addEventListener('blur', this.onBlur);
   }
 
   // InputProvider --------------------------------------------------------------------------
@@ -320,39 +321,30 @@ export class DebugInput implements InputProvider {
   stop(): void {
     if (this.stopped) return;
     this.stopped = true;
-    this.target.removeEventListener('keydown', this.onKeyDown);
-    this.target.removeEventListener('keyup', this.onKeyUp);
     this.target.removeEventListener('mousemove', this.onMouseMove);
     this.target.removeEventListener('mousedown', this.onMouseDown);
     this.target.removeEventListener('mouseup', this.onMouseUp);
+    this.target.removeEventListener('blur', this.onBlur);
     this.count = 0;
     this.pending.n = 0;
   }
 
   // Programmatic control --------------------------------------------------------------------
 
-  press(code: string, opts?: { shift?: boolean }): void {
-    this.enqueue(KIND_DOWN, code, opts?.shift ?? false, 0, 0, false);
-  }
-
-  release(code: string): void {
-    this.enqueue(KIND_UP, code, false, 0, 0, false);
-  }
-
   moveTo(x: number, y: number): void {
-    this.enqueue(KIND_MOVE, '', false, clamp(x, 0, 1), clamp(y, 0, 1), false);
+    this.act(KIND_MOVE, 0, 0, 0, 0, false, clamp(x, 0, 1), clamp(y, 0, 1));
   }
 
   setButton(down: boolean): void {
-    this.enqueue(KIND_BUTTON, '', false, 0, 0, down);
+    this.act(KIND_BUTTON, 0, 0, 0, 0, down);
   }
 
   /**
-   * Opt-in click mode for a sport that wants discrete clicks instead of a held fist. While on, the
-   * mouse button no longer closes or opens the selected hand; it only bumps `pointerClicks`.
+   * Manual mode: the mouse button no longer has any built-in effect (no fist close on press); the
+   * sport reads `pointerDown` / `pointerPresses` / `pointerReleases` / `pointerHeldMs` and decides.
    * Turning it on or off lets go of a fist the mouse was holding. Off by default.
    */
-  setPointerMode(on: boolean): void {
+  setManualMode(on: boolean): void {
     if (this.pointerOn === on) return;
     this.pointerOn = on;
     if (this.mouseFistSide) {
@@ -361,9 +353,128 @@ export class DebugInput implements InputProvider {
     }
   }
 
-  /** Mouse button presses seen while pointer mode was on. */
-  get pointerClicks(): number {
-    return this.clicks;
+  /** True while the mouse button is down (a press that landed on the game). */
+  get pointerDown(): boolean {
+    return this.pressDown;
+  }
+
+  /** Monotonic count of presses that landed on the game. */
+  get pointerPresses(): number {
+    return this.presses;
+  }
+
+  /** Monotonic count of releases that matched a counted press. */
+  get pointerReleases(): number {
+    return this.releases;
+  }
+
+  /** Game ms the button has currently been down, as of the last `update`; 0 when up. */
+  get pointerHeldMs(): number {
+    return this.heldMs;
+  }
+
+  /** Mouse movement moves the selected hand (default true). False: the sport sets hand targets. */
+  setPointerFollow(follow: boolean): void {
+    this.follow = follow;
+  }
+
+  /** Put a hand's cursor at a mirrored-image position (applied on the next update). */
+  setHandTarget(side: Side, x: number, y: number): void {
+    this.act(KIND_TARGET, side === 'left' ? 0 : 1, 0, 0, 0, false, clamp(x, 0, 1), clamp(y, 0, 1));
+  }
+
+  /** Open or close a hand, as the held button does. Emits FistClosed / FistOpened. */
+  setHandClosed(side: Side, closed: boolean): void {
+    this.act(KIND_FIST, side === 'left' ? 0 : 1, 0, 0, 0, closed);
+  }
+
+  /** ThrowWindup now, and the arm goes back. Ignored if already winding up. */
+  startWindup(side?: Side, style: ThrowStyle = 'overarm'): void {
+    this.act(
+      KIND_WINDUP,
+      side === undefined ? -1 : side === 'left' ? 0 : 1,
+      style === 'overarm' ? 0 : 1,
+      0,
+      0,
+      false,
+    );
+  }
+
+  /**
+   * ThrowReleased. `power` 0..1 maps to speed between throwMinSpeed and
+   * throwMaxSpeed; omitted, it is the hold time over throwChargeMs. Loft and lateral default to the
+   * values derived from the pointer; curvature to 0. No-op without a windup.
+   */
+  releaseThrow(power?: number, opts: ThrowOptions = {}): void {
+    this.act(
+      KIND_RELEASE,
+      power === undefined ? -1 : power,
+      opts.loft ?? Number.NaN,
+      opts.lateral ?? Number.NaN,
+      opts.curvature ?? Number.NaN,
+      false,
+    );
+  }
+
+  /** A whole throw at once: `startWindup` then `releaseThrow` in the same update. */
+  throwNow(power: number, opts: ThrowOptions & { hand?: Side; style?: ThrowStyle } = {}): void {
+    this.startWindup(opts.hand, opts.style);
+    this.releaseThrow(power, opts);
+  }
+
+  /**
+   * SwingStarted now and SwingPeak after swingPeakDelayMs. `power` 0..1 goes from
+   * swingSpeed to 1.375x. `height` -1..1 defaults to the pointer height; `direction`
+   * to the selected hand (-1 left, 1 right).
+   */
+  swing(opts: { power?: number; height?: number; direction?: -1 | 1 } = {}): void {
+    this.act(KIND_SWING, opts.power ?? 0, opts.height ?? Number.NaN, opts.direction ?? 0, 0, false);
+  }
+
+  /** Run continuously at this many steps per second (Step events and legs, as with `step`); 0 stops. */
+  setRunCadence(stepsPerSecond: number): void {
+    this.act(KIND_RUN, Math.max(0, stepsPerSecond), 0, 0, 0, false);
+  }
+
+  /** One running step, alternating legs. */
+  step(): void {
+    this.act(KIND_STEP, 0, 0, 0, 0, false);
+  }
+
+  /** Raise one arm, both, or lower them ('none'). Emits ArmRaised / ArmLowered. */
+  setArmsRaised(which: 'none' | Side | 'both'): void {
+    const a = which === 'none' ? 0 : which === 'left' ? 1 : which === 'right' ? 2 : 3;
+    this.act(KIND_ARMS, a, 0, 0, 0, false);
+  }
+
+  /** Punch with a hand (default the selected one). */
+  punch(side?: Side): void {
+    this.act(KIND_PUNCH, side === undefined ? -1 : side === 'left' ? 0 : 1, 0, 0, 0, false);
+  }
+
+  /** Squat while true (Squat is emitted on the way down). */
+  setSquat(on: boolean): void {
+    this.act(KIND_SQUAT, 0, 0, 0, 0, on);
+  }
+
+  /** Jump. */
+  jump(): void {
+    this.act(KIND_JUMP, 0, 0, 0, 0, false);
+  }
+
+  /** Sideways position in shoulder widths (clamped). */
+  setLateral(sw: number): void {
+    this.act(KIND_LATERAL, sw, 0, 0, 0, false);
+  }
+
+  /** Lean in radians (clamped). */
+  setLean(rad: number): void {
+    this.act(KIND_LEAN, rad, 0, 0, 0, false);
+  }
+
+  /** Lateral and lean back to 0. */
+  recentre(): void {
+    this.act(KIND_RECENTRE, 0, 0, 0, 0, false);
   }
 
   /** Mouse position as a mirrored-image position (the same space as a hand's x and y). */
@@ -381,25 +492,29 @@ export class DebugInput implements InputProvider {
   /** Choose which hand the mouse moves, and put it under the mouse straight away. */
   selectHand(side: Side): void {
     this.selected = side;
-    this.moveCursor(side);
+    if (this.follow) this.moveCursor(side);
   }
 
-  private enqueue(
+  private act(
     kind: number,
-    code: string,
-    shift: boolean,
-    x: number,
-    y: number,
+    a: number,
+    b: number,
+    c: number,
+    d: number,
     down: boolean,
+    x = 0,
+    y = 0,
   ): void {
     if (this.stopped || this.count >= RING) return;
     const r = this.ring[(this.head + this.count) % RING];
     r.kind = kind;
-    r.code = code;
-    r.shift = shift;
     r.x = x;
     r.y = y;
     r.down = down;
+    r.a = a;
+    r.b = b;
+    r.c = c;
+    r.d = d;
     this.count++;
   }
 
@@ -429,16 +544,9 @@ export class DebugInput implements InputProvider {
       this.apply(r, nowMs);
     }
 
+    this.heldMs = this.pressDown ? Math.max(0, nowMs - this.pressT) : 0;
     this.autoRun(nowMs);
     this.flushSwingPeaks(nowMs);
-
-    // Position.
-    const dir = (this.held.has('ArrowRight') ? 1 : 0) - (this.held.has('ArrowLeft') ? 1 : 0);
-    if (dir !== 0) {
-      const c = this.config;
-      if (this.shift) s.lean = clamp(s.lean + dir * c.leanRate * dt, -c.maxLean, c.maxLean);
-      else s.lateral = clamp(s.lateral + dir * c.lateralRate * dt, -c.maxLateral, c.maxLateral);
-    }
 
     // Rise.
     let rise = this.squatting ? -SQUAT_DEPTH : 0;
@@ -461,13 +569,27 @@ export class DebugInput implements InputProvider {
   }
 
   private apply(r: RawInput, nowMs: number): void {
-    if (r.kind === KIND_MOVE) {
+    if (r.kind >= KIND_FIST) {
+      this.applyAction(r, nowMs);
+    } else if (r.kind === KIND_MOVE) {
       this.mouseX = r.x;
       this.mouseY = r.y;
-      this.moveCursor(this.selected);
+      if (this.follow) this.moveCursor(this.selected);
     } else if (r.kind === KIND_BUTTON) {
+      const edge = r.down !== this.pressDown;
+      if (edge) {
+        this.pressDown = r.down;
+        if (r.down) {
+          this.presses++;
+          this.pressT = nowMs;
+          this.heldMs = 0;
+        } else {
+          this.releases++;
+          this.heldMs = 0;
+        }
+      }
       if (this.pointerOn) {
-        if (r.down) this.clicks++;
+        // Manual mode: the sport reads the pointer state and decides.
       } else if (r.down) {
         this.mouseFistSide = this.selected;
         this.setFist(this.selected, true, nowMs);
@@ -475,15 +597,6 @@ export class DebugInput implements InputProvider {
         this.setFist(this.mouseFistSide, false, nowMs);
         this.mouseFistSide = null;
       }
-    } else if (r.kind === KIND_DOWN) {
-      if (this.held.has(r.code)) return; // auto-repeat or double press
-      this.held.add(r.code);
-      this.shift = r.shift || this.held.has('ShiftLeft') || this.held.has('ShiftRight');
-      this.keyDown(r.code, nowMs);
-    } else {
-      const wasHeld = this.held.delete(r.code);
-      this.shift = r.shift || this.held.has('ShiftLeft') || this.held.has('ShiftRight');
-      if (wasHeld) this.keyUp(r.code, nowMs);
     }
   }
 
@@ -500,149 +613,188 @@ export class DebugInput implements InputProvider {
     this.emit({ type: closed ? 'FistClosed' : 'FistOpened', t: nowMs, hand: side });
   }
 
-  private keyDown(code: string, nowMs: number): void {
+  /** The MouseControl actions. */
+  private applyAction(r: RawInput, nowMs: number): void {
     const s = this.state;
-    const c = this.config;
-    switch (code) {
-      case 'KeyA':
-      case 'KeyD':
-        // Selection alone does not move the hand; it follows once the mouse moves again.
-        this.selected = code === 'KeyA' ? 'left' : 'right';
+    switch (r.kind) {
+      case KIND_FIST:
+        this.setFist(r.a === 0 ? 'left' : 'right', r.down, nowMs);
         break;
-      case 'KeyQ':
-        this.setFist('left', !s.hands.left.closed, nowMs);
+      case KIND_WINDUP:
+        this.beginThrow(
+          nowMs,
+          r.a < 0 ? this.selected : r.a === 0 ? 'left' : 'right',
+          r.b === 0 ? 'overarm' : 'underarm',
+        );
         break;
-      case 'KeyE':
-        this.setFist('right', !s.hands.right.closed, nowMs);
+      case KIND_RELEASE:
+        this.endThrow(nowMs, r.a, r.b, r.c, r.d);
         break;
-      case 'KeyU':
-        if (!this.raisedBoth && this.raisedOne === null) {
-          this.raisedOne = this.selected;
-          this.emit({ type: 'ArmRaised', t: nowMs, hand: this.selected, both: false });
-        }
+      case KIND_SWING:
+        this.doSwing(nowMs, r.a, r.b, r.c);
         break;
-      case 'KeyI':
-        if (this.raisedOne !== null) {
-          this.emit({ type: 'ArmLowered', t: nowMs, hand: this.raisedOne });
-          this.raisedOne = null;
-        }
-        this.raisedBoth = true;
-        this.emit({ type: 'ArmRaised', t: nowMs, hand: 'left', both: true });
-        this.emit({ type: 'ArmRaised', t: nowMs, hand: 'right', both: true });
+      case KIND_RUN:
+        if (r.a > 0 && this.autoRate <= 0) this.autoNext = nowMs;
+        this.autoRate = r.a;
         break;
-      case 'KeyT':
-      case 'KeyB':
-        if (this.throwStart < 0) {
-          this.throwStart = nowMs;
-          this.throwHand = this.selected;
-          this.throwKey = code;
-          this.throwStyle = code === 'KeyT' ? 'overarm' : 'underarm';
-          this.emit({ type: 'ThrowWindup', t: nowMs, hand: this.throwHand });
-        }
-        break;
-      case 'KeyS': {
-        const speed = this.shift ? c.swingSpeed * 1.375 : c.swingSpeed;
-        const height = (0.5 - this.mouseY) * 2;
-        const plane = (0.5 - this.mouseY) * 0.8;
-        this.emit({
-          type: 'SwingStarted',
-          t: nowMs,
-          speed,
-          height,
-          direction: this.selected === 'left' ? -1 : 1,
-        });
-        const p = this.pending;
-        if (p.n < MAX_PENDING) {
-          p.at[p.n] = nowMs + c.swingPeakDelayMs;
-          p.speed[p.n] = speed;
-          p.height[p.n] = height;
-          p.plane[p.n] = plane;
-          p.n++;
-        }
-        break;
-      }
-      case 'KeyR':
+      case KIND_STEP:
         this.doStep(nowMs, nowMs);
         break;
-      case 'ArrowUp':
-        this.autoActive = true;
-        this.autoNext = nowMs;
+      case KIND_ARMS:
+        if (r.a === 0) {
+          this.lowerOne(nowMs);
+          this.lowerBoth(nowMs);
+        } else if (r.a === 3) {
+          this.raiseBoth(nowMs);
+        } else {
+          const side: Side = r.a === 1 ? 'left' : 'right';
+          if (this.raisedBoth) this.lowerBoth(nowMs);
+          if (this.raisedOne !== null && this.raisedOne !== side) this.lowerOne(nowMs);
+          if (this.raisedOne === null) this.raiseOne(side, nowMs);
+        }
         break;
-      case 'ArrowDown':
+      case KIND_PUNCH:
+        this.doPunch(r.a < 0 ? this.selected : r.a === 0 ? 'left' : 'right', nowMs);
+        break;
+      case KIND_SQUAT:
+        if (r.down !== this.squatting) this.doSquat(r.down, nowMs);
+        break;
+      case KIND_JUMP:
+        this.doJump(nowMs);
+        break;
+      case KIND_LATERAL:
+        s.lateral = clamp(r.a, -this.config.maxLateral, this.config.maxLateral);
+        break;
+      case KIND_LEAN:
+        s.lean = clamp(r.a, -this.config.maxLean, this.config.maxLean);
+        break;
+      case KIND_RECENTRE:
         s.lateral = 0;
         s.lean = 0;
         break;
-      case 'KeyP':
-        this.emit({ type: 'Punch', t: nowMs, hand: this.selected, speed: PUNCH_SPEED });
-        this.pulse(this.selected, nowMs, PUNCH_SPEED);
+      case KIND_TARGET: {
+        const h = s.hands[r.a === 0 ? 'left' : 'right'];
+        h.x = r.x;
+        h.y = r.y;
         break;
-      case 'KeyK':
-        this.squatting = true;
-        this.emit({ type: 'Squat', t: nowMs, depth: SQUAT_DEPTH });
-        break;
-      case 'KeyJ':
-        this.jumpStart = nowMs;
-        this.emit({ type: 'Jump', t: nowMs, height: JUMP_HEIGHT });
-        break;
+      }
       default:
         break;
     }
   }
 
-  private keyUp(code: string, nowMs: number): void {
-    const c = this.config;
-    switch (code) {
-      case 'KeyU':
-        if (this.raisedOne !== null) {
-          this.emit({ type: 'ArmLowered', t: nowMs, hand: this.raisedOne });
-          this.raisedOne = null;
-        }
-        break;
-      case 'KeyI':
-        if (this.raisedBoth) {
-          this.raisedBoth = false;
-          this.emit({ type: 'ArmLowered', t: nowMs, hand: 'left' });
-          this.emit({ type: 'ArmLowered', t: nowMs, hand: 'right' });
-        }
-        break;
-      case 'KeyT':
-      case 'KeyB':
-        if (this.throwStart >= 0 && code === this.throwKey) {
-          const charge = clamp((nowMs - this.throwStart) / c.throwChargeMs, 0, 1);
-          const speed = c.throwMinSpeed + (c.throwMaxSpeed - c.throwMinSpeed) * charge;
-          const lateral = sideSign(this.throwHand) * c.neutralLateral + (this.mouseX - 0.5) * 4;
-          const loft =
-            this.throwStyle === 'overarm' ? clamp((0.5 - this.mouseY) * 1.6 + 0.6, 0, 1.4) : 0.3;
-          const curvature =
-            (this.held.has('KeyC') ? c.curve : 0) - (this.held.has('KeyZ') ? c.curve : 0);
-          this.emit({
-            type: 'ThrowReleased',
-            t: nowMs,
-            hand: this.throwHand,
-            speed,
-            vx: lateral === 0 ? 0 : speed * Math.cos(loft) * Math.sign(lateral),
-            vy: speed * Math.sin(loft),
-            lateral,
-            loft,
-            curvature,
-            style: this.throwStyle,
-          });
-          this.throwReleasedAt = nowMs;
-          this.throwReleasedStyle = this.throwStyle;
-          this.throwReleasedHand = this.throwHand;
-          this.pulse(this.throwHand, nowMs, speed);
-          this.throwStart = -1;
-        }
-        break;
-      case 'KeyK':
-        this.squatting = false;
-        break;
-      case 'ArrowUp':
-        this.autoActive = false;
-        break;
-      default:
-        break;
+  private raiseOne(side: Side, nowMs: number): void {
+    this.raisedOne = side;
+    this.emit({ type: 'ArmRaised', t: nowMs, hand: side, both: false });
+  }
+
+  private lowerOne(nowMs: number): void {
+    if (this.raisedOne !== null) {
+      this.emit({ type: 'ArmLowered', t: nowMs, hand: this.raisedOne });
+      this.raisedOne = null;
     }
+  }
+
+  private raiseBoth(nowMs: number): void {
+    this.lowerOne(nowMs);
+    this.raisedBoth = true;
+    this.emit({ type: 'ArmRaised', t: nowMs, hand: 'left', both: true });
+    this.emit({ type: 'ArmRaised', t: nowMs, hand: 'right', both: true });
+  }
+
+  private lowerBoth(nowMs: number): void {
+    if (this.raisedBoth) {
+      this.raisedBoth = false;
+      this.emit({ type: 'ArmLowered', t: nowMs, hand: 'left' });
+      this.emit({ type: 'ArmLowered', t: nowMs, hand: 'right' });
+    }
+  }
+
+  private beginThrow(nowMs: number, hand: Side, style: ThrowStyle): void {
+    if (this.throwStart >= 0) return;
+    this.throwStart = nowMs;
+    this.throwHand = hand;
+    this.throwStyle = style;
+    this.emit({ type: 'ThrowWindup', t: nowMs, hand });
+  }
+
+  /** `power` < 0 means the hold time; a NaN loft, lateral or curvature is derived from the pointer. */
+  private endThrow(
+    nowMs: number,
+    power: number,
+    loftIn: number,
+    lateralIn: number,
+    curvatureIn: number,
+  ): void {
+    if (this.throwStart < 0) return;
+    const c = this.config;
+    const charge =
+      power >= 0 ? clamp(power, 0, 1) : clamp((nowMs - this.throwStart) / c.throwChargeMs, 0, 1);
+    const speed = c.throwMinSpeed + (c.throwMaxSpeed - c.throwMinSpeed) * charge;
+    const lateral = Number.isNaN(lateralIn)
+      ? sideSign(this.throwHand) * c.neutralLateral + (this.mouseX - 0.5) * 4
+      : lateralIn;
+    const loft = Number.isNaN(loftIn)
+      ? this.throwStyle === 'overarm'
+        ? clamp((0.5 - this.mouseY) * 1.6 + 0.6, 0, 1.4)
+        : 0.3
+      : loftIn;
+    const curvature = Number.isNaN(curvatureIn) ? 0 : curvatureIn;
+    this.emit({
+      type: 'ThrowReleased',
+      t: nowMs,
+      hand: this.throwHand,
+      speed,
+      vx: lateral === 0 ? 0 : speed * Math.cos(loft) * Math.sign(lateral),
+      vy: speed * Math.sin(loft),
+      lateral,
+      loft,
+      curvature,
+      style: this.throwStyle,
+    });
+    this.throwReleasedAt = nowMs;
+    this.throwReleasedStyle = this.throwStyle;
+    this.throwReleasedHand = this.throwHand;
+    this.pulse(this.throwHand, nowMs, speed);
+    this.throwStart = -1;
+  }
+
+  /** `power` 0..1 is swingSpeed up to 1.375x; a NaN height is the pointer height; direction 0 is the selected hand. */
+  private doSwing(nowMs: number, power: number, heightIn: number, direction: number): void {
+    const c = this.config;
+    const speed = c.swingSpeed * (1 + 0.375 * clamp(power, 0, 1));
+    const height = Number.isNaN(heightIn) ? (0.5 - this.mouseY) * 2 : clamp(heightIn, -1, 1);
+    const plane = height * 0.4;
+    this.emit({
+      type: 'SwingStarted',
+      t: nowMs,
+      speed,
+      height,
+      direction: direction === 0 ? (this.selected === 'left' ? -1 : 1) : direction < 0 ? -1 : 1,
+    });
+    const p = this.pending;
+    if (p.n < MAX_PENDING) {
+      p.at[p.n] = nowMs + c.swingPeakDelayMs;
+      p.speed[p.n] = speed;
+      p.height[p.n] = height;
+      p.plane[p.n] = plane;
+      p.n++;
+    }
+  }
+
+  private doPunch(side: Side, nowMs: number): void {
+    this.emit({ type: 'Punch', t: nowMs, hand: side, speed: PUNCH_SPEED });
+    this.pulse(side, nowMs, PUNCH_SPEED);
+  }
+
+  private doSquat(on: boolean, nowMs: number): void {
+    this.squatting = on;
+    if (on) this.emit({ type: 'Squat', t: nowMs, depth: SQUAT_DEPTH });
+  }
+
+  private doJump(nowMs: number): void {
+    this.jumpStart = nowMs;
+    this.emit({ type: 'Jump', t: nowMs, height: JUMP_HEIGHT });
   }
 
   private pulse(side: Side, nowMs: number, speed: number): void {
@@ -676,9 +828,8 @@ export class DebugInput implements InputProvider {
   // Running --------------------------------------------------------------------------------
 
   private autoRun(nowMs: number): void {
-    if (!this.autoActive) return;
-    const rate = this.shift ? 4.5 : this.config.autoRunStepsPerSecond;
-    const interval = 1000 / rate;
+    if (this.autoRate <= 0) return;
+    const interval = 1000 / this.autoRate;
     let n = 0;
     while (nowMs >= this.autoNext && n < 4) {
       this.doStep(nowMs, this.autoNext);
@@ -713,7 +864,7 @@ export class DebugInput implements InputProvider {
   private updateCadence(nowMs: number): void {
     const cad = this.state.cadence;
     const since = nowMs - this.lastStepT;
-    if (since >= STEP_DECAY_MS && !this.autoActive) {
+    if (since >= STEP_DECAY_MS && this.autoRate <= 0) {
       cad.stepsPerSecond = 0;
       cad.amplitude = 0;
       return;

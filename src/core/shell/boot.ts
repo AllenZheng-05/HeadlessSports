@@ -21,6 +21,7 @@ import { runGate } from '../gate/runGate';
 import { GameLoop } from '../loop';
 import { createScoreStore } from '../scores';
 import type { ScoreStore } from '../scores';
+import { scoreKeyOf } from '../sport';
 import type { SportEntry, SportMeta, Stance } from '../sport';
 import { IdleInput } from './IdleInput';
 import { SportHost } from './SportHost';
@@ -76,7 +77,7 @@ class Shell {
   private epoch = 0;
   /** One-shot message for the next menu (a round broke). */
   private notice: string | null = null;
-  /** Dominant hand for keyboard and mouse play; remembered for the session. */
+  /** Dominant hand for mouse play; remembered for the session. */
   private hand: Side;
 
   constructor(private readonly flags: Flags) {
@@ -247,7 +248,7 @@ class Shell {
     this.ui.setCameraActive(kind === 'camera');
   }
 
-  /** The one-click camera-off control: stop tracking, keyboard and mouse from here, back to the menu. */
+  /** The one-click camera-off control: stop tracking, mouse play from here, back to the menu. */
   private onCameraOff(): void {
     const epoch = ++this.epoch;
     // Tears down a loading, running, paused or finished round. A pending calibration is NOT
@@ -265,7 +266,7 @@ class Shell {
   private async bests(metas: readonly SportMeta[]): Promise<Map<string, number>> {
     const bests = new Map<string, number>();
     for (const meta of metas) {
-      const best = await this.scores.best(meta.id, meta.score.higherIsBetter);
+      const best = await this.scores.best(scoreKeyOf(meta), meta.score.higherIsBetter);
       if (best !== null) bests.set(meta.id, best.score);
     }
     return bests;
@@ -294,7 +295,7 @@ class Shell {
       const choice = await this.ui.showHowTo(
         entry.meta,
         this.input.source === null,
-        this.input.source?.kind === 'camera'
+        this.input.source?.kind === 'camera' || entry.meta.usesHandedness === false
           ? undefined
           : {
               handedness: this.hand,
@@ -321,12 +322,14 @@ class Shell {
     await input.setNeeds(calibrationNeeds(meta.stance));
     if (epoch !== this.epoch) return defaultCalibration(meta.stance);
     this.hook.phase = 'calibration';
-    let session = new CalibrationSession(meta.stance);
+    const usesHandedness = meta.usesHandedness !== false;
+    let session = new CalibrationSession(meta.stance, { usesHandedness });
     const screen = this.ui.showCalibration(meta);
     if (meta.seatedOk) {
       screen.onSeated?.((seated) => {
         // The seated flag is fixed at construction: start the measurement again with it.
-        if (!session.done) session = new CalibrationSession(meta.stance, { seated });
+        if (!session.done)
+          session = new CalibrationSession(meta.stance, { seated, usesHandedness });
       });
     }
     const scratch = document.createElement('canvas');

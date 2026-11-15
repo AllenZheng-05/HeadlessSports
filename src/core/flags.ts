@@ -1,7 +1,7 @@
 /** The single parser for query flags (see CLAUDE.md). */
 
 export interface Flags {
-  /** `?input=debug`: keyboard and mouse instead of camera. */
+  /** `?input=debug`: mouse instead of camera. */
   input: 'camera' | 'debug';
   /** `?source=` */
   source: 'camera' | 'synthetic' | 'replay';
@@ -27,7 +27,7 @@ export interface Flags {
   seed: number;
   /** `?short=1`: sports play a shortened round (for headless checks and quick tries). */
   short: boolean;
-  /** `?hand=left|right`: default dominant hand for keyboard and mouse play. Null when absent. */
+  /** `?hand=left|right`: default dominant hand for mouse play. Null when absent. */
   hand: 'left' | 'right' | null;
 }
 

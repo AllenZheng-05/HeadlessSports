@@ -259,7 +259,7 @@ describe('HandCursor', () => {
   });
 });
 
-describe('HandCursor pointer mode (keyboard and mouse)', () => {
+describe('HandCursor pointer mode (mouse)', () => {
   function move(x: number, y: number, buttons = 0): void {
     window.dispatchEvent(new MouseEvent('pointermove', { clientX: x, clientY: y, buttons }));
   }

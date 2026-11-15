@@ -52,28 +52,13 @@ function game(page: Page): Promise<Game> {
   });
 }
 
-/** Close and open the right fist `cycles` times through the debug input. */
+/** Close and open the fist `cycles` times with real mouse presses on the game. */
 async function pumpFists(page: Page, cycles: number): Promise<void> {
+  await page.mouse.move(640, 360);
   for (let i = 0; i < cycles; i++) {
-    await page.evaluate(() => {
-      const d = (
-        window as unknown as {
-          __game: { debugInput: { press(c: string): void; release(c: string): void } };
-        }
-      ).__game.debugInput;
-      d.press('KeyE');
-      d.release('KeyE');
-    });
+    await page.mouse.down();
     await page.waitForTimeout(250);
-    await page.evaluate(() => {
-      const d = (
-        window as unknown as {
-          __game: { debugInput: { press(c: string): void; release(c: string): void } };
-        }
-      ).__game.debugInput;
-      d.press('KeyE');
-      d.release('KeyE');
-    });
+    await page.mouse.up();
     await page.waitForTimeout(250);
   }
 }
@@ -107,7 +92,7 @@ test.describe('game shell', () => {
     expect(problems).toEqual([]);
   });
 
-  test('warm-up is playable from the keyboard input', async ({ page }) => {
+  test('warm-up is playable with the mouse', async ({ page }) => {
     const problems = watch(page);
     await page.goto('/?sport=warmup&input=debug&skipGate=1');
     await waitPhase(page, 'playing');
@@ -177,9 +162,7 @@ test.describe('game shell', () => {
     expect(problems).toEqual([]);
   });
 
-  test('keyboard and mouse: the hand-cursor circle sits exactly on the pointer', async ({
-    page,
-  }) => {
+  test('mouse: the hand-cursor circle sits exactly on the pointer', async ({ page }) => {
     const problems = watch(page);
     await page.goto('/?skipGate=1&input=debug');
     await waitPhase(page, 'title');
@@ -200,9 +183,7 @@ test.describe('game shell', () => {
     expect(problems).toEqual([]);
   });
 
-  test('the how-to card fits the screen for every sport in keyboard and mouse mode', async ({
-    page,
-  }) => {
+  test('the how-to card fits the screen for every sport in mouse mode', async ({ page }) => {
     test.setTimeout(180000); // six screens through a software renderer
     const problems = watch(page);
     await page.goto('/?skipGate=1&input=debug');

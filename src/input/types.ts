@@ -3,7 +3,7 @@
  *
  * Sports consume an `InputProvider`: continuous signals as in-place state, discrete moments as
  * events. Two implementations exist: `TrackedInput` (landmark source -> filters -> kinematics ->
- * recognizers) and `DebugInput` (keyboard and mouse). Sports never read raw landmarks for
+ * recognizers) and `DebugInput` (mouse). Sports never read raw landmarks for
  * gesture logic.
  *
  * Units:
@@ -56,9 +56,9 @@ export interface ArmState {
 }
 
 export interface Cadence {
-  /** Knee lifts per second, smoothed; 0 when standing still. */
+  /** Steps per second from the fused running cues (arms, thighs, feet, bob), smoothed; 0 when standing still. */
   stepsPerSecond: number;
-  /** Mean knee-lift height over the last steps, sw. */
+  /** Mean step size over the last steps, sw. */
   amplitude: number;
 }
 

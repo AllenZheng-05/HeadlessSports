@@ -23,7 +23,7 @@ function sport(
     needsSpace: true,
     score: { label: 'Score', unit: 'pts', decimals: 0, higherIsBetter: true },
     howTo: ['Raise your throwing hand', 'Swing your arm forward', 'Let go with an open hand'],
-    debugKeys: ['Mouse: move hand', 'Q / E: grab', 'Space: release'],
+    debugKeys: ['Move the mouse to aim', 'Hold to wind up, release to throw'],
     ...extra,
   };
 }
@@ -31,6 +31,7 @@ function sport(
 export const FAKE_SPORTS: SportMeta[] = [
   sport('climbing', 'Rock climbing', 'Reach up and grab the holds.', 0xf2a07b, {
     stance: 'hands-close',
+    usesHandedness: false,
     seatedOk: true,
     needsSpace: false,
     score: { label: 'Height', unit: 'm', decimals: 1, higherIsBetter: true },

@@ -160,6 +160,7 @@ export class CameraIndicator {
 
   constructor(onOff: () => void) {
     this.el = h('div', 'camera-indicator');
+    this.el.setAttribute('data-ui', '');
     this.el.hidden = true;
     this.pill = h('div', 'camera-pill');
     const dot = h('span', 'camera-dot');

@@ -69,7 +69,7 @@ export function buildMenu(
   };
 }
 
-/** "Dominant hand: Right / Left" for keyboard and mouse play. Text and a check mark, not colour alone. */
+/** "Dominant hand: Right / Left" for mouse play. Text and a check mark, not colour alone. */
 function handednessToggle(options: HowToOptions): HTMLElement {
   const wrap = h('div', 'hand-toggle');
   wrap.setAttribute('role', 'group');
@@ -100,7 +100,7 @@ function handednessToggle(options: HowToOptions): HTMLElement {
   return wrap;
 }
 
-/** The steps, notes and (for keyboard and mouse play) key hints. Shared by the card and the in-play overlay. */
+/** The steps, notes and (for mouse play) the sport's "With the mouse" lines. Shared by the card and the in-play overlay. */
 export function howToBody(
   meta: SportMeta,
   debugInput: boolean,
@@ -113,7 +113,7 @@ export function howToBody(
   cols.append(steps);
 
   const side = h('div', 'howto-side');
-  if (options) side.append(handednessToggle(options));
+  if (options && meta.usesHandedness !== false) side.append(handednessToggle(options));
   if (meta.needsSpace) {
     side.append(h('p', 'note note-space', 'Clear a 2 by 2 metre space around you.'));
   }
@@ -122,7 +122,7 @@ export function howToBody(
   body.prepend(cols);
   if (debugInput && meta.debugKeys.length > 0) {
     const keys = h('div', 'debug-keys');
-    keys.append(h('p', 'debug-title', 'Keyboard and mouse'));
+    keys.append(h('p', 'debug-title', 'With the mouse'));
     const list = h('ul');
     for (const k of meta.debugKeys) list.append(h('li', '', k));
     keys.append(list);
@@ -155,7 +155,7 @@ export function buildHowTo(
   back.addEventListener('click', () => resolve('back'));
   actions.append(start, back);
   card.append(actions);
-  // Keyboard and mouse players have no fist to raise.
+  // Mouse players have no fist to raise.
   if (!debugInput) card.append(h('p', 'fist-hint', 'Raise a fist to start'));
 
   const stopWatching = host.watchInput((input) => {
