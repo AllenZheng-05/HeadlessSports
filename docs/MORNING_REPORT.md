@@ -4,7 +4,7 @@ Kept current through the unattended run that started 2026-11-14. Read this first
 
 ## State of things
 
-- **Milestones 0 to 7 are built, pass every automated check, and are merged to `main`:** repo setup, tracking tech spike, foundation, and all five sports (rock climbing, bowling, batting, archery, javelin). Each sport plays a full round end to end under its closed-loop synthetic player and under keyboard and mouse, records a score, and has its tunables in the debug panel (`?debug=1`).
+- **Milestones 0 to 7 are built, pass every automated check, and are merged to `main`:** repo setup, tracking tech spike, foundation, and all five sports (rock climbing, bowling, batting, archery, javelin). Each sport plays a full round end to end under its closed-loop synthetic player and under mouse, records a score, and has its tunables in the debug panel (`?debug=1`).
 - **Nothing has been verified with a real camera, a real person or a real GPU.** Every gesture threshold is tuned to a synthetic player. Expect the first playtest to need tuning, and possibly fixes inside `src/tracking/`.
 - **Milestone 8 (launch polish) is done and merged to `main`:** deployment config, security headers (strict CSP), service worker, `docs/DEPLOY.md`, the fixes from two code reviews (accessibility items included), and a memory soak harness (`docs/SOAK.md`).
 - **Bonus sport built and merged:** baseball pitching, the sixth menu card.
@@ -16,12 +16,12 @@ Kept current through the unattended run that started 2026-11-14. Read this first
 
 ## Playtest round 1 (2026-11-14, branch `playtest-1`)
 
-Allen played every sport, mostly with keyboard and mouse, and sent notes. All of them were addressed on `playtest-1`. Checks on the branch: typecheck and lint clean, 1048 unit tests, build, default end-to-end 51 of 51, UI 72, gate 4. Soak and deploy suites were not rerun. Still nothing verified by the builders with a real camera.
+Allen played every sport, mostly with mouse, and sent notes. All of them were addressed on `playtest-1`. Checks on the branch: typecheck and lint clean, 1048 unit tests, build, default end-to-end 51 of 51, UI 72, gate 4. Soak and deploy suites were not rerun. Still nothing verified by the builders with a real camera.
 
 | Area | What changed | Retest |
 |---|---|---|
 | How-to card | Capped to the viewport, tighter layout, keys in two columns | Every sport at your screen size, `?input=debug` |
-| Cursor | In keyboard-and-mouse mode the menu cursor and climbing's in-play circle sit exactly on the pointer; no dwell-select for the mouse | Menus and a climbing round |
+| Cursor | In mouse mode the menu cursor and climbing's in-play circle sit exactly on the pointer; no dwell-select for the mouse | Menus and a climbing round |
 | How to play in a round | Button next to Quit, or `H`; pauses the round; Resume, `H` or Escape closes | Any sport |
 | Handedness wording | "Dominant hand" replaces "Throwing hand" | How-to card |
 | Calibration outline | Relaxed, then one hand raised (handedness step), then T-pose (hold-still step) | Camera calibration |
@@ -30,10 +30,32 @@ Allen played every sport, mostly with keyboard and mouse, and sent notes. All of
 | Bowling | Scorecard grid fixed; strike or spare called the instant the last pin is down, other rolls 0.7 to 1.2 s after contact, 2.5 s cap; live aim arrows; aim sensitivity cut to about a quarter (`aimGain` 0.09 to 0.025, `maxAngle` 0.1 to 0.045) | Does aim now feel sluggish? |
 | Batting | Right-hander on screen left of the plate, left-hander on the right; side-on stance with an animated swing (not a mirror of your arms); about 3.9 s between result and next release with a visible set and wind-up | Both hands. No called balls yet |
 | Archery | Nock distance 0.9 to 1.9 sw with hysteresis; nock without a fist by bringing hands together and pulling back; full draw sooner | Camera |
-| Javelin | No fist anywhere; run starts after a "Get ready" beat; one big overarm motion throws; run speed is about 36% of the variable release speed; click or `T` throws with the keyboard and mouse | Camera: does arm pumping while running trigger a throw? Tunables `minThrowSpeed`, `pumpMargin` |
+| Javelin | No fist anywhere; run starts after a "Get ready" beat; one big overarm motion throws; run speed is about 36% of the variable release speed; click or `T` throws with the mouse | Camera: does arm pumping while running trigger a throw? Tunables `minThrowSpeed`, `pumpMargin` |
 | Pitching | Catcher calls pitch and spot in a speech bubble; 2.6 s read window, no clock on choosing; +3 for the called pitch in the zone, half points for the wrong type; live aim ring; zone and catcher about 45% larger | Pitch choice still uses fist (fastball) or open hand (curve) held 0.9 s. If fist detection misreads, say so and it will be changed |
 
 Known loose ends: the UI test "the calibration outline changes pose with the step" failed once in a full run straight after a laptop restart and passed three times in isolation; the gate suite failed once in the same run and passed on rerun. Watch for repeats. The gate's `marginal` flag has no UI. A background tab during the gate check still reads as slow rendering.
+
+## Playtest round 2 (2026-11-15, branch `playtest-1`)
+
+Second set of notes from Allen. The main change: camera-off mode (`?input=debug`) is now **mouse only**, one button, as easy as possible. Keyboard game controls are removed from `DebugInput`; Escape, `H` and Enter remain as UI keys. Where this section disagrees with the round 1 table above (climbing, javelin mouse controls, bowling timings), this section is current.
+
+Checks on the branch: typecheck and lint clean, 1249 unit tests, build, default end-to-end 53 of 53, UI 73, gate 4. Soak and deploy suites were not rerun. Nothing verified by hand with a mouse or with a real camera.
+
+| Sport | With the mouse | Retest |
+|---|---|---|
+| Climbing | Press and hold a hold to grab it with the selected hand, drag down to pull up; releasing keeps the grip and switches hands; a press on nothing does nothing. No dominant-hand toggle or handedness calibration step for climbing | Drag feel. Dragging right moves the body left; say if that feels backwards |
+| Bowling | Mouse position aims the arrows, hold to wind up, let go to bowl at a fixed speed; no stepping, no hook | Aim is literal and touchy (about 4% of screen width either side of centre covers the lane); `maxAngle`, `mouseAimMinDist` |
+| Batting | Click to swing; full power; bat height chosen automatically, only timing matters | Both hands |
+| Archery | Move to aim, hold to draw (0.75 s to full), let go to shoot; no sway | |
+| Javelin | Hold to run at a fixed 8 m/s, let go to throw at fixed power and loft; release past the line or holding across it is a foul | Throws reach 93 to 96 m against 52 to 61 m for the camera bot, in the same best-score table. Open question for Allen: tune down, or separate tables |
+| Pitching | Fastball and Curveball buttons (fastball preselected), hold on the field to aim the ring under the cursor, let go to throw; no assist, fixed speed; throwable 0.7 s after the call | |
+| Warm-up | Press the button to close the fist, let go to open | |
+
+Other changes this round:
+
+- **Bowling miscount fixed.** A pin could fall after the count (23 of 99 contact throws in a simulated sweep). The count now waits for wobbling pins and for sliding pins or the ball near a standing pin; slowed pins get extra damping; the count and the next rack share frozen pin states. Zero late falls in a 400-throw sweep. Verdict time after contact: median 1.32 s, 95% within 2.47 s, worst 5.73 s; cap raised to 6 s as a last resort. Strike and spare still called the instant the tenth pin is down. Check that pin falls still look natural.
+- **Batting in feet, home run at 350 ft.** Physics stays in metres; the whole flight model is scaled by 1.4224 so every swing goes that much farther and the same swings are home runs. Home-run bonus 94 ft. Markers at 100, 200, 300 ft. The wall is 1.2 m tall, so a home run needs a landing of about 358 ft; 350 to 357 ft is a wall ball scored at 350 ft. Saved bests use a new key (`batting-ft`), so old metre bests are not shown.
+- **Running in place (javelin, camera).** The old detector watched only the hip-to-knee gap on screen, which barely changes when knees come toward the camera. The new one fuses arm pump, thigh foreshortening, foot lift (when ankles are visible) and torso bob; any one cue can carry it. Synthetic results: full-body jog detected in about 0.6 s, a single cue alone in 0.9 to 1.1 s, stops within 0.5 s, no false running from standing, weight shifts, arm raises or throws. Thresholds under `recognizerConfig.cadence` (`arm`, `thigh`, `foot`, `bob`) are tuned to synthetic noise only and are the most likely thing to need adjusting on a real camera. `?botStyle=jog` makes the javelin bot jog with arms and torso.
 
 ## How to run
 
@@ -45,7 +67,7 @@ pnpm dev              # http://localhost:5173
 
 - The game: `http://localhost:5173/` (the device gate runs first; add `?skipGate=1` to bypass it while testing)
 - Watch a bot play a sport: `/?sport=bowling&source=synthetic&skipGate=1` (ids: `climbing`, `bowling`, `batting`, `archery`, `javelin`; add `&short=1` for a short round, `&timeScale=3` to fast-forward)
-- Play with keyboard and mouse: `/?input=debug&skipGate=1` (each sport's how-to screen lists its keys)
+- Play with mouse: `/?input=debug&skipGate=1` (each sport's how-to screen lists its mouse controls)
 - Tracking debug page: `http://localhost:5173/debug.html`
 - Without a camera: `debug.html?source=synthetic&script=wave` (other scripts: `idle`, `fists`, `bowl`, `throw`, `swing`, `run`, `hands`, `lost`, `all`)
 - Flags: `?renderer=webgl`, `?pose=full`, `?main=1` (main-thread tracking), `?skipGate=1`, `?input=debug`, `?timeScale=4` (synthetic and replay only), `?debug=1` (tunables panel)
@@ -61,7 +83,7 @@ Checks: `pnpm typecheck`, `pnpm lint`, `pnpm test`, `pnpm build`, then `pnpm tes
 - **1.4 Rendering** (`src/render/`). Renderer factory with the WebGPU / WebGL2 switch, Field Day scene, toon materials, blob shadows, the headless athlete (14 meshes, two materials) with two-bone IK and pose mirroring. Unit-tested; looked at in headless screenshots (see "Things I noticed").
 - **1.5 / 1.7 Debug page and Playwright harness.** Camera or synthetic feed with skeleton overlay, hand crops, fist state, kinematics readout, HUD (inference ms, tracking Hz, render fps, estimated latency, dropped frames, delegate, backend, draw calls), record / replay controls. Six Playwright checks pass, including "the avatar's right mitt rises when the synthetic player raises their right arm" and record-then-replay.
 - **1.6 / 2.8 Device gate** (`src/core/gate/`). Capability checks, then pose inference on a synthetic frame concurrently with a representative render load. Playwright confirms it runs, cleans up, and (correctly) fails headless software rendering.
-- **2.2 / 2.3 Recognizers and providers.** Arm raise, knee-lift cadence, throw (underarm and overarm, release stamped at the wrist-speed peak), two-handed swing, punch, squat, jump; `TrackedInput`; `DebugInput` (keyboard and mouse). 220 unit and integration tests against the synthetic player across five noise seeds. **All recognizer thresholds are tuned to synthetic motion and are placeholders.**
+- **2.2 / 2.3 Recognizers and providers.** Arm raise, knee-lift cadence, throw (underarm and overarm, release stamped at the wrist-speed peak), two-handed swing, punch, squat, jump; `TrackedInput`; `DebugInput` (mouse). 220 unit and integration tests against the synthetic player across five noise seeds. **All recognizer thresholds are tuned to synthetic motion and are placeholders.**
 - **2.7 (logic) Calibration session, 2.9 Scores, avatar animator, move queue.** Unit-tested.
 - **2.4 Game shell and 2.6 interface.** Boot, gate, title, camera intro, menu, how-to, calibration, play, pause when out of frame, results; hand cursor with hold-to-select, mouse and keyboard on every screen; HUD, corner mirror view, synthesised sounds, tunables panel. Verified by Playwright through the real UI with the fake camera, the bot and keyboard input, and by looking at screenshots of every screen at 720p and 1080p.
 - **Milestones 3 to 7, the five sports.** Each has pure, unit-tested rules and scoring (bowling's ten-frame scoring and Rapier pin physics run under Vitest), a bot, and Playwright rounds under the bot and under keyboard input. I looked at mid-round screenshots of each against the Field Day theme. Bot results in short rounds: climbing about 11 m; bowling 17 to 47 over two frames (139 in one full game); batting three hits of about 100 m; archery rings of 8 to 10; javelin 44 to 49 m.
@@ -185,7 +207,7 @@ Open `http://localhost:5173/debug.html` in Chrome or Edge, allow the camera, sta
 
 ### Milestone 3: rock climbing
 
-Open `http://localhost:5173/`, pick Rock climbing. Sit or stand about 1 m from the camera with both hands in view. Without a camera: `/?sport=climbing&input=debug&skipGate=1` (A / D select a hand, mouse moves it, Q / E toggle fists) or watch the bot at `/?sport=climbing&source=synthetic&skipGate=1`. Add `&debug=1` for the tunables panel.
+Open `http://localhost:5173/`, pick Rock climbing. Sit or stand about 1 m from the camera with both hands in view. Without a camera: `/?sport=climbing&input=debug&skipGate=1` (move the mouse over a hold, press and hold to grab, drag down to pull up; letting go keeps your grip and switches hands) or watch the bot at `/?sport=climbing&source=synthetic&skipGate=1`. Add `&debug=1` for the tunables panel.
 
 1. **Grab.** Hold a hand over a hold: it should brighten and grow slightly. Close the hand: the mitt snaps on and a sound plays. Note whether grabs register reliably. Tunables: `grabWindowMs` 250, `jugRadius` 0.17, `crimpRadius` 0.10.
 2. **Pull.** Pull the closed hand down: the climber rises about 1.5 m per full image height. Does tracker jitter shake the body? Tunables: `reachWidth`, `reachHeight`, `reachOffsetY`, `followRate`, `maxClimbSpeed`.
@@ -196,7 +218,7 @@ Open `http://localhost:5173/`, pick Rock climbing. Sit or stand about 1 m from t
 
 ### Milestone 4: bowling
 
-Pick Bowling; stand about 2 to 2.5 m back, whole body in view. Without a camera: `/?sport=bowling&input=debug&skipGate=1` (E picks up, arrows move, hold and release B to bowl, mouse x steers, Z / C hook) or the bot at `/?sport=bowling&source=synthetic&skipGate=1`. `&short=1` plays two frames.
+Pick Bowling; stand about 2 to 2.5 m back, whole body in view. Without a camera: `/?sport=bowling&input=debug&skipGate=1` (move the mouse to aim the arrows, hold the button to wind up, let go to bowl) or the bot at `/?sport=bowling&source=synthetic&skipGate=1`. `&short=1` plays two frames.
 
 1. **Pick up.** Close your throwing fist while standing still. Does the ball jump to your hand, and how long does it take? If the fist is not seen, hold the hand low and still: pick-up should happen after about 1.4 s (`pickupHoldMs`, `pickupHoldSpeed`). Tell me which path worked.
 2. **Release.** Swing back and forward as if bowling toward the screen. Does the ball release every time, at the moment that feels right? Does the Power meter match your effort across a soft, medium and hard swing? Tunables: `speedFloor`, `speedCeil`, `minReleaseSpeed`, and the throw thresholds in the recognizer config. **This is the riskiest gesture in the game:** a real underarm swing seen from the front reverses direction at the bottom, which the synthetic player does not do.
@@ -205,11 +227,11 @@ Pick Bowling; stand about 2 to 2.5 m back, whole body in view. Without a camera:
 5. **Position.** Step left and right: the bowler should move about 0.3 m per shoulder width (`lateralScale`).
 6. **Second ball.** After a first ball, does picking up again work with your hand still partly closed?
 7. **Pins.** Do they fall believably and settle in reasonable time? Any pins left wobbling or counted wrongly?
-8. Known issues: with keyboard and mouse, `E` toggles, so the second pick-up needs two presses; the bowler's body hides the near half of the lane; the ball-return pedestal is partly behind the camera preview.
+8. Known issues: with mouse, `E` toggles, so the second pick-up needs two presses; the bowler's body hides the near half of the lane; the ball-return pedestal is partly behind the camera preview.
 
 ### Milestone 5: batting
 
-Pick Batting; stand 2 to 2.5 m back, whole body in view, hands together like a bat grip. Without a camera: `/?sport=batting&input=debug&skipGate=1` (S swings, Shift for a harder swing, mouse height sets hand height) or the bot at `/?sport=batting&source=synthetic&skipGate=1`.
+Pick Batting; stand 2 to 2.5 m back, whole body in view, hands together like a bat grip. Without a camera: `/?sport=batting&input=debug&skipGate=1` (click to swing as the ball reaches the plate) or the bot at `/?sport=batting&source=synthetic&skipGate=1`.
 
 1. **Timing offset (the main number).** Swing at all ten pitches trying to hit them, and read the "N ms early / late" line after each. If you are consistently early or late by a similar amount while it feels on time, shift `batTravelMs` (130) by that amount. Tell me the readings.
 2. **Windows.** Do `perfectMs` 45, `goodMs` 95, `okMs` 160, `foulMs` 230 feel fair? A late swing should say "Too late", not "Strike": if real swing events arrive more than 250 ms late, raise `lateWindowMs` and `eventDelayAllowanceMs`.
@@ -221,7 +243,7 @@ Pick Batting; stand 2 to 2.5 m back, whole body in view, hands together like a b
 
 ### Milestone 6: archery
 
-Pick Archery; sitting or standing, shoulders and both arms in view. Without a camera: `/?sport=archery&input=debug&skipGate=1` (A selects the bow hand and the mouse places it, D selects the draw hand, E closes it near the bow hand to nock, drag away to draw, E again to release) or the bot at `/?sport=archery&source=synthetic&skipGate=1`.
+Pick Archery; sitting or standing, shoulders and both arms in view. Without a camera: `/?sport=archery&input=debug&skipGate=1` (move the mouse to aim, hold the button to draw, let go to shoot) or the bot at `/?sport=archery&source=synthetic&skipGate=1`.
 
 1. **Bow arm.** Hold your bow arm out to the side. Does the game accept it? Tunables: `bowMinReach`, `bowMaxDrop`.
 2. **Nock.** Bring the other hand next to the bow hand and close the fist. The hint should change. If not, note how far apart your wrists were. Tunables: `nockDistance`, `nockGraceMs`.
@@ -235,10 +257,10 @@ Pick Archery; sitting or standing, shoulders and both arms in view. Without a ca
 
 ### Milestone 7: javelin
 
-Pick Javelin; stand 2 to 3 m back with room to run on the spot and throw. Without a camera: `/?sport=javelin&input=debug&skipGate=1` (U starts, hold ArrowUp to run, Shift to sprint, hold and release T to throw) or the bot at `/?sport=javelin&source=synthetic&skipGate=1`.
+Pick Javelin; stand 2 to 3 m back with room to run on the spot and throw. Without a camera: `/?sport=javelin&input=debug&skipGate=1` (hold the button to run, let go just before the line to throw) or the bot at `/?sport=javelin&source=synthetic&skipGate=1`.
 
 1. **Start.** Raise a fist above your head. "Go!" should appear within about half a second even if the game cannot see your fist. An open-hand raise starts after 0.6 s (`openHandHoldMs`).
-2. **Run.** Run on the spot for ten seconds. Does the speed readout rise smoothly toward 8 to 9 m/s, without stalls? Do your knees stay in frame? Tunables: `fullCadence` 4.0, `fullAmplitude` 0.45, `maxRunSpeed`, `accel`, `decel`, and `cadence.minLift` in the recognizer config.
+2. **Run.** Run on the spot for ten seconds. Does the speed readout rise smoothly toward 8 to 9 m/s, without stalls? Do your knees stay in frame? Tunables: `fullCadence` 4.0, `fullAmplitude` 0.45, `maxRunSpeed`, `accel`, `decel`, and the step-cue thresholds under `recognizerConfig.cadence` (`arm`, `thigh`, `foot`, `bob`, `runThreshold`, `stopThreshold`).
 3. **False throws.** While running with arms pumping, does a throw ever fire by itself? (`__game.sport.log` in the console lists recent gesture events.) Tunable: `minThrowSpeed`.
 4. **Swallowed throws.** Throw overarm in the throw zone while still running. Is the throw ever ignored? The throw recognizer suspends when the shoulders move fast; synthetic running did not trip it but real shoulder bob is larger. If throws are swallowed, set `maxBodySpeedOverride` (for example 8).
 5. **Angle.** After each throw the hint shows the release angle the game read. The player throws into the screen, so the angle is a proxy from how upward the wrist was moving at release. Does a flat throw read lower than a lofted one? Tunables: `proxyLow` -0.7, `proxyHigh` 0.9, `angleCurve`.
@@ -248,7 +270,7 @@ Pick Javelin; stand 2 to 3 m back with room to run on the spot and throw. Withou
 
 ### Bonus: baseball pitching
 
-Pick Pitching; stand 2 to 2.5 m back, whole body in view. Without a camera: `/?sport=pitching&input=debug&skipGate=1` (E closes the fist for a fastball, otherwise a curve is picked after 0.7 s; hold and release T to throw; mouse x and y move the pitch) or the bot at `/?sport=pitching&source=synthetic&skipGate=1`.
+Pick Pitching; stand 2 to 2.5 m back, whole body in view. Without a camera: `/?sport=pitching&input=debug&skipGate=1` (click Fastball or Curveball, press and hold on the field to aim the ring, let go to throw) or the bot at `/?sport=pitching&source=synthetic&skipGate=1`.
 
 1. **Sign.** Hold your throwing hand still at your side with a fist: the meter should fill and say Fastball. Open hand: Curve. If the hand cannot be read it says so and picks a fastball after 2.5 s. Tunables: `signStillSpeed`, `signHoldMs`, `signFallbackMs`.
 2. **Aim.** Throw overarm at the lit tile. Release with your hand further out, then closer in: the pitch should move the same way. Throw higher and lower. The vertical aim is a proxy from how upward the wrist moves at release and **must be tuned on your recordings**: `proxyLow`, `proxyHigh`, `heightRange`; horizontal: `neutralLateral`, `aimGainX`; forgiveness: `assist`.
@@ -261,9 +283,9 @@ Pick Pitching; stand 2 to 2.5 m back, whole body in view. Without a camera: `/?s
 
 1. **Menus by hand.** After Start and the camera prompt, raise a hand: a mitt cursor should appear. Hold it over a card for about a second to select. It should not select anything in the first 1.2 s of a new screen. Is the reach comfortable, and is the dwell time right?
 2. **Keyboard only.** Tab or arrow keys move focus, Enter selects, Escape goes back or quits a round. Try the whole flow without the mouse.
-3. **Camera indicator.** A "Camera on" pill with a "Turn camera off" button should be visible on every screen once the camera is running. Turning it off should stop the camera light and drop you to keyboard and mouse play.
+3. **Camera indicator.** A "Camera on" pill with a "Turn camera off" button should be visible on every screen once the camera is running. Turning it off should stop the camera light and drop you to mouse play.
 4. **Out of frame.** During a round, walk out of view: the game should pause with a large message and resume when you return.
 5. **Calibration.** Before each camera round: step into the outline, raise your throwing hand, hold your arms out. Try raising the left hand: the sport should then be left-handed. For climbing and archery, try the "Sitting" toggle.
-6. **Left-handed with keyboard and mouse.** The how-to screen has a "Throwing hand" toggle; `?hand=left` sets the default.
+6. **Left-handed with mouse.** The how-to screen has a "Throwing hand" toggle; `?hand=left` sets the default.
 7. **Device gate.** Open `/` without `?skipGate=1`. It should pass on your machine within a few seconds; write down the numbers behind "Details" if it fails. Thresholds (25 Hz tracking, 50 fps rendering) are provisional.
 8. **Deployment.** Follow `docs/DEPLOY.md`. First find out where the DNS for `allenzheng.com` lives (`nslookup -type=NS allenzheng.com`); the guide covers both cases. `pnpm deploy:dry` checks everything without touching your account.

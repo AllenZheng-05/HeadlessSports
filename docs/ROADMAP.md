@@ -20,6 +20,11 @@ Fixes from Allen's first playtest, 2026-11-14. Details and retest list in the mo
 | Archery forgiving draw | B | done | |
 | Javelin without fist, cadence-rewarding run | B | done | Throw guard needs camera tuning |
 | Pitching catcher call, rhythm, aim ring | B | done | Pitch choice still uses fist or open hand |
+| Round 2: mouse-only camera-off mode (`MouseControl` API, one-button scheme per sport, keyboard game controls removed) | B | done | Not played by hand |
+| Round 2: bowling pin miscount | B | done | Check pin falls look natural |
+| Round 2: batting in feet, 350 ft home run, proportional difficulty | B | done | |
+| Round 2: fused running-in-place detection | B | done | Thresholds need a real camera |
+| Decide mouse javelin distance (93 to 96 m against 52 to 61 m with the camera bot) | owner | todo | Tune down or separate score tables |
 | Merge `playtest-1` into `main` | O | todo | After Allen retests |
 
 ## Milestone 0: repo setup
