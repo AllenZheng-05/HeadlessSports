@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { aimPitch, createAim, createLiveInput, debugLive, trackedLive } from './aim';
+import { aimPitch, createAim, createLiveInput, trackedLive } from './aim';
 import { pitchingConfig as cfg } from './config';
 import { LiveAim } from './liveAim';
 
@@ -31,23 +31,19 @@ describe('the live aim', () => {
     }
   });
 
-  it('keyboard and mouse: the indicator equals the release aim for the same mouse', () => {
-    const live = debugLive(cfg, 0.8, 0.3, 'right', createLiveInput());
+  it('mouse: setDirect is the pointed spot exactly, with no assist, and a release reads it back', () => {
     const la = new LiveAim();
-    la.update(cfg, 5, live, 'right', 'fastball', 2, p);
-    const loft = Math.min(1.4, Math.max(0, (0.5 - 0.3) * 1.6 + 0.6));
-    const rel = aimPitch(
-      cfg,
-      { speed: 5, vy: 5 * Math.sin(loft), lateral: 0.62 + (0.8 - 0.5) * 4, curvature: 0 },
-      'right',
-      'fastball',
-      2,
-      true,
-      createAim(),
-      p,
-    );
-    expect(la.aim.x).toBeCloseTo(rel.x, 6);
-    expect(la.aim.y).toBeCloseTo(rel.y, 6);
+    la.setDirect(10, 0.3, 0.9);
+    expect(la.ready).toBe(true);
+    expect(la.aim.x).toBe(0.3);
+    expect(la.aim.y).toBe(0.9);
+    la.setDirect(20, -0.2, 0.7);
+    const out = createAim();
+    expect(la.forRelease(25, false, out)).toBe(true);
+    expect(out.x).toBeCloseTo(-0.2, 5);
+    expect(out.y).toBeCloseTo(0.7, 5);
+    expect(la.forRelease(12, false, out)).toBe(true);
+    expect(out.x).toBeCloseTo(0.3, 5);
   });
 
   it('smooths a slow, jittery hand and does not smooth a throw', () => {

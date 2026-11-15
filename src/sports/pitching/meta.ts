@@ -18,7 +18,7 @@ export const meta: SportMeta = {
     'Throw what was called for bonus points',
   ],
   debugKeys: [
-    'E / Q: toggle the right / left fist (closed fastball, open curve), then hold still',
-    'Hold T, release to pitch. The mouse aims the ring; Z / C curve it a little',
+    'Click Fastball or Curveball (the catcher calls one for bonus points)',
+    'Press and hold on the field to aim the ring, let go to throw',
   ],
 };

@@ -1,5 +1,7 @@
 import { mirrorUpperBody } from '../../core/avatarDrive';
 import type { MeterTone, Sport, SportBot, SportContext, SportFactory } from '../../core/sport';
+import { asMouseControl } from '../../input/debug/mouseControl';
+import type { MouseControl } from '../../input/debug/mouseControl';
 import type { GameEvent, Side } from '../../input/types';
 import { AvatarAnimator } from '../../render/avatar/AvatarAnimator';
 import { AvatarRig } from '../../render/avatar/AvatarRig';
@@ -7,16 +9,24 @@ import { BlobShadow } from '../../render/style/blobShadow';
 import { toonMaterial } from '../../render/style/toon';
 import { Group, Mesh, SphereGeometry, Vector3 } from 'three/webgpu';
 import type { Fog } from 'three/webgpu';
-import { createAim, createLiveInput, debugLive, sideSign, trackedLive } from './aim';
+import {
+  createAim,
+  createLiveInput,
+  mouseThrowSpeed,
+  pointedAim,
+  sideSign,
+  trackedLive,
+} from './aim';
 import type { PitchKind } from './aim';
 import { createPitchingBot } from './bot';
 import { createBubble } from './bubble';
+import { createPitchButtons } from './pitchButtons';
 import { KIND_LABEL, callText, reactionText } from './call';
 import { LiveAim } from './liveAim';
 import { pitchingConfig, pitchingRanges } from './config';
 import { ballAt } from './flight';
 import type { Vec3 } from './flight';
-import { createGame, onThrow, pitchesFor, stepGame, totalIgnored } from './game';
+import { canPick, createGame, onThrow, pickKind, pitchesFor, stepGame, totalIgnored } from './game';
 import type { HandInput, Phase, Reading } from './game';
 import { summarize } from './scoring';
 import type { PitchRecord, Tier } from './scoring';
@@ -83,12 +93,20 @@ const LOCKED_SUB: Record<PitchKind, string> = {
   fastball: 'Locked in: fastball. Wind up when ready',
   curve: 'Locked in: curve. Wind up when ready',
 };
+const MOUSE_PICK_SUB = 'Pick a pitch, then hold to aim';
+/** Mouse play: the bubble's second line. */
+const MOUSE_SUB: Record<PitchKind, string> = {
+  fastball: 'Fastball. Hold to aim, let go to throw',
+  curve: 'Curveball. Hold to aim, let go to throw',
+};
 
 export const createPitching: SportFactory = (ctx: SportContext): PitchingSport => {
   const cfg = pitchingConfig;
   const hand: Side = ctx.calibration?.handedness ?? 'right';
   const sg = sideSign(hand);
   const isDebug = ctx.input.source === null;
+  const mc = isDebug ? asMouseControl(ctx.input) : null;
+  const mouse = mc !== null;
   const game = createGame(
     pitchesFor(cfg, ctx.short),
     ctx.random,
@@ -96,6 +114,7 @@ export const createPitching: SportFactory = (ctx: SportContext): PitchingSport =
     ctx.short ? cfg.shortGapScale : 1,
     cfg.firstPitchExtraMs,
     cfg.curveShare,
+    mouse,
   );
   const unregister = ctx.tunables.register('pitching', 'Pitching', cfg, pitchingRanges);
   const animator = new AvatarAnimator(ctx.avatar);
@@ -118,13 +137,17 @@ export const createPitching: SportFactory = (ctx: SportContext): PitchingSport =
   let bubbleSub = '';
   let bubbleTone: 'call' | 'good' | 'bad' = 'call';
   let callLine = '';
-  let mouseX = 0.5;
-  let mouseY = 0.5;
-  const onMouse = (e: MouseEvent): void => {
-    mouseX = window.innerWidth > 0 ? e.clientX / window.innerWidth : 0.5;
-    mouseY = window.innerHeight > 0 ? e.clientY / window.innerHeight : 0.5;
-  };
-  if (isDebug) window.addEventListener('mousemove', onMouse);
+  const buttons = createPitchButtons((kind) => {
+    if (pickKind(game, kind)) note(`pick ${kind}`);
+  });
+  buttons.setShown(mouse);
+  // Mouse play: the throw is a press (wind-up) and a release, in the fixed update.
+  const rayNear = new Vector3();
+  const rayDir = new Vector3();
+  const ptScratch: Point = { x: 0, y: 0 };
+  let winding = false;
+  let pressArmed = false;
+  let seenPresses = 0;
   const groundWasVisible = stage.ground.visible;
   stage.ground.visible = false;
   const fog = scene.fog as Fog | null;
@@ -320,7 +343,7 @@ export const createPitching: SportFactory = (ctx: SportContext): PitchingSport =
     }
     if (game.windupSeq !== seenWindup) {
       seenWindup = game.windupSeq;
-      setHint('Wind up and throw');
+      setHint(mouse ? 'Hold to aim, let go to throw' : 'Wind up and throw');
     }
     if (game.releaseSeq !== seenRelease) {
       seenRelease = game.releaseSeq;
@@ -464,18 +487,28 @@ export const createPitching: SportFactory = (ctx: SportContext): PitchingSport =
 
   // ---- live aim ----
   let liveVisible = false;
-  const updateLive = (nowMs: number): void => {
+  /** Mouse play: the ring is under the cursor while the button is held (pointer ray on the zone plane). */
+  const updateMouseLive = (m: MouseControl, nowMs: number): void => {
+    liveVisible = false;
+    if (!m.pointerDown) return;
+    camera.updateMatrixWorld();
+    rayNear.set(m.pointerX * 2 - 1, 1 - m.pointerY * 2, 0.5).unproject(camera);
+    rayDir.copy(rayNear).sub(camera.position);
+    if (rayDir.z >= -1e-6) return;
+    const u = (plateZ - camera.position.z) / rayDir.z;
+    pointedAim(cfg, camera.position.x + rayDir.x * u, camera.position.y + rayDir.y * u, ptScratch);
+    liveAim.setDirect(nowMs, ptScratch.x, ptScratch.y);
+    liveVisible = true;
+  };
+
+  const updateLive = (): void => {
     const st = ctx.input.state;
-    let t = nowMs;
-    if (isDebug) {
-      debugLive(cfg, mouseX, mouseY, hand, liveIn);
-    } else if (st.tracking && st.hasPose) {
-      trackedLive(cfg, st.arms[hand], hand, liveIn);
-      t = st.t;
-    } else {
+    if (!st.tracking || !st.hasPose) {
       liveVisible = false;
       return;
     }
+    trackedLive(cfg, st.arms[hand], hand, liveIn);
+    const t = st.t;
     // Before the pitch is picked the indicator follows the hand's own reading, else the call.
     let kind: PitchKind = game.kind;
     if (game.phase === 'call' || game.phase === 'sign') {
@@ -483,6 +516,30 @@ export const createPitching: SportFactory = (ctx: SportContext): PitchingSport =
     }
     liveAim.update(cfg, t, liveIn, hand, kind, game.target, liveScratch);
     liveVisible = true;
+  };
+
+  /**
+   * Mouse play: a press during the wind-up window starts the throw, the release throws it. A press
+   * made while the call is still being read waits (the ring already follows it) and starts the
+   * moment the window opens. Never allocates.
+   */
+  const driveMouseThrow = (m: MouseControl): void => {
+    if (m.pointerPresses !== seenPresses) {
+      seenPresses = m.pointerPresses;
+      pressArmed = game.phase === 'call' || game.phase === 'windup';
+    }
+    if (!winding && pressArmed && game.phase === 'windup' && !ctx.paused) {
+      pressArmed = false;
+      winding = true;
+      m.startWindup(hand);
+    }
+    if (!m.pointerDown) {
+      if (winding) {
+        winding = false;
+        m.releaseThrow();
+      }
+      pressArmed = false;
+    }
   };
 
   // ---- catcher and camera (called every frame) ----
@@ -546,7 +603,8 @@ export const createPitching: SportFactory = (ctx: SportContext): PitchingSport =
         bubble.setText(bubbleMain, bubbleSub, bubbleTone);
       } else {
         let sub: string;
-        if (game.phase === 'sign') sub = READING_SUB[game.reading];
+        if (mouse) sub = game.phase === 'windup' ? MOUSE_SUB[game.kind] : MOUSE_PICK_SUB;
+        else if (game.phase === 'sign') sub = READING_SUB[game.reading];
         else if (game.phase === 'windup') sub = LOCKED_SUB[game.kind];
         else sub = 'Read the call. Take your time';
         bubbleMain = callLine;
@@ -616,6 +674,11 @@ export const createPitching: SportFactory = (ctx: SportContext): PitchingSport =
 
     start(): void {
       started = true;
+      if (mc !== null) {
+        // The button is the sport's: no built-in fist close; the mouse moves the throwing hand.
+        mc.setManualMode(true);
+        mc.selectHand(hand);
+      }
       placeCamera();
       setHint('The catcher is calling the first pitch');
       refreshHud();
@@ -623,9 +686,16 @@ export const createPitching: SportFactory = (ctx: SportContext): PitchingSport =
 
     fixedUpdate(dt: number, nowMs: number): void {
       if (finished || !started) return;
-      updateLive(nowMs);
+      if (mc !== null) {
+        updateMouseLive(mc, nowMs);
+        driveMouseThrow(mc);
+      } else {
+        updateLive();
+      }
       for (const e of pending) {
         if (e.type !== 'ThrowReleased') continue;
+        // Mouse play has no power: a fixed good speed per pitch type.
+        const speed = mouse ? mouseThrowSpeed(cfg, game.kind) : e.speed;
         const haveLive = liveAim.ready && liveAim.forRelease(e.t, !isDebug, liveRelease);
         const out = onThrow(
           game,
@@ -634,7 +704,7 @@ export const createPitching: SportFactory = (ctx: SportContext): PitchingSport =
           {
             t: e.t,
             hand: e.hand,
-            speed: e.speed,
+            speed,
             vy: e.vy,
             lateral: e.lateral,
             curvature: e.curvature,
@@ -646,10 +716,10 @@ export const createPitching: SportFactory = (ctx: SportContext): PitchingSport =
         );
         if (out === 'taken') {
           lastCurvature = e.curvature;
-          lastSpeed = e.speed;
+          lastSpeed = speed;
         }
         note(
-          `throw ${e.hand} t=${e.t.toFixed(0)} now=${nowMs.toFixed(0)} speed=${e.speed.toFixed(1)} vy=${e.vy.toFixed(1)} lat=${e.lateral.toFixed(2)} ${out}`,
+          `throw ${e.hand} t=${e.t.toFixed(0)} now=${nowMs.toFixed(0)} speed=${speed.toFixed(1)} vy=${e.vy.toFixed(1)} lat=${e.lateral.toFixed(2)} ${out}`,
         );
       }
       pending.length = 0;
@@ -687,6 +757,7 @@ export const createPitching: SportFactory = (ctx: SportContext): PitchingSport =
       driveCatcher(dt);
       placeCamera();
       driveCallUi();
+      if (mouse) buttons.update(game.kind, canPick(game));
       if (!finished) refreshHud();
     },
 
@@ -697,7 +768,8 @@ export const createPitching: SportFactory = (ctx: SportContext): PitchingSport =
     dispose(): void {
       offThrow();
       unregister();
-      if (isDebug) window.removeEventListener('mousemove', onMouse);
+      buttons.dispose();
+      mc?.setManualMode(false);
       bubble.dispose();
       marker.dispose();
       ball.removeFromParent();

@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { aimPitch, baseKmh, createAim, heightOffset, sideSign } from './aim';
+import {
+  aimPitch,
+  baseKmh,
+  createAim,
+  heightOffset,
+  mouseThrowSpeed,
+  pointedAim,
+  sideSign,
+} from './aim';
 import type { ThrowSample } from './aim';
 import { pitchingConfig } from './config';
 
@@ -45,7 +53,7 @@ describe('aim: vertical', () => {
     expect(heightOffset(c, 5, false)).toBeCloseTo(c.heightRange, 9);
     expect(heightOffset(c, -5, false)).toBeCloseTo(-c.heightRange, 9);
   });
-  it('uses the keyboard range for debug input', () => {
+  it('uses the mouse range for debug input', () => {
     const c = pitchingConfig;
     expect(heightOffset(c, c.debugProxyLow, true)).toBeCloseTo(-c.heightRange, 9);
     expect(heightOffset(c, c.debugProxyHigh, true)).toBeCloseTo(c.heightRange, 9);
@@ -107,5 +115,29 @@ describe('speed', () => {
     expect(a.scoredKmh).toBe(pitchingConfig.scoredSpeedCapKmh);
     const slow = aim({ speed: 3 }, 'right', 'fastball');
     expect(slow.scoredKmh).toBe(slow.kmh);
+  });
+});
+
+describe('mouse aim', () => {
+  const cfg = pitchingConfig;
+  const o = { x: 0, y: 0 };
+  it('a point on the drawn zone plane maps to the scored plane and back', () => {
+    const wx = 0.4 * cfg.zoneVisualScale;
+    const wy = cfg.zoneDrawCentreY + 0.2 * cfg.zoneVisualScale;
+    pointedAim(cfg, wx, wy, o);
+    expect(o.x).toBeCloseTo(0.4, 9);
+    expect(o.y).toBeCloseTo(cfg.zoneCentreY + 0.2, 9);
+  });
+  it('is limited to the range a tracked arm reaches', () => {
+    pointedAim(cfg, 99, 99, o);
+    expect(o.x).toBe(cfg.maxMiss);
+    expect(o.y).toBeCloseTo(cfg.zoneCentreY + cfg.heightRange, 9);
+    pointedAim(cfg, -99, -99, o);
+    expect(o.x).toBe(-cfg.maxMiss);
+    expect(o.y).toBeCloseTo(cfg.zoneCentreY - cfg.heightRange, 9);
+  });
+  it('the speed is fixed per pitch type', () => {
+    expect(mouseThrowSpeed(cfg, 'fastball')).toBe(cfg.mouseFastballSpeed);
+    expect(mouseThrowSpeed(cfg, 'curve')).toBe(cfg.mouseCurveSpeed);
   });
 });

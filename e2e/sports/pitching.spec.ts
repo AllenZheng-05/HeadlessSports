@@ -48,7 +48,6 @@ interface PitchingHook {
     log: string[];
   } | null;
   drawCalls: number;
-  debugInput: { press(code: string): void; release(code: string): void } | null;
 }
 
 function watch(page: Page): string[] {
@@ -195,21 +194,13 @@ test.describe('pitching', () => {
     expect(problems).toEqual([]);
   });
 
-  test('keyboard and mouse: read the call, show it, aim with the ring, throw', async ({ page }) => {
+  test('mouse: pick the called pitch with a button, hold to aim, release to throw', async ({
+    page,
+  }) => {
     const problems = watch(page);
-    const press = (code: string): Promise<void> =>
-      page.evaluate(
-        (c) => (window as unknown as { __game: PitchingHook }).__game.debugInput?.press(c),
-        code,
-      );
-    const release = (code: string): Promise<void> =>
-      page.evaluate(
-        (c) => (window as unknown as { __game: PitchingHook }).__game.debugInput?.release(c),
-        code,
-      );
     const sportNow = (): Promise<{
       called: string;
-      reading: string;
+      kind: string;
       marker: { visible: boolean; x: number; y: number };
       bubbleVisible: boolean;
     }> =>
@@ -217,74 +208,102 @@ test.describe('pitching', () => {
         const sp = (window as unknown as { __game: PitchingHook }).__game.sport!;
         return {
           called: sp.called,
-          reading: sp.reading,
+          kind: sp.kind,
           marker: sp.aimMarker,
           bubbleVisible: sp.bubble.visible,
         };
       });
+    const fastball = page.getByTestId('pitch-fastball');
+    const curve = page.getByTestId('pitch-curve');
+    const buttonFor = (kind: string): typeof fastball => (kind === 'curve' ? curve : fastball);
 
     await page.goto('/?sport=pitching&input=debug&skipGate=1&short=1');
     await waitPhase(page, 'playing');
-    // The call comes first, and the bubble is up before a pitch can be picked.
+    // The buttons are there from the start, with the fastball picked, but dead until the call shows.
+    await expect(fastball).toBeVisible();
+    await expect(curve).toBeVisible();
+    await expect(fastball).toHaveAttribute('aria-pressed', 'true');
+    await expect(curve).toHaveAttribute('aria-pressed', 'false');
+    await expect(fastball).toBeDisabled();
     await waitSportPhase(page, 'call', 10000);
     await expect(page.getByTestId('catcher-bubble')).toBeVisible({ timeout: 10000 });
-    await waitSportPhase(page, 'sign', 20000);
-    await page.waitForTimeout(300);
+    await expect(fastball).toBeEnabled();
 
-    const throwWith = async (mouseX: number, mouseY: number): Promise<Pitch> => {
-      await waitSportPhase(page, 'sign', 30000);
-      await page.mouse.move(mouseX, mouseY);
-      await page.waitForTimeout(200);
-      // Show the called pitch: a closed fist is a fastball, an open hand a curve. E toggles the fist.
+    const throwAt = async (x: number, y: number, shot = false): Promise<Pitch> => {
+      // The call comes up, and the pitch is picked with the matching button.
+      await page.waitForFunction(
+        () => (window as unknown as { __game: PitchingHook }).__game.sport?.bubble.visible === true,
+        undefined,
+        { timeout: 30000 },
+      );
+      await expect(fastball).toBeEnabled();
       const now = await sportNow();
-      expect(now.bubbleVisible).toBe(true);
-      if (now.reading !== now.called) {
-        await press('KeyE');
-        await release('KeyE');
-      }
+      const count0 = (await pitches(page)).length;
+      expect(now.kind).toBe('fastball');
+      await buttonFor(now.called).click();
+      await expect(buttonFor(now.called)).toHaveAttribute('aria-pressed', 'true');
+      expect((await sportNow()).kind).toBe(now.called);
+      if (shot) await page.screenshot({ path: `${SHOTS}/pitching-mouse-buttons.png` });
+      // Clicking a button never throws or shows the ring.
+      expect((await sportNow()).marker.visible).toBe(false);
       await waitSportPhase(page, 'windup', 15000);
-      await page.waitForTimeout(500);
-      await page.mouse.move(mouseX, mouseY);
-      await page.waitForTimeout(100);
-      // The aim marker shows before the release, and the pitch goes where it points.
+      expect((await pitches(page)).length).toBe(count0);
+
+      // Press and hold on the field: the ring follows the pointer; let go to throw.
+      await page.mouse.move(640, 400);
+      await page.mouse.down();
+      await page.mouse.move(x, y, { steps: 6 });
+      await page.waitForTimeout(150);
       const aim = (await sportNow()).marker;
       expect(aim.visible).toBe(true);
-      await press('KeyT');
-      await page.waitForTimeout(500);
-      await release('KeyT');
+      if (shot) await page.screenshot({ path: `${SHOTS}/pitching-mouse-aim.png` });
       const before = (await pitches(page)).length;
+      await page.mouse.up();
       await page.waitForFunction(
         (n) =>
           ((window as unknown as { __game: PitchingHook }).__game.sport?.pitches.length ?? 0) > n,
         before,
-        {
-          timeout: 20000,
-        },
+        { timeout: 20000 },
       );
       const all = await pitches(page);
       const last = all[all.length - 1]!;
+      expect(last.balk).toBe(false);
       expect(Math.abs(last.x - aim.x)).toBeLessThan(0.02);
       expect(Math.abs(last.y - aim.y)).toBeLessThan(0.02);
+      expect(last.kind).toBe(now.called);
+      expect(last.called).toBe(now.called);
       expect(last.matched).toBe(true);
       return last;
     };
 
-    const left = await throwWith(40, 360);
-    const right = await throwWith(1240, 360);
+    const left = await throwAt(300, 330, true);
+    const right = await throwAt(980, 330);
     console.info(`left ${JSON.stringify(left)} right ${JSON.stringify(right)}`);
-    expect(left.balk).toBe(false);
-    expect(right.balk).toBe(false);
-    expect(left.points).toBeGreaterThanOrEqual(0);
     expect(left.x).toBeLessThan(right.x);
-    expect(['fastball', 'curve']).toContain(left.kind);
 
-    // The third pitch ends the short round.
-    await throwWith(640, 360);
+    // The third pitch ends the short round. Throw the other pitch on purpose: it is legal but
+    // is not what was called.
+    await page.waitForFunction(
+      () => (window as unknown as { __game: PitchingHook }).__game.sport?.bubble.visible === true,
+      undefined,
+      { timeout: 30000 },
+    );
+    const last = await sportNow();
+    const other = last.called === 'curve' ? 'fastball' : 'curve';
+    await buttonFor(other).click();
+    await waitSportPhase(page, 'windup', 15000);
+    await page.mouse.move(640, 300);
+    await page.mouse.down();
+    await page.waitForTimeout(100);
+    await page.mouse.up();
     await waitPhase(page, 'results', 30000);
     const result = await page.evaluate(
       () => (window as unknown as { __game: PitchingHook }).__game.result,
     );
     expect(result!.detail?.pitches).toBe(3);
+    const thrown = await pitches(page);
+    expect(thrown[2]!.kind).toBe(other);
+    expect(thrown[2]!.matched).toBe(false);
     expect(problems).toEqual([]);
   });
 });

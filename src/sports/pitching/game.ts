@@ -102,6 +102,8 @@ export interface GameState {
   nextSeq: number;
   doneSeq: number;
   readonly debug: boolean;
+  /** Mouse play: no sign step; the pitch is picked with buttons and thrown with press and release. */
+  readonly mouse: boolean;
   readonly random: () => number;
   /** Scratch, so nothing allocates per step. */
   readonly scratch: Point;
@@ -117,6 +119,7 @@ export function createGame(
   gapScale = 1,
   firstExtraMs = 0,
   curveShare = 0.45,
+  mouse = false,
 ): GameState {
   const g: GameState = {
     phase: 'call',
@@ -152,6 +155,7 @@ export function createGame(
     nextSeq: 0,
     doneSeq: 0,
     debug,
+    mouse,
     random,
     scratch: { x: 0, y: 0 },
   };
@@ -165,6 +169,8 @@ export function startCall(g: GameState, curveShare: number): void {
   g.target = pickTarget(g.random, g.lastTarget);
   g.lastTarget = g.target;
   g.bubbleOn = false;
+  // Mouse play: fastball unless the player clicks the curveball.
+  if (g.mouse) g.kind = 'fastball';
   g.callSeq++;
   setPhase(g, 'call');
 }
@@ -216,6 +222,17 @@ function resolve(g: GameState, cfg: PitchingConfig): void {
   setPhase(g, 'result');
 }
 
+/** Whether the mouse pitch buttons work now: from when the call appears until the release. */
+export const canPick = (g: GameState): boolean =>
+  g.mouse && ((g.phase === 'call' && g.bubbleOn) || g.phase === 'windup');
+
+/** Mouse play: pick the pitch type. Ignored outside the call and the wind-up. */
+export function pickKind(g: GameState, kind: PitchKind): boolean {
+  if (!canPick(g)) return false;
+  g.kind = kind;
+  return true;
+}
+
 /** What the throwing hand says: a fist is a fastball, an open hand a curve, `none` when unknown. */
 export function readHand(h: HandInput): Reading {
   if (!h.present || !h.known) return 'none';
@@ -239,6 +256,15 @@ export function stepGame(
       if (!g.bubbleOn && g.phaseMs >= reveal) {
         g.bubbleOn = true;
         g.revealSeq++;
+      }
+      if (g.mouse) {
+        // No sign step: the wind-up opens a short beat after the call appears, with the
+        // currently picked pitch (the buttons keep working until the release).
+        if (g.bubbleOn && g.phaseMs >= reveal + cfg.mouseReactMs * g.gapScale) {
+          select(g, cfg, g.kind, false);
+          g.lockoutMs = 0;
+        }
+        return;
       }
       if (g.bubbleOn && g.phaseMs >= reveal + cfg.callReactMs * g.gapScale) {
         g.reading = 'none';

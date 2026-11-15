@@ -88,7 +88,7 @@ export function placeAim(
 
 /**
  * Where a pitch crosses the plate plane, from the release event and the called cell. `debug`
- * selects the proxy range for keyboard-and-mouse throws. Positive x is screen right. No depth.
+ * selects the proxy range for mouse throws. Positive x is screen right. No depth.
  */
 export function aimPitch(
   cfg: PitchingConfig,
@@ -157,18 +157,20 @@ export function trackedLive(
   return out;
 }
 
-/** Keyboard and mouse: the mouse (0 to 1 over the window) sets the release's lateral and loft. */
-export function debugLive(
-  cfg: PitchingConfig,
-  mouseX: number,
-  mouseY: number,
-  hand: Side,
-  out: LiveInput,
-): LiveInput {
-  out.lateral = sideSign(hand) * cfg.debugNeutralLateral + (mouseX - 0.5) * cfg.debugMouseLateral;
-  const loft = clamp((0.5 - mouseY) * 1.6 + 0.6, 0, 1.4);
-  out.yOffset = heightOffset(cfg, Math.sin(loft), true);
-  // A mouse is steady and instant: report a throw-speed arm so the live aim is not smoothed.
-  out.speed = 99;
+/**
+ * Mouse play: a point on the drawn zone plane (world m) as a scored location, limited to the
+ * range a tracked arm can reach. The ring sits under the cursor and the pitch goes there.
+ */
+export function pointedAim(cfg: PitchingConfig, worldX: number, worldY: number, out: Point): Point {
+  out.x = clamp(worldX / cfg.zoneVisualScale, -cfg.maxMiss, cfg.maxMiss);
+  out.y = clamp(
+    cfg.zoneCentreY + (worldY - cfg.zoneDrawCentreY) / cfg.zoneVisualScale,
+    cfg.zoneCentreY - cfg.heightRange,
+    cfg.zoneCentreY + cfg.heightRange,
+  );
   return out;
 }
+
+/** The pitch speed of a mouse throw (wrist speed, sw/s): fixed per pitch type. */
+export const mouseThrowSpeed = (cfg: PitchingConfig, kind: PitchKind): number =>
+  kind === 'curve' ? cfg.mouseCurveSpeed : cfg.mouseFastballSpeed;

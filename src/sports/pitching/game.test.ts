@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { pitchingConfig as cfg } from './config';
 import { ballAt, flightSeconds, latencyProgress } from './flight';
-import { createGame, onThrow, pickTarget, pitchesFor, stepGame } from './game';
+import { canPick, createGame, onThrow, pickKind, pickTarget, pitchesFor, stepGame } from './game';
 import type { GameState, HandInput, ThrowInput } from './game';
+import type { Aim } from './aim';
 
 const hand = (o: Partial<HandInput> = {}): HandInput => ({
   present: true,
@@ -233,5 +234,89 @@ describe('flight helpers', () => {
     ballAt(cfg, from, to, 0.5, true, -0.12, -0.22, out);
     expect(out.y).toBeGreaterThan(straight.y);
     expect(out.x).toBeGreaterThan(straight.x);
+  });
+});
+
+describe('mouse play', () => {
+  const mouseGame = (total = 3): GameState => createGame(total, rng(), true, 1, 0, 0.45, true);
+  /** Run until the call is showing, then a little more. */
+  const toCall = (g: GameState): void => {
+    run(g, cfg.callSetupMs + 50, hand());
+    expect(g.bubbleOn).toBe(true);
+  };
+  const toWindup = (g: GameState): void => {
+    run(g, cfg.mouseReactMs + 50, hand());
+    expect(g.phase).toBe('windup');
+  };
+  const mouseThrow = (over: Partial<ThrowInput> = {}): ThrowInput =>
+    throwAt({ speed: cfg.mouseFastballSpeed, ...over });
+  const aimAt = (x: number, y: number): Aim => ({ rawX: x, rawY: y, x, y, kmh: 0, scoredKmh: 0 });
+
+  it('has no sign step: the wind-up opens a short beat after the call', () => {
+    const g = mouseGame();
+    expect(g.phase).toBe('call');
+    toCall(g);
+    expect(g.phase).toBe('call');
+    run(g, cfg.mouseReactMs + 50, hand());
+    expect(g.phase).toBe('windup');
+    expect(g.usedFallback).toBe(false);
+    expect(g.lockoutMs).toBe(0);
+  });
+
+  it('the fastball is picked by default every pitch', () => {
+    const g = mouseGame();
+    toCall(g);
+    expect(g.kind).toBe('fastball');
+    toWindup(g);
+    expect(g.kind).toBe('fastball');
+    pickKind(g, 'curve');
+    onThrow(g, cfg, 0, mouseThrow(), 'right', false, aimAt(0, cfg.zoneCentreY));
+    run(g, 6000, hand());
+    expect(g.index).toBeGreaterThan(0);
+    expect(g.kind).toBe('fastball');
+  });
+
+  it('the buttons work from the call until the release, and not before or after', () => {
+    const g = mouseGame();
+    expect(canPick(g)).toBe(false);
+    expect(pickKind(g, 'curve')).toBe(false);
+    expect(g.kind).toBe('fastball');
+    toCall(g);
+    expect(canPick(g)).toBe(true);
+    expect(pickKind(g, 'curve')).toBe(true);
+    expect(g.kind).toBe('curve');
+    toWindup(g);
+    expect(g.kind).toBe('curve');
+    expect(pickKind(g, 'fastball')).toBe(true);
+    expect(g.kind).toBe('fastball');
+    onThrow(g, cfg, 0, mouseThrow(), 'right', false, aimAt(0, cfg.zoneCentreY));
+    expect(g.phase).toBe('flight');
+    expect(canPick(g)).toBe(false);
+    expect(pickKind(g, 'curve')).toBe(false);
+    expect(g.kind).toBe('fastball');
+  });
+
+  it('camera games never accept the buttons', () => {
+    const g = mk();
+    expect(canPick(g)).toBe(false);
+    expect(pickKind(g, 'curve')).toBe(false);
+  });
+
+  it('a release throws the selected pitch at the ring, and the called pitch earns the bonus', () => {
+    const results: Record<string, number> = {};
+    for (const pick of ['matching', 'other'] as const) {
+      const g = mouseGame();
+      toCall(g);
+      const other = g.called === 'curve' ? 'fastball' : 'curve';
+      pickKind(g, pick === 'matching' ? g.called : other);
+      toWindup(g);
+      const spot = { x: 0.05, y: cfg.zoneCentreY };
+      expect(onThrow(g, cfg, 0, mouseThrow(), 'right', false, aimAt(spot.x, spot.y))).toBe('taken');
+      expect(g.aim.x).toBeCloseTo(spot.x, 9);
+      expect(g.aim.y).toBeCloseTo(spot.y, 9);
+      expect(g.score.matched).toBe(pick === 'matching');
+      results[pick] = g.score.points;
+    }
+    expect(results['matching']).toBeGreaterThan(results['other']!);
   });
 });

@@ -94,6 +94,29 @@ export class LiveAim {
   }
 
   /**
+   * Mouse play: the indicator is exactly the pointed spot (scored plane, m), unsmoothed and with no
+   * zone assist, so the ring sits where the cursor is and the pitch lands there.
+   */
+  setDirect(t: number, x: number, y: number): void {
+    const a = this.aim;
+    a.rawX = x;
+    a.rawY = y;
+    a.x = x;
+    a.y = y;
+    this.lastT = t;
+    this.valid = true;
+    const h = this.head;
+    this.ringT[h] = t;
+    this.ringSpeed[h] = 99;
+    this.ringRawX[h] = x;
+    this.ringRawY[h] = y;
+    this.ringX[h] = x;
+    this.ringY[h] = y;
+    this.head = (h + 1) % RING;
+    if (this.count < RING) this.count++;
+  }
+
+  /**
    * The aim the indicator showed when the arm was fastest within [t0, t1]. A release event is
    * stamped with the position-time of the peak while its velocity is read a few frames later, so
    * the release is matched to the fastest sample around it. False when no sample is in the window.
@@ -143,7 +166,7 @@ export class LiveAim {
    * The aim for a release event stamped `t`: sideways is what the indicator showed at `t` (the
    * position-time of the peak), height is what it showed when the arm was fastest around it (the
    * event's velocity is read a few frames after its timestamp). Both are values the indicator
-   * showed. Keyboard and mouse have no such lag: pass `peak = false`.
+   * showed. The mouse has no such lag: pass `peak = false`.
    */
   forRelease(t: number, peak: boolean, out: Aim): boolean {
     if (!this.at(t, out)) return false;

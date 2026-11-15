@@ -54,7 +54,7 @@ export const pitchingConfig = {
    */
   proxyLow: -0.45,
   proxyHigh: 0.36,
-  /** Keyboard-and-mouse throws report vy / speed in 0 to 1 (mouse centre about 0.57). */
+  /** Mouse throws report vy / speed in 0 to 1 (mouse centre about 0.57). */
   debugProxyLow: 0.1,
   debugProxyHigh: 1,
   /** Height range around the zone centre, m. */
@@ -75,9 +75,13 @@ export const pitchingConfig = {
   aimSmoothMs: 160,
   /** At or above this fraction of minThrowSpeed the indicator is not smoothed at all. */
   aimFastFraction: 0.4,
-  /** Keyboard and mouse: lateral of a mouse at screen centre, and sw per window width. */
-  debugNeutralLateral: 0.62,
-  debugMouseLateral: 4,
+  // Mouse play: no sign step and no power; a fixed good speed per pitch type.
+  /** How long after the call appears a pitch can be thrown, ms (the buttons work from the call). */
+  mouseReactMs: 700,
+  /** Wrist speed standing in for the throw, sw/s (about 105 km/h as a fastball). */
+  mouseFastballSpeed: 7.5,
+  /** The curveball is also slowed by curveSpeedFactor (about 80 km/h). */
+  mouseCurveSpeed: 7,
   /** The scored location is pulled this fraction of the way toward the lit cell's centre. */
   assist: 0.35,
 
@@ -157,6 +161,9 @@ export const pitchingRanges: Record<string, TunableRange> = {
   firstPitchExtraMs: { min: 0, max: 4000, step: 100 },
   shortGapScale: { min: 0.05, max: 1, step: 0.05 },
   curveShare: { min: 0, max: 1, step: 0.05 },
+  mouseReactMs: { min: 0, max: 3000, step: 50 },
+  mouseFastballSpeed: { min: 2.5, max: 12, step: 0.1 },
+  mouseCurveSpeed: { min: 2.5, max: 12, step: 0.1 },
   signHoldMs: { min: 200, max: 2000, step: 50 },
   signFallbackMs: { min: 1000, max: 10000, step: 100 },
   throwLockoutMs: { min: 0, max: 1500, step: 50 },
