@@ -61,9 +61,20 @@ export function createUi(root: HTMLElement, options: UiOptions = {}): Ui {
   let offHandler: (() => void) | null = null;
   let quitHandler: (() => void) | null = null;
   let howToPlayHandler: ((open: boolean) => void) | null = null;
+  let onHandler: (() => void) | null = null;
+  let onAvailable = false;
+  /** The pause overlay is showing (the round is paused for a frame problem). */
+  let pauseShown = false;
   let overlay: HowToOverlay | null = null;
   let playButtons: HTMLElement[] = [];
   const camera = new CameraIndicator(() => offHandler?.());
+  const cameraOn = h('button', 'camera-on btn btn-small btn-secondary', 'Turn camera on');
+  cameraOn.type = 'button';
+  cameraOn.setAttribute('data-ui', '');
+  cameraOn.hidden = true;
+  cameraOn.addEventListener('click', () => onHandler?.());
+  if (options.debug === true) cameraOn.classList.add('with-tunables');
+  container.append(cameraOn);
   container.append(camera.el);
   const pause = createPause(container);
   const layer = h('div', 'screen-layer');
@@ -127,6 +138,7 @@ export function createUi(root: HTMLElement, options: UiOptions = {}): Ui {
     current = null;
     s.dispose?.();
     s.el.remove();
+    cameraOn.hidden = true;
     mirror.setMode('hidden');
     mirror.setGuide(null);
     container.append(mirror.el);
@@ -152,8 +164,23 @@ export function createUi(root: HTMLElement, options: UiOptions = {}): Ui {
     camera.setVisible(own || (current !== null && camera.isActive));
   }
 
+  const LOBBY = ['screen-title', 'screen-menu', 'screen-howto', 'screen-results'];
+
+  /** "Turn camera on" shows in mouse mode on the lobby screens only, never during a round. */
+  function syncCameraOn(): void {
+    let lobby = false;
+    if (current) for (const c of LOBBY) if (current.el.classList.contains(c)) lobby = true;
+    cameraOn.hidden = !(onAvailable && lobby);
+  }
+
+  /** The hand cursor is off while a round is actually being played. */
+  function playActive(): boolean {
+    return current?.revealNear === true && overlay === null && !pauseShown;
+  }
+
   function mount(spec: ScreenSpec): void {
     unmount();
+    pauseShown = false;
     pause.show(null);
     current = spec;
     layer.append(spec.el);
@@ -162,6 +189,7 @@ export function createUi(root: HTMLElement, options: UiOptions = {}): Ui {
     // to switch the camera off by dwelling on it.
     buttons = Array.from(spec.el.querySelectorAll<HTMLElement>('[data-select]'));
     syncCamera();
+    syncCameraOn();
     cursor.setRevealNear(spec.revealNear === true);
     cursor.setButtons(spec.noCursor ? [] : (spec.cursorButtons ?? buttons));
     refreshTimer = setTimeout(() => cursor.refresh(), REFRESH_AFTER_ENTRANCE_MS);
@@ -241,6 +269,7 @@ export function createUi(root: HTMLElement, options: UiOptions = {}): Ui {
       // Mouse: the cursor is the real pointer, not a mapped hand.
       const pointer = input !== null && input.source === null;
       cursor.setPointerMode(pointer);
+      cursor.setSuspended(playActive());
       hud.setPointerMode(pointer);
       const kind = input?.source?.kind;
       const botLike = kind === 'synthetic' || kind === 'replay';
@@ -334,6 +363,7 @@ export function createUi(root: HTMLElement, options: UiOptions = {}): Ui {
     },
 
     showPause(problem: FrameProblem | null): void {
+      pauseShown = problem !== null && problem !== 'none';
       pause.show(problem);
     },
 
@@ -355,6 +385,15 @@ export function createUi(root: HTMLElement, options: UiOptions = {}): Ui {
 
     onHowToPlay(handler: (open: boolean) => void): void {
       howToPlayHandler = handler;
+    },
+
+    setCameraOnAvailable(available: boolean): void {
+      onAvailable = available;
+      syncCameraOn();
+    },
+
+    onCameraOn(handler: () => void): void {
+      onHandler = handler;
     },
 
     setCameraActive(active: boolean): void {

@@ -1659,3 +1659,26 @@
 .loading-back {
   align-self: center;
 }
+
+/* ---------- turn camera on (mouse mode, lobby screens) ---------- */
+
+.camera-on {
+  position: absolute;
+  top: calc(12 * var(--u));
+  right: calc(12 * var(--u));
+  z-index: 40;
+  min-height: calc(40 * var(--u));
+  padding: 0 calc(16 * var(--u));
+  font-size: calc(18 * var(--u));
+  white-space: nowrap;
+  pointer-events: auto;
+}
+
+.camera-on[hidden] {
+  display: none;
+}
+
+/* The tunables panel (?debug=1) owns the top right corner. */
+.camera-on.with-tunables {
+  right: calc(352 * var(--u));
+}

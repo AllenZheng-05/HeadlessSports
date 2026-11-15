@@ -427,20 +427,39 @@ test('the Quit button still works while the overlay is closed', async ({ page })
   await expect.poll(() => resolved(page)).toBe('quit');
 });
 
-test('the hand cursor reaches How to play by holding over it', async ({ page }) => {
+test('hand cursor: dead during active play, back when paused', async ({ page }) => {
   await page.goto('/ui-harness.html?screen=playing&sport=bowling&hand=1');
   await page.waitForTimeout(300);
   const control = page.getByRole('button', { name: /How to play/ });
   const box = (await control.boundingBox()) as Box;
   const cx = box.x + box.width / 2;
   const cy = box.y + box.height / 2;
-  // away from the control the mitt stays hidden during play
+  const cursor = page.locator('.hand-cursor');
+
+  // Active play: a hand held over the button for well past the dwell time does nothing.
   await page.mouse.move(400, 400);
   await page.waitForTimeout(1500);
-  await expect(page.locator('.hand-cursor')).toBeHidden();
+  await page.mouse.move(cx, cy);
+  await page.waitForTimeout(2800);
+  await expect(cursor).toBeHidden();
+  await expect(control).not.toHaveClass(/hovered/);
+  await expect(page.locator('.howto-overlay')).toBeHidden();
+  expect(await isPaused(page)).toBe(false);
+
+  // The real mouse still works on the same button.
+  await page.mouse.move(400, 400);
+  await page.waitForTimeout(200);
+
+  // Paused (the out-of-frame pause): the cursor is back and a hold activates the button.
+  await page.evaluate(() =>
+    (
+      window as unknown as { __ui: { ui: { showPause(p: string | null): void } } }
+    ).__ui.ui.showPause('lost'),
+  );
+  await page.waitForTimeout(1500);
   await page.mouse.move(cx, cy);
   await page.waitForTimeout(500);
-  await expect(page.locator('.hand-cursor')).toBeVisible();
+  await expect(cursor).toBeVisible();
   expect(await isPaused(page)).toBe(false);
   await page.waitForTimeout(1200);
   await expect(page.locator('.howto-overlay')).toBeVisible();
@@ -451,6 +470,68 @@ test('the hand cursor reaches How to play by holding over it', async ({ page }) 
   await page.waitForTimeout(1500);
   await page.mouse.move(resume.x + resume.width / 2, resume.y + resume.height / 2);
   await expect.poll(() => isPaused(page), { timeout: 4000 }).toBe(false);
+});
+
+test('hand cursor: the real mouse and H still work on in-round buttons', async ({ page }) => {
+  await page.goto('/ui-harness.html?screen=playing&sport=bowling&hand=1');
+  await page.waitForTimeout(300);
+  await page.keyboard.press('h');
+  await expect(page.locator('.howto-overlay')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.howto-overlay')).toBeHidden();
+  await page.getByRole('button', { name: /How to play/ }).click();
+  await expect(page.locator('.howto-overlay')).toBeVisible();
+});
+
+test('Turn camera on: shown in mouse mode on lobby screens, clear of other controls', async ({
+  page,
+}) => {
+  const problems = watchErrors(page);
+  for (const screen of ['title', 'menu', 'howto&sport=bowling', 'results&sport=4']) {
+    await page.goto(`/ui-harness.html?screen=${screen}&input=debug`);
+    await page.waitForTimeout(700);
+    const button = page.getByRole('button', { name: 'Turn camera on' });
+    await expect(button).toBeVisible();
+    await page.screenshot({ path: `e2e-ui/screenshots/camera-on-${screen.split('&')[0]}.png` });
+    const b = (await button.boundingBox()) as Box;
+    expect(b.x + b.width).toBeLessThanOrEqual(1280);
+    expect(b.y).toBeGreaterThanOrEqual(0);
+    expect(b.x).toBeGreaterThan(640);
+    expect(b.y + b.height).toBeLessThan(120);
+    for (const sel of ['.card', '.menu-notice']) {
+      for (const other of await page.locator(sel).all()) {
+        const o = await other.boundingBox();
+        // Cards have large rounded corners: ignore the outermost 24 px of the box.
+        if (o !== null) {
+          const inner = { x: o.x + 24, y: o.y + 24, width: o.width - 48, height: o.height - 48 };
+          expect(overlaps(b, inner)).toBe(false);
+        }
+      }
+    }
+  }
+  expect(problems).toEqual([]);
+});
+
+test('Turn camera on: works by mouse and keyboard, is not a game press, hidden in play', async ({
+  page,
+}) => {
+  await page.goto('/ui-harness.html?screen=menu&input=debug');
+  const button = page.getByRole('button', { name: 'Turn camera on' });
+  await button.click();
+  await expect.poll(() => resolved(page)).toBe('camera-on');
+  await page.goto('/ui-harness.html?screen=title&input=debug');
+  await button.focus();
+  await expect(button).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect.poll(() => resolved(page)).toBe('camera-on');
+  await page.goto('/ui-harness.html?screen=playing&sport=bowling&input=debug');
+  await expect(button).toBeHidden();
+});
+
+test('Turn camera on: absent in camera mode', async ({ page }) => {
+  await page.goto('/ui-harness.html?screen=menu&cam=1');
+  await page.waitForTimeout(400);
+  await expect(page.getByRole('button', { name: 'Turn camera on' })).toBeHidden();
 });
 
 test('the calibration outline changes pose with the step', async ({ page }) => {

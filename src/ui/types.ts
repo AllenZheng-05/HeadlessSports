@@ -140,6 +140,14 @@ export interface Ui {
    */
   onHowToPlay(handler: (open: boolean) => void): void;
 
+  /**
+   * The player is in camera-off (mouse) mode and can go back to the camera: shows a "Turn camera
+   * on" button in the top right of the lobby screens (title, menu, how-to, results).
+   */
+  setCameraOnAvailable(available: boolean): void;
+  /** The "Turn camera on" button was used. */
+  onCameraOn(handler: () => void): void;
+
   /** Camera-on indicator state. */
   setCameraActive(active: boolean): void;
 

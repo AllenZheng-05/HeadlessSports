@@ -374,3 +374,75 @@ describe('HandCursor reveal-near mode', () => {
     host.remove();
   });
 });
+
+describe('HandCursor suspended (active play)', () => {
+  function setup() {
+    const host = document.createElement('div');
+    document.body.append(host);
+    const button = document.createElement('button');
+    host.append(button);
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+    button.getBoundingClientRect = () =>
+      ({ left: w / 2 - 100, top: h / 2 - 40, width: 200, height: 80 }) as DOMRect;
+    const cursor = new HandCursor(host);
+    cursor.setButtons([button]);
+    const click = vi.fn();
+    button.addEventListener('click', click);
+    return { host, button, cursor, click, input: createFakeInput('hands') };
+  }
+
+  it('hides, never hovers and never activates while suspended, however long the hold', () => {
+    const { host, button, cursor, click, input } = setup();
+    cursor.setSuspended(true);
+    input.setMouse(0.05, 0.05, false);
+    let t = 0;
+    for (; t < SCREEN_GUARD_MS; t += 16) cursor.update(input.state, 0.016, t);
+    input.setMouse(0.5, 0.5, false);
+    for (const end = t + 3 * DWELL_MS; t < end; t += 16) cursor.update(input.state, 0.016, t);
+    expect(cursor.el.hidden).toBe(true);
+    expect(button.classList.contains('hovered')).toBe(false);
+    expect(click).not.toHaveBeenCalled();
+    cursor.dispose();
+    host.remove();
+  });
+
+  it('a hand resting on a button when play ends does not select it at once', () => {
+    const { host, button, cursor, click, input } = setup();
+    cursor.setSuspended(true);
+    input.setMouse(0.5, 0.5, false);
+    let t = 0;
+    for (; t < 2000; t += 16) cursor.update(input.state, 0.016, t);
+    cursor.setSuspended(false);
+    for (const end = t + 3 * DWELL_MS; t < end; t += 16) cursor.update(input.state, 0.016, t);
+    expect(click).not.toHaveBeenCalled();
+    // after moving off and back on it works again
+    input.setMouse(0.05, 0.05, false);
+    for (const end = t + 200; t < end; t += 16) cursor.update(input.state, 0.016, t);
+    input.setMouse(0.5, 0.5, false);
+    for (const end = t + DWELL_MS + 400; t < end; t += 16) cursor.update(input.state, 0.016, t);
+    expect(click).toHaveBeenCalledTimes(1);
+    expect(button.classList.contains('hovered')).toBe(false);
+    cursor.dispose();
+    host.remove();
+  });
+
+  it('does not change pointer (mouse) mode', () => {
+    const host = document.createElement('div');
+    document.body.append(host);
+    const button = document.createElement('button');
+    host.append(button);
+    button.getBoundingClientRect = () =>
+      ({ left: 100, top: 100, width: 200, height: 80 }) as DOMRect;
+    const cursor = new HandCursor(host);
+    cursor.setButtons([button]);
+    cursor.setPointerMode(true);
+    cursor.setSuspended(true);
+    window.dispatchEvent(new MouseEvent('pointermove', { clientX: 150, clientY: 120 }));
+    cursor.update(createFakeInput('pose', 'debug').state, 0.016, 0);
+    expect(cursor.el.hidden).toBe(false);
+    expect(cursor.el.style.left).toBe('150px');
+    cursor.dispose();
+    host.remove();
+  });
+});

@@ -75,3 +75,14 @@ export function parseFlags(search: string | URLSearchParams): Flags {
     hand: handRaw === 'left' || handRaw === 'right' ? handRaw : null,
   };
 }
+
+/**
+ * The query string for "Turn camera on": the same flags, minus the camera-off choice
+ * (`input=debug`). Returns '' or a string starting with '?'.
+ */
+export function cameraOnSearch(search: string): string {
+  const params = new URLSearchParams(search);
+  params.delete('input');
+  const rest = params.toString();
+  return rest === '' ? '' : `?${rest}`;
+}

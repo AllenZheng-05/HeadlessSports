@@ -46,6 +46,8 @@ function fakeUi(): Ui & { howTo: (open: boolean) => void } {
     showPause: vi.fn(),
     onQuit: noop,
     onCameraOff: noop,
+    onCameraOn: noop,
+    setCameraOnAvailable: noop,
     setCameraActive: noop,
   } as unknown as Ui & { howTo: (open: boolean) => void };
 }

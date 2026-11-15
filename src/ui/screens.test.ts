@@ -676,3 +676,73 @@ describe('detectBrowser', () => {
     expect(detectBrowser('curl/8')).toBe('other');
   });
 });
+
+describe('turn camera on', () => {
+  const shown = (): boolean => {
+    const b = root.querySelector<HTMLElement>('.camera-on');
+    return b !== null && !b.hidden;
+  };
+
+  it('shows on lobby screens in mouse mode, not during play, calibration or loading', () => {
+    const on = vi.fn();
+    ui.onCameraOn(on);
+    void ui.showTitle();
+    expect(shown()).toBe(false);
+    ui.setCameraOnAvailable(true);
+    expect(shown()).toBe(true);
+    expect(root.querySelector('.camera-on')?.textContent).toBe('Turn camera on');
+    expect(root.querySelector('.camera-on')?.hasAttribute('data-ui')).toBe(true);
+    click('.camera-on');
+    expect(on).toHaveBeenCalledTimes(1);
+    void ui.showMenu(FAKE_SPORTS, FAKE_BESTS);
+    expect(shown()).toBe(true);
+    void ui.showHowTo(bowling, true);
+    expect(shown()).toBe(true);
+    void ui.showResults(bowling, FAKE_RESULT, { isBest: false, best: 1 });
+    expect(shown()).toBe(true);
+    ui.showPlaying(bowling);
+    expect(shown()).toBe(false);
+    ui.showCalibration(bowling);
+    expect(shown()).toBe(false);
+    ui.showLoading('Loading');
+    expect(shown()).toBe(false);
+    void ui.showMenu(FAKE_SPORTS, FAKE_BESTS);
+    expect(shown()).toBe(true);
+    ui.setCameraOnAvailable(false);
+    expect(shown()).toBe(false);
+  });
+
+  it('is never shown in camera mode', () => {
+    void ui.showMenu(FAKE_SPORTS, FAKE_BESTS);
+    expect(shown()).toBe(false);
+  });
+});
+
+describe('hand cursor during play (camera mode)', () => {
+  it('is off during active play, back for the pause overlay and the how-to overlay', () => {
+    const input = createFakeInput('hands');
+    // the stand-in rects are all at (0,0): a hand at the top left is "over" the controls
+    input.setMouse(0, 0, false);
+    ui.setInput(input);
+    ui.showPlaying(bowling);
+    const cursorEl = (): HTMLElement => root.querySelector('.hand-cursor') as HTMLElement;
+    let t = 0;
+    const run = (ms: number): void => {
+      for (const end = t + ms; t < end; t += 16) ui.update(0.016, t);
+    };
+    run(600);
+    expect(cursorEl().hidden).toBe(true);
+    ui.showPause('lost');
+    run(300);
+    expect(cursorEl().hidden).toBe(false);
+    ui.showPause(null);
+    run(100);
+    expect(cursorEl().hidden).toBe(true);
+    click('.howto-open');
+    run(300);
+    expect(cursorEl().hidden).toBe(false);
+    click('.howto-overlay .btn-big');
+    run(100);
+    expect(cursorEl().hidden).toBe(true);
+  });
+});

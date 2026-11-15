@@ -53,6 +53,12 @@ ui.onHowToPlay((open) => {
 });
 window.__ui = hub;
 
+// ?mouseonly=1 (or ?input=debug): the "Turn camera on" button is on offer.
+ui.onCameraOn(() => {
+  hub.resolved = 'camera-on';
+});
+if (params.get('input') === 'debug' || params.has('mouseonly')) ui.setCameraOnAvailable(true);
+
 const handParam = params.get('hand');
 // ?input=debug: no landmark source, like mouse play.
 const debugInput = params.get('input') === 'debug';

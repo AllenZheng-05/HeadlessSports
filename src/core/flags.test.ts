@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseFlags } from './flags';
+import { cameraOnSearch, parseFlags } from './flags';
 
 describe('parseFlags', () => {
   it('has sensible defaults', () => {
@@ -75,5 +75,14 @@ describe('parseFlags', () => {
   it('forces timeScale to 1 for the camera', () => {
     expect(parseFlags('timeScale=8').timeScale).toBe(1);
     expect(parseFlags('source=camera&timeScale=8').timeScale).toBe(1);
+  });
+});
+
+describe('cameraOnSearch', () => {
+  it('drops the camera-off choice and keeps every other flag', () => {
+    expect(cameraOnSearch('?input=debug&sport=bowling&hand=left')).toBe('?sport=bowling&hand=left');
+    expect(cameraOnSearch('?input=debug')).toBe('');
+    expect(cameraOnSearch('')).toBe('');
+    expect(cameraOnSearch('?debug=1')).toBe('?debug=1');
   });
 });

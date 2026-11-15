@@ -209,6 +209,8 @@ export class HandCursor {
   private rects = new Float32Array(0);
   private count = 0;
   private enabled = true;
+  /** Active play: the hand cursor is off (camera mode only; the mouse pointer is unaffected). */
+  private suspended = false;
   private shown = false;
   private closed = false;
   private hovered = -1;
@@ -340,6 +342,24 @@ export class HandCursor {
     if (!enabled) this.hide();
   }
 
+  /**
+   * Switch the hand cursor off while a round is being played, so a hand that wanders over a
+   * button cannot press it. Pointer mode (mouse) ignores this. Coming back starts a fresh
+   * screen guard so a hand resting on a button cannot select it at once.
+   */
+  setSuspended(on: boolean): void {
+    if (on === this.suspended) return;
+    this.suspended = on;
+    if (on) this.hide();
+    this.dwell.reset();
+    this.screenSince = -1;
+    this.seenOutside = false;
+  }
+
+  get isSuspended(): boolean {
+    return this.suspended;
+  }
+
   private clearHover(): void {
     if (this.hovered >= 0)
       (this.buttons[this.hovered] as HTMLElement | undefined)?.classList.remove('hovered');
@@ -375,7 +395,7 @@ export class HandCursor {
       this.updatePointer();
       return;
     }
-    if (!this.enabled || !state || this.count === 0) {
+    if (this.suspended || !this.enabled || !state || this.count === 0) {
       this.hide();
       return;
     }

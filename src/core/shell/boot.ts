@@ -14,7 +14,7 @@ import {
   defaultCalibration,
   measureBrightness,
 } from '../calibration/CalibrationSession';
-import { parseFlags } from '../flags';
+import { cameraOnSearch, parseFlags } from '../flags';
 import type { Flags } from '../flags';
 import { gateVerdict } from '../gate/evaluate';
 import { runGate } from '../gate/runGate';
@@ -147,6 +147,9 @@ class Shell {
       loop: this.loop,
     });
     this.ui.onCameraOff(() => this.onCameraOff());
+    this.ui.onCameraOn(() => this.onCameraOn());
+    // The title shows before any input is attached: mouse mode is already known from the flag.
+    this.ui.setCameraOnAvailable(flags.input === 'debug');
     this.renderer = renderer;
     this.loop.start();
 
@@ -246,6 +249,18 @@ class Shell {
     this.hook.inputKind = kind;
     if (kind !== 'debug' && this.hook.debugInput !== null) this.hook.debugInput = null;
     this.ui.setCameraActive(kind === 'camera');
+    this.ui.setCameraOnAvailable(kind === 'debug');
+  }
+
+  /**
+   * "Turn camera on": reload at the same address without the camera-off choice, so the normal
+   * flow runs (title, camera intro, permission, gate, menu). A reload is used instead of swapping
+   * the input in place because the menu, how-to and results chains are all awaiting UI promises
+   * bound to the current input, and a full restart is the one path already proven end to end.
+   * If permission is denied the camera error screen offers mouse play again.
+   */
+  private onCameraOn(): void {
+    location.assign(`${location.pathname}${cameraOnSearch(location.search)}${location.hash}`);
   }
 
   /** The one-click camera-off control: stop tracking, mouse play from here, back to the menu. */
