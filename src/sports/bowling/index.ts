@@ -1,7 +1,9 @@
 import { mirrorUpperBody } from '../../core/avatarDrive';
 import type { Sport, SportBot, SportContext, SportFactory } from '../../core/sport';
 import { AvatarAnimator } from '../../render/avatar/AvatarAnimator';
+import { asMouseControl } from '../../input/debug/mouseControl';
 import { createBowlingBot } from './bot';
+import { pointerAimAngle } from './mouseAim';
 import { bowlingConfig, bowlingRanges } from './config';
 import { BowlingGame, rollBanner } from './game';
 import type { BowlPhase, RollOutcome } from './game';
@@ -66,6 +68,20 @@ export const createBowling: SportFactory = async (ctx: SportContext) => {
   let shownScore = -1;
   let shownSub = '';
   let launches = 0;
+
+  // Camera off: the mouse is the whole interface (see docs: one button, no keys).
+  const mouse = asMouseControl(ctx.input);
+  let seenPresses = 0;
+  let seenReleases = 0;
+  if (mouse) {
+    mouse.setManualMode(true);
+    mouse.setPointerFollow(false);
+    mouse.selectHand(hand);
+    // The arm hangs at the side; the cursor aims the arrows, it does not wave the arm about.
+    mouse.setHandTarget(hand, 0.5 + (hand === 'right' ? 1 : -1) * 0.06, 0.85);
+    seenPresses = mouse.pointerPresses;
+    seenReleases = mouse.pointerReleases;
+  }
 
   const setHandCrops = (on: boolean): void => {
     if (on === handCrops) return;
@@ -132,13 +148,22 @@ export const createBowling: SportFactory = async (ctx: SportContext) => {
       case 'pickup':
         setHandCrops(true);
         view.placeBall(rack.x, rack.y, rack.z);
-        ctx.hud.setHint(null);
-        ctx.hud.setBanner('Close your fist to pick up the ball', 4000);
+        if (mouse) {
+          ctx.hud.setBanner(null);
+          ctx.hud.setHint('Move the mouse to aim the arrows. Hold the button, let go to bowl');
+        } else {
+          ctx.hud.setHint(null);
+          ctx.hud.setBanner('Close your fist to pick up the ball', 4000);
+        }
         refreshSub();
         break;
       case 'aim':
         ctx.hud.setBanner(null);
-        ctx.hud.setHint('Step or move your hand to line up the arrows, then swing');
+        ctx.hud.setHint(
+          mouse
+            ? 'Let go of the button to bowl'
+            : 'Step or move your hand to line up the arrows, then swing',
+        );
         break;
       case 'rolling':
         ctx.hud.setHint(null);
@@ -179,6 +204,8 @@ export const createBowling: SportFactory = async (ctx: SportContext) => {
         ctx.audio.play('whoosh', { pitch: 0.8 + 0.5 * release.power });
         ctx.hud.setMeter('power', release.power, `${release.ballSpeed.toFixed(1)} m/s`, 'good');
         meterLeft = cfg.powerMeterS;
+        // Ends the input's wind-up so the arm swings through and the next press can start one.
+        mouse?.releaseThrow(1, { lateral: 0, curvature: 0 });
       },
       pinsDown: (count) => {
         if (count > 0) ctx.hud.setHint(count === 1 ? '1 pin down' : `${count} pins down`);
@@ -212,22 +239,25 @@ export const createBowling: SportFactory = async (ctx: SportContext) => {
     {
       hand,
       frames,
-      aimBias: ctx.input.source === null ? (hand === 'right' ? 1 : -1) * cfg.neutralLateral : 0,
+      mouse: mouse !== null,
     },
   );
 
-  const unsubscribers = [
-    ctx.input.on('FistClosed', (e) => {
-      if (!ctx.paused) game.onFistClosed(e.hand);
-    }),
-    ctx.input.on('ThrowWindup', (e) => {
-      if (!ctx.paused) game.onWindup(e.hand);
-    }),
-    ctx.input.on('ThrowReleased', (e) => {
-      // Gestures made while the round is paused (player out of frame) do not count.
-      if (!ctx.paused) game.onThrow(e);
-    }),
-  ];
+  // Mouse play has no gestures: presses and releases are polled in fixedUpdate instead.
+  const unsubscribers = mouse
+    ? []
+    : [
+        ctx.input.on('FistClosed', (e) => {
+          if (!ctx.paused) game.onFistClosed(e.hand);
+        }),
+        ctx.input.on('ThrowWindup', (e) => {
+          if (!ctx.paused) game.onWindup(e.hand);
+        }),
+        ctx.input.on('ThrowReleased', (e) => {
+          // Gestures made while the round is paused (player out of frame) do not count.
+          if (!ctx.paused) game.onThrow(e);
+        }),
+      ];
 
   const botView = {
     get phase(): BowlPhase {
@@ -248,6 +278,19 @@ export const createBowling: SportFactory = async (ctx: SportContext) => {
 
     fixedUpdate(dt: number): void {
       if (finished) return;
+      if (mouse) {
+        // Counters, not button state: a button held through the reset does not bowl the next ball.
+        const presses = mouse.pointerPresses;
+        const releases = mouse.pointerReleases;
+        if (presses !== seenPresses) {
+          seenPresses = presses;
+          if (!ctx.paused && game.mousePress()) mouse.startWindup(hand, 'underarm');
+        }
+        if (releases !== seenReleases) {
+          seenReleases = releases;
+          game.mouseRelease();
+        }
+      }
       game.fixedUpdate(dt, ctx.input.state);
     },
 
@@ -266,7 +309,6 @@ export const createBowling: SportFactory = async (ctx: SportContext) => {
       }
       view.drawPins(physics, alpha);
       view.followBallShadow();
-      view.setAim(phase === 'aim', game.bowlerX, game.aimAngle);
       view.updateCamera(
         dt,
         CAMERA_FOR[phase],
@@ -276,12 +318,20 @@ export const createBowling: SportFactory = async (ctx: SportContext) => {
         cfg.cameraHeight,
         cfg.cameraBack,
       );
+      const aiming = phase === 'aim' || (mouse !== null && phase === 'pickup');
+      if (mouse && aiming) {
+        game.setMouseAim(
+          pointerAimAngle(ctx.stage.camera, mouse.pointerX, mouse.pointerY, game.bowlerX, cfg),
+        );
+      }
+      view.setAim(aiming, game.bowlerX, game.aimAngle);
 
       if (meterLeft > 0) {
         meterLeft -= dt;
         if (meterLeft <= 0) ctx.hud.setMeter('power', null);
       }
       if (
+        !mouse &&
         phase === 'pickup' &&
         !hintedFist &&
         game.phaseTime * 1000 > cfg.fistHintMs &&
@@ -298,6 +348,10 @@ export const createBowling: SportFactory = async (ctx: SportContext) => {
 
     dispose(): void {
       for (const off of unsubscribers) off();
+      if (mouse) {
+        mouse.setPointerFollow(true);
+        mouse.setManualMode(false);
+      }
       unregister();
       animator.stop();
       ctx.avatar.root.position.x = 0;

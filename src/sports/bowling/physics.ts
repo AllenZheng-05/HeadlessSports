@@ -27,6 +27,11 @@ export interface BowlingPhysics {
   pinsAtRest(): boolean;
   /** Pins that are present and upright. */
   standingCount(): number;
+  /**
+   * The roll is scored: freeze which pins count as down. The next `rack(false)` removes exactly
+   * those and keeps (re-stands, if one has since toppled) exactly the rest.
+   */
+  commitRoll(): void;
   /** Ball speed at the first pin contact since launch; returned once, then 0. */
   takeContact(): number;
   /** The ball has touched the pins since launch. */
@@ -84,7 +89,12 @@ export class RapierBowling implements BowlingPhysics, BowlingBodies {
   private inPit = false;
   private contactSpeed = 0;
   private restNow = true;
+  private committed = false;
+  /** Damping mode per pin: 0 normal, 1 settling (standing, slow), 2 lying flat. */
+  private readonly mode = new Uint8Array(N);
+  private readonly lockedDown: boolean[] = new Array<boolean>(N).fill(false);
   private lastDt = 0;
+  private readonly flatLimit: number;
 
   ballActive = false;
   ballX = 0;
@@ -95,6 +105,7 @@ export class RapierBowling implements BowlingPhysics, BowlingBodies {
   constructor(R: RapierModule, cfg: BowlingConfig) {
     this.R = R;
     this.cfg = cfg;
+    this.flatLimit = Math.cos((cfg.flatTiltDeg * Math.PI) / 180);
     const world = new R.World({ x: 0, y: -9.81, z: 0 });
     this.world = world;
     world.timestep = 1 / 120;
@@ -200,12 +211,14 @@ export class RapierBowling implements BowlingPhysics, BowlingBodies {
       desc
         .setFriction(c.pinFriction)
         .setFrictionCombineRule(R.CoefficientCombineRule.Max)
+        .setRestitutionCombineRule(R.CoefficientCombineRule.Min)
         .setRestitution(c.pinRestitution)
         .setCollisionGroups(g);
       world.createCollider(desc, body);
     }
     this.pins[i] = body;
     this.pinPresent[i] = true;
+    this.mode[i] = 0;
     const o = i * 7;
     for (const arr of [this.pinPrev, this.pinCur]) {
       arr[o] = x;
@@ -230,10 +243,18 @@ export class RapierBowling implements BowlingPhysics, BowlingBodies {
       if (fresh) {
         this.removePin(i);
         this.addPin(i);
-      } else if (this.pinPresent[i] && this.pinDown(i)) {
-        this.removePin(i);
+      } else if (this.pinPresent[i]) {
+        // The score used the committed states, so the pins shown next follow them exactly.
+        const down = this.committed ? this.lockedDown[i] === true : this.pinDown(i);
+        if (down) this.removePin(i);
+        else if (this.committed && this.pinDown(i)) {
+          // Counted standing but toppled after the count: stand it back up.
+          this.removePin(i);
+          this.addPin(i);
+        }
       }
     }
+    this.committed = false;
     this.restNow = true;
   }
 
@@ -272,6 +293,7 @@ export class RapierBowling implements BowlingPhysics, BowlingBodies {
     this.contacted = false;
     this.contactSpeed = 0;
     this.restNow = false;
+    this.committed = false;
     this.ballX = x;
     this.ballY = r + 0.002;
     this.ballZ = LAYOUT.foulZ;
@@ -346,10 +368,7 @@ export class RapierBowling implements BowlingPhysics, BowlingBodies {
       }
     }
 
-    // Pins: read the awake ones, check contact and rest.
-    const slowL = this.cfg.pinSlowLinear * this.cfg.pinSlowLinear;
-    const slowA = this.cfg.pinSlowAngular * this.cfg.pinSlowAngular;
-    let rest = true;
+    // Pins: read the awake ones and check for first contact.
     for (let i = 0; i < N; i++) {
       const body = this.pins[i];
       if (body === null || body === undefined) continue;
@@ -368,6 +387,7 @@ export class RapierBowling implements BowlingPhysics, BowlingBodies {
       cur[o + 4] = this.q.y;
       cur[o + 5] = this.q.z;
       cur[o + 6] = this.q.w;
+      this.applyDamping(i, body);
       if (
         this.ballActive &&
         !this.contacted &&
@@ -377,15 +397,119 @@ export class RapierBowling implements BowlingPhysics, BowlingBodies {
         this.contacted = true;
         this.contactSpeed = Math.max(this.ballSpeedNow, 0.5);
       }
-      // A pin that is already down no longer changes the score, so it may roll on without
-      // holding up the verdict. A standing (or wobbling) pin must be still.
-      if (this.pinDown(i)) continue;
-      body.linvel(this.spare);
-      if (this.spare.x ** 2 + this.spare.y ** 2 + this.spare.z ** 2 > slowL) rest = false;
-      body.angvel(this.spare);
-      if (this.spare.x ** 2 + this.spare.y ** 2 + this.spare.z ** 2 > slowA) rest = false;
     }
-    this.restNow = rest;
+    this.restNow = this.computeRest();
+  }
+
+  /**
+   * A pin lying on its side stops quickly (a simulated cylinder would roll for ages). A standing
+   * pin that has slowed down gets "settle" damping: it stops rocking or rim-rolling on its base
+   * within a second, yet gravity still topples it if it is going to fall. A fresh hit lifts it.
+   */
+  private applyDamping(i: number, body: RapierTypes.RigidBody): void {
+    const c = this.cfg;
+    const qx = this.q.x;
+    const qz = this.q.z;
+    const up = 1 - 2 * (qx * qx + qz * qz);
+    const was = this.mode[i] as number;
+    if (was === 2) return;
+    let next = was;
+    if (up < this.flatLimit) next = 2;
+    else {
+      body.linvel(this.spare);
+      const lin = this.spare.x ** 2 + this.spare.y ** 2 + this.spare.z ** 2;
+      body.angvel(this.spare);
+      const ang = this.spare.x ** 2 + this.spare.y ** 2 + this.spare.z ** 2;
+      const s = c.settleEnterSpeed;
+      const e = s * 2;
+      if (was === 0) {
+        if (lin < s * s && ang < 25 * s * s) next = 1;
+      } else if (lin > e * e || ang > 25 * e * e) next = 0;
+    }
+    if (next === was) return;
+    this.mode[i] = next;
+    if (next === 2) {
+      body.setLinearDamping(c.flatLinearDamping);
+      body.setAngularDamping(c.flatAngularDamping);
+    } else if (next === 1) {
+      body.setLinearDamping(c.settleLinearDamping);
+      body.setAngularDamping(c.settleAngularDamping);
+    } else {
+      body.setLinearDamping(c.pinLinearDamping);
+      body.setAngularDamping(c.pinAngularDamping);
+    }
+  }
+
+  /**
+   * Nothing on the deck can still change the count: every standing pin is upright and still, no
+   * moving down pin or ball is close enough to reach a standing pin. A tilted or wobbling pin
+   * keeps the roll open until it falls or settles upright.
+   */
+  lastBlock = 0;
+  private blk(n: number): boolean {
+    this.lastBlock = n;
+    return false;
+  }
+  private computeRest(): boolean {
+    this.lastBlock = 0;
+    const c = this.cfg;
+    const slowL = c.pinSlowLinear * c.pinSlowLinear;
+    const slowA = c.pinSlowAngular * c.pinSlowAngular;
+    const tiltSlowL = c.wobbleSlowLinear * c.wobbleSlowLinear;
+    const tiltSlowA = c.wobbleSlowAngular * c.wobbleSlowAngular;
+    const wobbleLimit = Math.cos((c.wobbleTiltDeg * Math.PI) / 180);
+    const reach = c.reachDist * c.reachDist;
+    const reachSpeed = c.reachSpeed * c.reachSpeed;
+    const pc = this.pinCur;
+    let anyStanding = false;
+    for (let i = 0; i < N; i++) {
+      const body = this.pins[i];
+      if (body === null || body === undefined || this.pinDown(i)) continue;
+      anyStanding = true;
+      body.linvel(this.spare);
+      const lin = this.spare.x ** 2 + this.spare.y ** 2 + this.spare.z ** 2;
+      body.angvel(this.spare);
+      const ang = this.spare.x ** 2 + this.spare.y ** 2 + this.spare.z ** 2;
+      if (lin > slowL || ang > slowA) return this.blk(1);
+      const o = i * 7;
+      const qx = pc[o + 3] as number;
+      const qz = pc[o + 5] as number;
+      if (1 - 2 * (qx * qx + qz * qz) < wobbleLimit && (lin > tiltSlowL || ang > tiltSlowA)) {
+        return this.blk(2);
+      }
+    }
+    if (!anyStanding) return true;
+    // A down pin still moving toward a standing one.
+    for (let i = 0; i < N; i++) {
+      const body = this.pins[i];
+      if (body === null || body === undefined || !this.pinDown(i)) continue;
+      if (body.isSleeping()) continue;
+      body.linvel(this.spare);
+      if (this.spare.x ** 2 + this.spare.y ** 2 + this.spare.z ** 2 < reachSpeed) continue;
+      if (this.nearStanding(pc[i * 7] as number, pc[i * 7 + 2] as number, reach))
+        return this.blk(3);
+    }
+    // The ball still on the deck and moving.
+    if (
+      this.ball !== null &&
+      !this.inGutter &&
+      !this.inPit &&
+      this.ballSpeedNow * this.ballSpeedNow >= reachSpeed
+    ) {
+      if (this.nearStanding(this.ballX, this.ballZ, reach)) return this.blk(4);
+    }
+    return true;
+  }
+
+  private nearStanding(x: number, z: number, reach2: number): boolean {
+    const pc = this.pinCur;
+    for (let j = 0; j < N; j++) {
+      if (!this.pinPresent[j] || this.pinDown(j)) continue;
+      const dx = (pc[j * 7] as number) - x;
+      const dz = (pc[j * 7 + 2] as number) - z;
+      if (dx * dx + dz * dz < reach2) return true;
+    }
+    return false;
   }
 
   ballDone(): boolean {
@@ -415,6 +539,11 @@ export class RapierBowling implements BowlingPhysics, BowlingBodies {
     let n = 0;
     for (let i = 0; i < N; i++) if (this.pinPresent[i] && !this.pinDown(i)) n++;
     return n;
+  }
+
+  commitRoll(): void {
+    for (let i = 0; i < N; i++) this.lockedDown[i] = this.pinPresent[i] === true && this.pinDown(i);
+    this.committed = true;
   }
 
   takeContact(): number {

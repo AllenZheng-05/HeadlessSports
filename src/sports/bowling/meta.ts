@@ -14,13 +14,8 @@ export const meta: SportMeta = {
   score: { label: 'Score', unit: 'pts', decimals: 0, higherIsBetter: true },
   howTo: [
     'Close your fist to pick up the ball.',
-    'Step left or right to line up.',
+    'Step or move your hand to line up the arrows.',
     'Swing your arm back and forward, low, like a real bowler.',
   ],
-  debugKeys: [
-    'E / Q: close right / left fist (pick up)',
-    'Left / Right arrows: step sideways',
-    'B (hold, release): bowl, longer hold is faster',
-    'Mouse x: aim. Z / C: hook left / right',
-  ],
+  debugKeys: ['Move the mouse to aim the arrows', 'Hold the button to wind up, let go to bowl'],
 };

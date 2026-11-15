@@ -20,6 +20,8 @@ interface BowlingProbe {
   releases: number;
   aimAngle: number;
   lastAngle: number | null;
+  lastSpeed: number | null;
+  lastHook: number | null;
 }
 
 function watch(page: Page): string[] {
@@ -58,10 +60,11 @@ function probe(page: Page): Promise<BowlingProbe | null> {
       pinsDown: number;
       rolls: number[];
       contacted: boolean;
-      releases: { angle: number }[];
+      releases: { angle: number; ballSpeed: number; hook: number }[];
       aimAngle: number;
     } | null;
     if (!s) return null;
+    const last = s.releases.length > 0 ? s.releases[s.releases.length - 1] : undefined;
     return {
       phase: s.phase,
       ballZ: s.ballZ,
@@ -71,10 +74,9 @@ function probe(page: Page): Promise<BowlingProbe | null> {
       contacted: s.contacted,
       releases: s.releases.length,
       aimAngle: s.aimAngle,
-      lastAngle:
-        s.releases.length > 0
-          ? (s.releases[s.releases.length - 1] as { angle: number }).angle
-          : null,
+      lastAngle: last ? last.angle : null,
+      lastSpeed: last ? last.ballSpeed : null,
+      lastHook: last ? last.hook : null,
     };
   });
 }
@@ -114,50 +116,48 @@ test.describe('bowling', () => {
     expect(problems).toEqual([]);
   });
 
-  test('the keyboard and mouse can bowl a ball', async ({ page }) => {
+  test('the mouse can bowl a ball: aim, hold to wind up, let go', async ({ page }) => {
     const problems = watch(page);
     await page.goto('/?sport=bowling&input=debug&skipGate=1&short=1');
     await waitPhase(page, 'playing');
     await waitSport(page, (s) => s.phase === 'pickup');
-    interface Dbg {
-      press(c: string): void;
-      release(c: string): void;
-      moveTo(x: number, y: number): void;
-    }
-    const dbg = (fn: string, ...args: unknown[]): Promise<void> =>
-      page.evaluate(
-        ([name, a]) => {
-          const d = (window as unknown as { __game: { debugInput: Dbg } }).__game
-            .debugInput as unknown as Record<string, (...x: unknown[]) => void>;
-          (d[name as string] as (...x: unknown[]) => void)(...(a as unknown[]));
-        },
-        [fn, args] as const,
-      );
+    const vp = page.viewportSize() ?? { width: 1280, height: 720 };
+    const at = (fx: number): [number, number] => [vp.width * fx, vp.height * 0.6];
 
-    // Mouse at the centre is a natural straight throw (debugInputConfig.neutralLateral).
-    await dbg('moveTo', 0.5, 0.6);
-    await page.waitForTimeout(900);
-    await page.screenshot({ path: `${SHOTS}/bowling-pickup.png` });
-    await dbg('press', 'KeyE');
-    await dbg('release', 'KeyE');
-    await waitSport(page, (s) => s.phase === 'aim');
+    // Mouse at the centre aims straight, before any press.
+    await page.mouse.move(...at(0.5));
     await page.waitForTimeout(500);
-    await page.screenshot({ path: `${SHOTS}/bowling-aim.png` });
-    // Mouse at the centre aims straight; moving it right turns the live aim right.
+    await page.screenshot({ path: `${SHOTS}/bowling-pickup.png` });
     const straight = (await probe(page))?.aimAngle ?? 99;
-    expect(Math.abs(straight)).toBeLessThan(0.012);
-    await dbg('moveTo', 0.62, 0.6);
-    await page.waitForTimeout(900);
-    const turned = (await probe(page))?.aimAngle ?? 0;
-    expect(turned).toBeGreaterThan(straight + 0.008);
-    await dbg('press', 'KeyB');
-    await page.waitForTimeout(700);
+    expect(Math.abs(straight)).toBeLessThan(0.002);
+    // Moving the mouse turns the arrows toward it, both ways.
+    await page.mouse.move(...at(0.515));
+    await page.waitForTimeout(300);
+    const right = (await probe(page))?.aimAngle ?? 0;
+    expect(right).toBeGreaterThan(straight + 0.008);
+    await page.mouse.move(...at(0.485));
+    await page.waitForTimeout(300);
+    const left = (await probe(page))?.aimAngle ?? 0;
+    expect(left).toBeLessThan(straight - 0.008);
+
+    // Pressing puts the ball in the hand and starts the wind-up; the arrows keep following.
+    await page.mouse.move(...at(0.515));
+    await page.mouse.down();
+    await waitSport(page, (s) => s.phase === 'aim', 3000);
+    await page.waitForTimeout(400);
+    await page.screenshot({ path: `${SHOTS}/bowling-aim.png` });
+    await page.mouse.move(...at(0.505));
+    await page.waitForTimeout(300);
     const shown = (await probe(page))?.aimAngle ?? 99;
-    await dbg('release', 'KeyB');
+    expect(shown).toBeGreaterThan(0.002);
+    expect(shown).toBeLessThan(right);
+    await page.mouse.up();
     await waitSport(page, (s) => s.phase === 'rolling', 5000);
-    // The ball leaves on the aim the indicator was showing.
+    // The ball leaves on the aim the arrows were showing, at the fixed speed, with no hook.
     const launched = await probe(page);
     expect(launched?.lastAngle).toBeCloseTo(shown, 5);
+    expect(launched?.lastSpeed).toBeCloseTo(7.5, 3);
+    expect(launched?.lastHook).toBe(0);
     await waitSport(page, (s) => s.ballZ < -8);
     await page.screenshot({ path: `${SHOTS}/bowling-rolling.png` });
     await waitSport(page, (s) => s.contacted, 10000);
@@ -174,6 +174,42 @@ test.describe('bowling', () => {
       return cells[0]?.textContent ?? '';
     });
     expect(mark).not.toBe('');
+    expect(problems).toEqual([]);
+  });
+
+  test('the mouse plays a whole short game with taps and ignores presses mid-roll', async ({
+    page,
+  }) => {
+    const problems = watch(page);
+    await page.goto('/?sport=bowling&input=debug&skipGate=1&short=1');
+    await waitPhase(page, 'playing');
+    const vp = page.viewportSize() ?? { width: 1280, height: 720 };
+    const cx = vp.width * 0.5;
+    const cy = vp.height * 0.6;
+    await page.mouse.move(cx, cy);
+    let balls = 0;
+    for (let i = 0; i < 8; i++) {
+      await waitSport(page, (s) => s.phase === 'pickup' || s.phase === 'done', 60000);
+      if ((await probe(page))?.phase === 'done') break;
+      // A quick click: the ball still gets its back-swing, then goes.
+      await page.mouse.down();
+      await page.mouse.up();
+      balls++;
+      await waitSport(page, (s) => s.phase === 'rolling' || s.rolls.length >= balls, 5000);
+      // A click while the ball rolls does nothing: no extra ball, no stuck state.
+      await page.mouse.down();
+      await page.mouse.up();
+      await waitSport(page, (s) => s.rolls.length >= balls, 20000);
+      expect((await probe(page))?.releases).toBe(balls);
+    }
+    await waitPhase(page, 'results', 60000);
+    const g = await page.evaluate(() => {
+      const hook = (window as unknown as { __game: Game }).__game;
+      return { result: hook.result };
+    });
+    expect(g.result?.score ?? 0).toBeGreaterThan(0);
+    expect(g.result?.detail?.balls ?? 0).toBeGreaterThanOrEqual(2);
+    expect(g.result?.detail?.balls ?? 0).toBe(balls);
     expect(problems).toEqual([]);
   });
 

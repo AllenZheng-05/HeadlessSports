@@ -76,10 +76,11 @@ export interface GameOptions {
   hand: Side;
   frames: number;
   /**
-   * Added to the wrist lateral (sw). Keyboard and mouse input has no hanging arm: its hand sits
-   * on the body midline at screen centre, so it passes the neutral offset here.
+   * Mouse play: the press picks up the ball and starts the wind-up, the release throws at the
+   * fixed `mouseBallSpeed` with no hook, along the angle given to `setMouseAim`. Gestures
+   * (`onFistClosed`, `onWindup`, `onThrow`) and the hold-still pickup are off.
    */
-  aimBias?: number;
+  mouse?: boolean;
 }
 
 /**
@@ -115,7 +116,10 @@ export class BowlingGame {
   private finishedFired = false;
   private started = false;
   private latestView: PlayerView | null = null;
-  private readonly aimBias: number;
+  private readonly mouse: boolean;
+  private mouseAim = 0;
+  private windingUp = false;
+  private releasePending = false;
   private aimHoldLeft = 0;
 
   constructor(
@@ -130,13 +134,35 @@ export class BowlingGame {
     this.hand = options.hand;
     this.frames = options.frames;
     this.next = nextBall(this.rolls, this.frames);
-    this.aimBias = options.aimBias ?? 0;
+    this.mouse = options.mouse ?? false;
     this.aimLateral = sideSign(options.hand) * cfg.neutralLateral;
   }
 
   /** Launch angle the ball would take right now, radians, positive toward screen right. */
   get aimAngle(): number {
-    return aimAngleFor(this.aimLateral, this.hand, this.cfg);
+    return this.mouse ? this.mouseAim : aimAngleFor(this.aimLateral, this.hand, this.cfg);
+  }
+
+  /** Mouse play: the angle the arrows show (and the next throw takes), clamped to the max angle. */
+  setMouseAim(angle: number): void {
+    const m = this.cfg.maxAngle;
+    this.mouseAim = angle < -m ? -m : angle > m ? m : angle;
+  }
+
+  /**
+   * Mouse play: a press. In pickup it puts the ball in the hand and starts the wind-up; returns
+   * true then, so the caller can start the arm's back-swing. Any other phase ignores it.
+   */
+  mousePress(): boolean {
+    if (!this.mouse || this.phase !== 'pickup') return false;
+    this.pickUp();
+    this.windingUp = true;
+    return true;
+  }
+
+  /** Mouse play: the button came up. Throws once the minimum back-swing has played. */
+  mouseRelease(): void {
+    if (this.windingUp) this.releasePending = true;
   }
 
   get total(): number {
@@ -154,12 +180,14 @@ export class BowlingGame {
     this.phase = next;
     this.phaseTime = 0;
     this.holdMs = 0;
+    this.windingUp = false;
+    this.releasePending = false;
     this.events.phase?.(next, prev);
   }
 
   /** FistClosed from the input. */
   onFistClosed(hand: Side): void {
-    if (this.phase !== 'pickup' || hand !== this.hand) return;
+    if (this.mouse || this.phase !== 'pickup' || hand !== this.hand) return;
     this.pickUp();
   }
 
@@ -176,11 +204,24 @@ export class BowlingGame {
 
   /** ThrowReleased from the input. Returns true when it launched the ball. */
   onThrow(info: ThrowInfo): boolean {
-    if (this.phase !== 'aim' || info.hand !== this.hand) return false;
+    if (this.mouse || this.phase !== 'aim' || info.hand !== this.hand) return false;
     if (!this.cfg.acceptAnyStyle && info.style !== 'underarm') return false;
     if (info.speed < this.cfg.minReleaseSpeed) return false;
     // The release uses the live aim the indicator showed, not the wrist position mid-swing.
-    const release = mapRelease({ ...info, lateral: this.aimLateral }, this.cfg);
+    this.launch(mapRelease({ ...info, lateral: this.aimLateral }, this.cfg));
+    return true;
+  }
+
+  /** Mouse play: the fixed-speed, hook-free throw along the aim the arrows show. */
+  private throwMouse(): void {
+    const cfg = this.cfg;
+    const span = cfg.maxBallSpeed - cfg.minBallSpeed;
+    let power = span > 0 ? (cfg.mouseBallSpeed - cfg.minBallSpeed) / span : 1;
+    power = power < 0 ? 0 : power > 1 ? 1 : power;
+    this.launch({ ballSpeed: cfg.mouseBallSpeed, angle: this.mouseAim, hook: 0, power });
+  }
+
+  private launch(release: Release): void {
     this.lastRelease = release;
     this.physics.launch(this.bowlerX, release.ballSpeed, release.angle, release.hook);
     this.sinceRelease = 0;
@@ -190,7 +231,6 @@ export class BowlingGame {
     this.liveDown = 0;
     this.enter('rolling');
     this.events.released?.(release);
-    return true;
   }
 
   /** Run the rules for one fixed step. */
@@ -205,6 +245,11 @@ export class BowlingGame {
         this.updatePickup(dt, view);
         break;
       case 'aim':
+        if (this.mouse) {
+          // The bowler stays put; the throw waits for the minimum back-swing.
+          if (this.releasePending && this.phaseTime >= this.cfg.mouseWindupMinS) this.throwMouse();
+          break;
+        }
         this.bowlerX = smoothBowlerX(this.bowlerX, view.lateral, dt, this.cfg);
         this.updateAim(dt, view);
         break;
@@ -227,6 +272,7 @@ export class BowlingGame {
   }
 
   private updatePickup(dt: number, view: PlayerView): void {
+    if (this.mouse) return;
     const hand = view.hands[this.hand];
     const arm = view.arms[this.hand];
     const fistUnknown = !hand.known || !hand.present;
@@ -239,12 +285,13 @@ export class BowlingGame {
   }
 
   private wristLateral(wristX: number): number {
-    return lateralFromWrist(wristX, this.hand, this.cfg) + this.aimBias;
+    return lateralFromWrist(wristX, this.hand, this.cfg);
   }
 
   /** ThrowWindup from the input: the arm is drawn back, so the aim stops following the hand. */
   onWindup(hand: Side): void {
-    if (this.phase === 'aim' && hand === this.hand) this.aimHoldLeft = this.cfg.aimWindupHoldS;
+    if (!this.mouse && this.phase === 'aim' && hand === this.hand)
+      this.aimHoldLeft = this.cfg.aimWindupHoldS;
   }
 
   private updateAim(dt: number, view: PlayerView): void {
@@ -311,6 +358,7 @@ export class BowlingGame {
 
   private countRoll(): void {
     const before = this.next;
+    this.physics.commitRoll();
     const standing = this.physics.standingCount();
     let pins = before.pinsUp - standing;
     if (pins < 0) pins = 0;

@@ -9,6 +9,7 @@ const DT = 1 / 120;
 /** Scripted physics: each launch knocks down the next number from `plan`. */
 class FakePhysics implements BowlingPhysics {
   plan: number[] = [];
+  committed = 0;
   standing = 0;
   ballActive = false;
   ballX = 0;
@@ -58,6 +59,9 @@ class FakePhysics implements BowlingPhysics {
   }
   standingCount(): number {
     return this.standing;
+  }
+  commitRoll(): void {
+    this.committed++;
   }
   takeContact(): number {
     if (this.contacted && !this.contactGiven) {
@@ -386,6 +390,12 @@ function verdictTime(t: ReturnType<typeof setup>): number {
 }
 
 describe('early verdict', () => {
+  it('commits the pin states once per scored roll', () => {
+    const t = setup([7]);
+    verdictTime(t);
+    expect(t.physics.committed).toBe(1);
+  });
+
   it('calls a strike the moment the last pin is down, before the pins rest', () => {
     const t = setup([10]);
     const at = verdictTime(t);
@@ -512,20 +522,151 @@ describe('live aim, wind-up and bias', () => {
     t.run(bowlingConfig.aimWindupHoldS);
     expect(t.game.aimAngle).toBeGreaterThan(shown + 0.01);
   });
+});
 
-  it('adds the aim bias for keyboard and mouse input', () => {
+describe('mouse play', () => {
+  function mouseSetup(plan: number[] = [5, 4, 3, 2]) {
     const physics = new FakePhysics();
+    physics.plan = plan;
+    const seen = {
+      picked: 0,
+      released: [] as { ballSpeed: number; angle: number; hook: number }[],
+    };
+    const phases: string[] = [];
     const game = new BowlingGame(
       physics,
       { ...bowlingConfig },
-      {},
-      { hand: 'right', frames: 10, aimBias: bowlingConfig.neutralLateral },
+      {
+        phase: (n) => phases.push(n),
+        pickedUp: () => seen.picked++,
+        released: (r) => seen.released.push(r),
+      },
+      { hand: 'right', frames: 10, mouse: true },
     );
     game.start();
-    // Hand on the body midline (wrist 0.5 sw inside the shoulder) reads as straight.
-    const v = view({ wristX: -0.5 });
-    for (let i = 0; i < 120; i++) game.fixedUpdate(DT, v);
-    game.onFistClosed('right');
-    expect(game.aimAngle).toBeCloseTo(0, 6);
+    const run = (s: number): void => {
+      for (let i = 0; i < Math.round(s / DT); i++) game.fixedUpdate(DT, view());
+    };
+    return { physics, game, seen, phases, run };
+  }
+
+  it('a press gives the ball and starts the wind-up at once', () => {
+    const t = mouseSetup();
+    expect(t.game.mousePress()).toBe(true);
+    expect(t.game.phase).toBe('aim');
+    expect(t.seen.picked).toBe(1);
+    t.run(1);
+    expect(t.physics.launches).toHaveLength(0);
+  });
+
+  it('a release throws once at the fixed speed, the shown aim and no hook', () => {
+    const t = mouseSetup();
+    t.game.setMouseAim(0.02);
+    t.game.mousePress();
+    t.run(0.5);
+    t.game.setMouseAim(-0.017);
+    t.game.mouseRelease();
+    t.run(0.05);
+    expect(t.physics.launches).toHaveLength(1);
+    const l = t.physics.launches[0];
+    expect(l?.speed).toBe(bowlingConfig.mouseBallSpeed);
+    expect(l?.angle).toBeCloseTo(-0.017, 9);
+    expect(l?.hook).toBe(0);
+    expect(l?.x).toBe(0);
+    expect(t.game.aimAngle).toBeCloseTo(-0.017, 9);
+    // Speed does not depend on the hold time.
+    const u = mouseSetup();
+    u.game.mousePress();
+    u.run(3);
+    u.game.mouseRelease();
+    u.run(0.05);
+    expect(u.physics.launches[0]?.speed).toBe(bowlingConfig.mouseBallSpeed);
+    t.run(0.1);
+    expect(t.physics.launches).toHaveLength(1);
+  });
+
+  it('clamps the aim to the max angle', () => {
+    const t = mouseSetup();
+    t.game.setMouseAim(1);
+    expect(t.game.aimAngle).toBe(bowlingConfig.maxAngle);
+    t.game.setMouseAim(-1);
+    expect(t.game.aimAngle).toBe(-bowlingConfig.maxAngle);
+  });
+
+  it('a tap still plays the minimum back-swing, then throws', () => {
+    const t = mouseSetup();
+    t.game.mousePress();
+    t.game.mouseRelease();
+    t.run(bowlingConfig.mouseWindupMinS - 0.05);
+    expect(t.physics.launches).toHaveLength(0);
+    expect(t.game.phase).toBe('aim');
+    t.run(0.1);
+    expect(t.physics.launches).toHaveLength(1);
+    expect(t.game.phase).toBe('rolling');
+  });
+
+  it('ignores a release with no press, and presses outside pickup', () => {
+    const t = mouseSetup();
+    t.game.mouseRelease();
+    t.run(1);
+    expect(t.game.phase).toBe('pickup');
+    expect(t.physics.launches).toHaveLength(0);
+    t.game.mousePress();
+    t.game.mouseRelease();
+    t.run(0.4);
+    expect(t.game.phase).toBe('rolling');
+    // Rolling, then settle and reset: presses do nothing.
+    expect(t.game.mousePress()).toBe(false);
+    t.run(2.5);
+    expect(t.game.phase).toBe('settle');
+    expect(t.game.mousePress()).toBe(false);
+    t.run(bowlingConfig.settleHoldS);
+    expect(t.game.phase).toBe('reset');
+    expect(t.game.mousePress()).toBe(false);
+    expect(t.physics.launches).toHaveLength(1);
+    expect(t.seen.picked).toBe(1);
+  });
+
+  it('does not bowl the next ball from a release carried over from a missed press', () => {
+    const t = mouseSetup();
+    t.game.mousePress();
+    t.game.mouseRelease();
+    t.run(6);
+    expect(t.game.phase).toBe('pickup');
+    // A stray release now (the press was ignored during the reset) throws nothing.
+    t.game.mouseRelease();
+    t.run(1);
+    expect(t.game.phase).toBe('pickup');
+    expect(t.physics.launches).toHaveLength(1);
+  });
+
+  it('plays the next ball after a fresh press', () => {
+    const t = mouseSetup();
+    t.game.mousePress();
+    t.game.mouseRelease();
+    t.run(6);
+    expect(t.game.phase).toBe('pickup');
+    expect(t.game.mousePress()).toBe(true);
+    t.game.mouseRelease();
+    t.run(0.4);
+    expect(t.physics.launches).toHaveLength(2);
+  });
+
+  it('turns the gesture entry points off', () => {
+    const t = mouseSetup();
+    t.game.onFistClosed('right');
+    expect(t.game.phase).toBe('pickup');
+    t.game.mousePress();
+    t.game.onWindup('right');
+    expect(
+      t.game.onThrow({ hand: 'right', speed: 9, lateral: 0, curvature: 0.5, style: 'underarm' }),
+    ).toBe(false);
+    expect(t.physics.launches).toHaveLength(0);
+  });
+
+  it('does not pick up by holding still', () => {
+    const t = mouseSetup();
+    t.run(3);
+    expect(t.game.phase).toBe('pickup');
   });
 });
