@@ -24,6 +24,12 @@ Fixes from Allen's first playtest, 2026-11-14. Details and retest list in the mo
 | Round 2: bowling pin miscount | B | done | Check pin falls look natural |
 | Round 2: batting in feet, 350 ft home run, proportional difficulty | B | done | |
 | Round 2: fused running-in-place detection | B | done | Thresholds need a real camera |
+| Round 3: climbing mouse (free the other hand, pointer through the camera) | B | done | Not played by hand |
+| Round 3: left/right guards (hand slots, pose side guard) | B | done | Needs a real camera |
+| Round 3: turn camera on button, hand cursor off during play | B | done | |
+| Round 3: archery positive release only, draw held through tracking loss | B | done | Thresholds need a real camera |
+| Round 3: pitching aim led by the glove hand | B | done | Glove box and steering need a real camera |
+| Clean full run of `pnpm test:e2e` with nothing else on the GPU | O | todo | Two loaded runs gave 51 and 52 of 54; all failures pass in isolation |
 | Decide mouse javelin distance (93 to 96 m against 52 to 61 m with the camera bot) | owner | todo | Tune down or separate score tables |
 | Merge `playtest-1` into `main` | O | todo | After Allen retests |
 
