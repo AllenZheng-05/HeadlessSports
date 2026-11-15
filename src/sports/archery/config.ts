@@ -68,6 +68,10 @@ export const archeryConfig = {
   /** How long the "pull back further" hint stays, ms. */
   furtherHintMs: 1500,
 
+  // Camera-off (mouse) draw
+  /** Seconds holding the button from the nock to full draw. */
+  mouseDrawS: 0.75,
+
   // Fallback for trackers that never see the fist
   fistFallbackMs: 6000,
   fallbackReleaseSpeed: 2.5,
@@ -141,6 +145,7 @@ export const archeryRanges: Record<string, TunableRange> = {
   drawStart: { min: 0.2, max: 1.5, step: 0.05 },
   drawFull: { min: 1, max: 3.2, step: 0.05 },
   minDraw: { min: 0.05, max: 0.8, step: 0.05 },
+  mouseDrawS: { min: 0.2, max: 2, step: 0.05 },
   releaseLookbackMs: { min: 0, max: 400, step: 10 },
   fistFallbackMs: { min: 1000, max: 20000, step: 500 },
   maxWind: { min: 0, max: 4, step: 0.1 },

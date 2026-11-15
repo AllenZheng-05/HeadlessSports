@@ -14,12 +14,15 @@ import {
   targetYaw,
 } from './aim';
 import type { Sway } from './aim';
+import { asMouseControl } from '../../input/debug/mouseControl';
 import { createArcheryBot } from './bot';
+import { MouseDraw } from './mouseDraw';
+import type { DrawState } from './mouseDraw';
 import type { BotView } from './bot';
 import { BowRig } from './bowRig';
 import { archeryConfig, archeryRanges } from './config';
 import { DrawMachine, StepEvent } from './draw';
-import type { DrawSample, Hint } from './draw';
+import type { DrawSample, Hint, StepEventValue } from './draw';
 import { Arrow, ArrowState, basePitch, hitOnPlane } from './flight';
 import type { Hit } from './flight';
 import { ArcheryRound } from './round';
@@ -54,6 +57,15 @@ const HINTS: Record<Hint, string> = {
   further: 'Pull back further',
 };
 
+const MOUSE_HINTS: Record<Hint, string> = {
+  raise: 'Hold the button to draw',
+  nock: 'Hold the button to draw',
+  pull: 'Keep holding to draw',
+  aim: 'Let go to shoot',
+  lost: 'Hold the button to draw',
+  further: 'Hold a little longer',
+};
+
 const TAU = Math.PI * 2;
 /** The fixed step the host runs, for interpolating the arrow. */
 const STEP = 1 / 120;
@@ -84,6 +96,19 @@ export const createArchery: SportFactory = (ctx: SportContext): ArcherySport => 
   );
 
   const machine = new DrawMachine(cfg);
+  // Camera off: the mouse aims with the bow hand and the button draws. Null for tracked input.
+  const mouse = asMouseControl(ctx.input);
+  const mouseDraw = new MouseDraw(cfg, mouse?.pointerPresses ?? 0, mouse?.pointerReleases ?? 0);
+  const dm: DrawState = mouse !== null ? mouseDraw : machine;
+  const hints = mouse !== null ? MOUSE_HINTS : HINTS;
+  const drawSign = sideSign(drawHand);
+  let pausedSeen = false;
+  let handsClosed = false;
+  if (mouse !== null) {
+    mouse.setManualMode(true);
+    mouse.setPointerFollow(true);
+    mouse.selectHand(bowHand);
+  }
   const round = new ArcheryRound(ctx.short ? cfg.shortArrows : cfg.arrows);
   const base = basePitch(cfg);
   const backZ = -cfg.targetDistance - 1.45;
@@ -169,14 +194,14 @@ export const createArchery: SportFactory = (ctx: SportContext): ArcherySport => 
       ctx.hud.setSubScore(`${left} ${left === 1 ? 'arrow' : 'arrows'} left · Wind ${w}`);
     }
     let hint: string | null = null;
-    if (phase === 'ready' || phase === 'drawing') hint = HINTS[machine.hint];
+    if (phase === 'ready' || phase === 'drawing') hint = hints[dm.hint];
     if (hint !== shownHint) {
       shownHint = hint;
       ctx.hud.setHint(hint);
     }
     const drawing = phase === 'drawing';
     if (drawing) {
-      ctx.hud.setMeter('draw', machine.draw, 'Draw', machine.draw >= cfg.minDraw ? 'good' : 'warn');
+      ctx.hud.setMeter('draw', dm.draw, 'Draw', dm.draw >= cfg.minDraw ? 'good' : 'warn');
       meterOn = true;
     } else if (meterOn) {
       meterOn = false;
@@ -220,7 +245,7 @@ export const createArchery: SportFactory = (ctx: SportContext): ArcherySport => 
   };
 
   const launch = (): void => {
-    const shot = machine.shot;
+    const shot = dm.shot;
     arrow.launch(cfg, base, shot.draw, shot.yaw, shot.pitch, currentWind());
     ctx.audio.play('whoosh', { pitch: 0.8 + shot.draw * 0.5 });
     animator.play('bow-release', { side: drawHand });
@@ -267,7 +292,7 @@ export const createArchery: SportFactory = (ctx: SportContext): ArcherySport => 
           finishIn = cfg.finishDelayS;
           if (good) ctx.audio.play('cheer');
         } else {
-          machine.unlock();
+          dm.unlock();
           setPhase('ready');
         }
       }
@@ -280,35 +305,64 @@ export const createArchery: SportFactory = (ctx: SportContext): ArcherySport => 
     // Read the player: bow arm, wrist distance, draw hand.
     const s = ctx.input.state;
     const bowArm = s.arms[bowHand];
-    const dh = s.hands[drawHand];
-    const dist = wristDistanceRawException(s.pose, s.aspect, s.shoulderWidth);
-    const valid = s.hasPose && s.tracking && dist >= 0;
-    const bowUp = valid && bowArmUp(bowArm.wristX, bowArm.wristY, cfg, machine.phase === 'drawing');
-    if (bowUp) {
+    let ev: StepEventValue;
+    if (mouse !== null) {
+      // The pointer is the bow hand: it always aims, with no reach test and no sway.
+      if (pausedSeen) {
+        pausedSeen = false;
+        if (phase === 'drawing' || phase === 'ready') {
+          mouseDraw.cancel(mouse.pointerPresses, mouse.pointerReleases);
+          setPhase('ready');
+        }
+      }
       frozenYaw = targetYaw(bowArm.wristX, bowHand, cfg);
       frozenPitch = targetPitch(bowArm.wristY, cfg);
-    }
-    // Hold the aim while the bow arm is not usable: never guess.
-    yawF.update(frozenYaw, dt, cfg.aimSmoothS);
-    pitchF.update(frozenPitch, dt, cfg.aimSmoothS);
-    if (machine.phase === 'drawing') {
-      swayOffset(simMs / 1000, swayAmplitude(machine.holdFullS, cfg), phases, sway);
-    } else {
+      yawF.update(frozenYaw, dt, cfg.aimSmoothS);
+      pitchF.update(frozenPitch, dt, cfg.aimSmoothS);
       sway.x = 0;
       sway.y = 0;
-    }
-    aimYaw = yawF.value + sway.x;
-    aimPitch = pitchF.value + sway.y;
+      aimYaw = yawF.value;
+      aimPitch = pitchF.value;
+      ev = mouseDraw.step(
+        dt,
+        mouse.pointerDown,
+        mouse.pointerPresses,
+        mouse.pointerReleases,
+        aimYaw,
+        aimPitch,
+      );
+    } else {
+      const dh = s.hands[drawHand];
+      const dist = wristDistanceRawException(s.pose, s.aspect, s.shoulderWidth);
+      const valid = s.hasPose && s.tracking && dist >= 0;
+      const bowUp =
+        valid && bowArmUp(bowArm.wristX, bowArm.wristY, cfg, machine.phase === 'drawing');
+      if (bowUp) {
+        frozenYaw = targetYaw(bowArm.wristX, bowHand, cfg);
+        frozenPitch = targetPitch(bowArm.wristY, cfg);
+      }
+      // Hold the aim while the bow arm is not usable: never guess.
+      yawF.update(frozenYaw, dt, cfg.aimSmoothS);
+      pitchF.update(frozenPitch, dt, cfg.aimSmoothS);
+      if (machine.phase === 'drawing') {
+        swayOffset(simMs / 1000, swayAmplitude(machine.holdFullS, cfg), phases, sway);
+      } else {
+        sway.x = 0;
+        sway.y = 0;
+      }
+      aimYaw = yawF.value + sway.x;
+      aimPitch = pitchF.value + sway.y;
 
-    sample.valid = valid;
-    sample.bowUp = bowUp;
-    sample.dist = dist;
-    sample.present = dh.present;
-    sample.known = dh.known;
-    sample.closed = dh.closed;
-    sample.yaw = aimYaw;
-    sample.pitch = aimPitch;
-    const ev = machine.step(dt, simMs, sample);
+      sample.valid = valid;
+      sample.bowUp = bowUp;
+      sample.dist = dist;
+      sample.present = dh.present;
+      sample.known = dh.known;
+      sample.closed = dh.closed;
+      sample.yaw = aimYaw;
+      sample.pitch = aimPitch;
+      ev = machine.step(dt, simMs, sample);
+    }
 
     if (ev === StepEvent.Nock || ev === StepEvent.AutoNock) {
       ctx.audio.play('grab');
@@ -323,15 +377,15 @@ export const createArchery: SportFactory = (ctx: SportContext): ArcherySport => 
     }
 
     if (phase === 'drawing') {
-      if (!tick50 && machine.draw >= 0.5) {
+      if (!tick50 && dm.draw >= 0.5) {
         tick50 = true;
         ctx.audio.play('tick');
       }
-      if (!tick100 && machine.draw >= 0.98) {
+      if (!tick100 && dm.draw >= 0.98) {
         tick100 = true;
         ctx.audio.play('tick', { pitch: 1.5 });
       }
-      hitOnPlane(cfg, base, machine.draw, aimYaw, aimPitch, currentWind(), hit);
+      hitOnPlane(cfg, base, dm.draw, aimYaw, aimPitch, currentWind(), hit);
       reticleX = hit.x;
       reticleY = hit.y - cfg.targetHeight;
     } else {
@@ -351,7 +405,7 @@ export const createArchery: SportFactory = (ctx: SportContext): ArcherySport => 
 
   const updateCamera = (dt: number): void => {
     camBlend.update(phase === 'showing' ? 1 : 0, dt, 0.28);
-    fovK.update(phase === 'drawing' ? machine.draw : 0, dt, 0.25);
+    fovK.update(phase === 'drawing' ? dm.draw : 0, dt, 0.25);
     const b = camBlend.value;
     // Behind the archer on the bow side and above the line to the target, pitched down a little
     // so the archer fills the lower part of the picture and the target sits above the centre.
@@ -382,11 +436,23 @@ export const createArchery: SportFactory = (ctx: SportContext): ArcherySport => 
   };
 
   const frame = (dt: number, nowMs: number, alpha: number): void => {
+    if (mouse !== null) {
+      if (ctx.paused) pausedSeen = true;
+      // The draw hand pulls back from the bow hand in proportion to the draw.
+      const drawing = phase === 'drawing';
+      if (drawing !== handsClosed) {
+        handsClosed = drawing;
+        mouse.setHandClosed(drawHand, drawing);
+      }
+      const pull = drawing ? 0.04 + dm.draw * 0.14 : 0.03;
+      const hx = mouse.pointerX + drawSign * pull;
+      mouse.setHandTarget(drawHand, hx < 0.02 ? 0.02 : hx > 0.98 ? 0.98 : hx, mouse.pointerY);
+    }
     if (!animator.busy) mirrorUpperBody(ctx.avatar, ctx.input.state, nowMs);
     animator.update(dt);
-    bow.update(dt, phase === 'drawing', machine.draw);
+    bow.update(dt, phase === 'drawing', dm.draw);
     if (phase === 'drawing') {
-      const radius = lerp(cfg.reticleMaxM, cfg.reticleMinM, machine.draw);
+      const radius = lerp(cfg.reticleMaxM, cfg.reticleMinM, dm.draw);
       world.setReticle(true, reticleX, reticleY + cfg.targetHeight, radius);
     }
     if (phase === 'flying') {
@@ -412,7 +478,7 @@ export const createArchery: SportFactory = (ctx: SportContext): ArcherySport => 
       return phase;
     },
     get draw(): number {
-      return machine.draw;
+      return dm.draw;
     },
     get hitX(): number {
       return reticleX;
@@ -443,6 +509,10 @@ export const createArchery: SportFactory = (ctx: SportContext): ArcherySport => 
       unsubClose();
       unsubOpen();
       unregister();
+      if (mouse !== null) {
+        mouse.setHandClosed(drawHand, false);
+        mouse.setManualMode(false);
+      }
       animator.stop();
       bow.dispose();
       world.dispose();
@@ -455,7 +525,7 @@ export const createArchery: SportFactory = (ctx: SportContext): ArcherySport => 
       return phaseLog;
     },
     get draw(): number {
-      return machine.draw;
+      return dm.draw;
     },
     get arrowsShot(): number {
       return round.taken;

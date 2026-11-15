@@ -144,65 +144,41 @@ test.describe('archery', () => {
     expect(problems).toEqual([]);
   });
 
-  test('a round can be played from the keyboard and mouse', async ({ page }) => {
+  test('a round can be played with only the mouse', async ({ page }) => {
     const problems = watch(page);
     await page.goto('/?sport=archery&input=debug&skipGate=1&short=1');
     await waitPhase(page, 'playing');
 
-    // Debug body: shoulders at y 0.32, one shoulder width is 0.0731 across. DebugInput measures a
-    // wrist from its own shoulder, so the cursor for a wrist `wx` sw from that shoulder sits at
-    // 0.5 + side * 0.5 sw + wx sw.
-    const SW_X = 0.13 / (16 / 9);
-    const cursor = (side: -1 | 1, wx: number, wy: number): { x: number; y: number } => ({
-      x: 0.5 + side * 0.5 * SW_X + wx * SW_X,
-      y: 0.32 - 0.13 * wy,
-    });
-    const bow = cursor(-1, -1.2, 0.1);
-    const nock = cursor(1, -1.4, 0.05);
-    const full = cursor(1, 0.25, 0.05);
-    const debug = (fn: string, ...args: unknown[]): Promise<void> =>
-      page.evaluate(
-        ([name, a]) => {
-          const d = (window as unknown as { __game: { debugInput: Record<string, unknown> } })
-            .__game.debugInput;
-          (d[name as string] as (...x: unknown[]) => void)(...(a as unknown[]));
-        },
-        [fn, args] as const,
-      );
-    const tap = async (code: string): Promise<void> => {
-      await debug('press', code);
-      await debug('release', code);
-      await page.waitForTimeout(120);
-    };
+    // The bow hand follows the pointer; this spot aims at about the middle of the target.
+    const vp = page.viewportSize() ?? { width: 1280, height: 720 };
+    const aimX = vp.width * 0.376;
+    const aimY = vp.height * 0.307;
+    await page.mouse.move(aimX, aimY);
+    await page.waitForTimeout(300);
+    await waitSport(page, 'ready to draw', { phase: 'ready' }, 5000);
 
-    // Left hand is the bow hand for a right-handed archer; the right hand is the draw hand.
-    await tap('KeyA');
-    await debug('moveTo', bow.x, bow.y);
-    await page.waitForTimeout(150);
-    await tap('KeyD');
-    await debug('moveTo', nock.x, nock.y);
-    await page.waitForTimeout(200);
-    await waitSport(page, 'the bow arm up, ready to nock', { phase: 'ready' }, 5000);
+    // A quick tap does not leave the archer stuck: the arrow is put back.
+    await page.mouse.down();
+    await page.mouse.up();
+    await page.waitForTimeout(300);
+    expect(await sportState(page)).toMatchObject({ phase: 'ready', arrowsShot: 0 });
 
-    await tap('KeyE'); // close the right fist next to the bow hand
-    await waitSport(page, 'a nocked arrow', { phase: 'drawing' }, 5000);
+    for (let n = 1; n <= 2; n++) {
+      await page.mouse.move(aimX, aimY);
+      await page.mouse.down(); // nocks and starts drawing at once
+      await waitSport(page, 'a nocked arrow', { phase: 'drawing' }, 3000);
+      await waitSport(page, 'a full draw', { minDraw: 0.97 }, 5000);
+      if (n === 1) await page.screenshot({ path: `${SHOTS}/archery-debug-draw.png` });
+      await page.mouse.up(); // let go: shoot
+      await waitSport(page, 'a shot arrow', { arrowsShot: n }, 10000);
+      if (n === 1) await waitSport(page, 'the next arrow ready', { phase: 'ready' }, 15000);
+    }
 
-    await debug('moveTo', full.x, full.y); // drag away
-    await waitSport(page, 'a full draw', { minDraw: 0.8 }, 5000);
-    await page.screenshot({ path: `${SHOTS}/archery-debug-draw.png` });
-
-    // Fine-aim: select the bow hand again and put it back where it was.
-    await tap('KeyA');
-    await debug('moveTo', bow.x, bow.y);
-    await page.waitForTimeout(250);
-    await waitSport(page, 'still drawing after aiming', { phase: 'drawing' }, 5000);
-
-    await tap('KeyE'); // open the fist: release
-    await waitSport(page, 'a shot arrow', { arrowsShot: 1 }, 10000);
-
+    await waitPhase(page, 'results', 30000);
     const s = await sportState(page);
-    expect(s.phaseLog.slice(0, 3)).toEqual(['ready', 'drawing', 'flying']);
-    expect(s.arrowsShot).toBe(1);
+    // The tap nocked and put the arrow back; the first real draw then flew.
+    expect(s.phaseLog.slice(0, 5)).toEqual(['ready', 'drawing', 'ready', 'drawing', 'flying']);
+    expect(s.rings).toHaveLength(2);
     expect((await game(page)).error).toBeNull();
     expect(problems).toEqual([]);
   });

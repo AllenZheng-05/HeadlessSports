@@ -17,12 +17,5 @@ export const meta: SportMeta = {
     'Close your other fist next to it, then pull back to draw. Aim with the bow arm.',
     'Open your hand to let the arrow go.',
   ],
-  debugKeys: [
-    'A: pick the left hand, then move the mouse to place it',
-    'D: pick the right hand, then move the mouse to place it',
-    'E: close the right fist near the left hand to nock, drag away to draw',
-    'A, mouse: fine-aim with the left hand while drawing',
-    'E again: open the fist to release',
-    'Q: toggle the left fist',
-  ],
+  debugKeys: ['Move the mouse to aim', 'Hold the button to draw, let go to shoot'],
 };
