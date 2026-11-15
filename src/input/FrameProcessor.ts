@@ -6,6 +6,7 @@ import { OneEuroBank } from './filters/oneEuro';
 import { SlopeEstimator } from './filters/slope';
 import { FistDebouncer, handCurl, palmCentre, palmSize } from './hands/fist';
 import { PoseKinematics, sanitizeVisibility } from './kinematics/poseKinematics';
+import { SIDE_NONE, armsSwapped, createSideGuardState, guardSides } from './sideGuard';
 import { resetInputState } from './state';
 import type { Calibration, HandState, InputState, Side } from './types';
 
@@ -45,6 +46,16 @@ export class FrameProcessor {
 
   private started = false;
   private poseActive = false;
+  /** What the side guard exchanged on the last frame (SIDE_* bits). */
+  lastSideFix = SIDE_NONE;
+  private readonly sideState = createSideGuardState();
+  /** Crop hands follow their wrist: true when this frame's arms changed sides. */
+  private handsExchanged = false;
+  /**
+   * True when hand observations come from crops around the pose wrists (so they change sides with
+   * the arms). False for full-frame hands, which are assigned to slots by position alone.
+   */
+  handsFollowPose = true;
   private lastUsableT = Number.NEGATIVE_INFINITY;
 
   constructor(state: InputState, config: InputConfig = inputConfig) {
@@ -115,6 +126,18 @@ export class FrameProcessor {
       state.posePrev.set(pose);
       pose.set(frame.pose);
       sanitizeVisibility(pose);
+      // Pose sometimes swaps left and right; put them back before anything is filtered. A hand
+      // cropped around a wrist belongs to that wrist, so it changes sides with the arm.
+      this.lastSideFix = guardSides(
+        pose,
+        state.posePrev,
+        !first,
+        state.aspect,
+        cfg.minVisibility,
+        cfg.sideGuard,
+        this.sideState,
+      );
+      this.handsExchanged = this.handsFollowPose && armsSwapped(this.lastSideFix);
       this.poseBank.filterInto(pose, frame.t, pose, POSE_STRIDE, POSE_COMPONENTS);
       if (first) state.posePrev.set(pose);
       this.kinematics.update(state, this.calibration);
@@ -126,6 +149,8 @@ export class FrameProcessor {
     } else {
       this.poseActive = false;
       state.hasPose = false;
+      this.lastSideFix = SIDE_NONE;
+      this.handsExchanged = false;
     }
 
     this.updateHand(0, frame, state.hands.left);
@@ -169,11 +194,13 @@ export class FrameProcessor {
     this.changeCount = 0;
     this.started = false;
     this.poseActive = false;
+    this.lastSideFix = SIDE_NONE;
+    this.handsExchanged = false;
     this.lastUsableT = Number.NEGATIVE_INFINITY;
   }
 
   private updateHand(index: 0 | 1, frame: LandmarkFrame, hand: HandState): void {
-    const obs = frame.hands[index];
+    const obs = frame.hands[this.handsExchanged ? 1 - index : index];
     const debouncer = index === 0 ? this.debouncerLeft : this.debouncerRight;
     const bank = index === 0 ? this.handBankLeft : this.handBankRight;
     const slopeX = index === 0 ? this.slopeXLeft : this.slopeXRight;

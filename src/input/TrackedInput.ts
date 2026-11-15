@@ -57,11 +57,13 @@ export class TrackedInput implements InputProvider {
   start(needs: TrackerNeeds): Promise<void> {
     this.unsubscribe?.();
     this.unsubscribe = this.source.subscribe(this.onFrame);
+    this.processor.handsFollowPose = !needs.fullFrameHands;
     return this.source.start(needs);
   }
 
   setNeeds(needs: TrackerNeeds): Promise<void> {
     this.resetRecognizers();
+    this.processor.handsFollowPose = !needs.fullFrameHands;
     return this.source.setNeeds(needs);
   }
 

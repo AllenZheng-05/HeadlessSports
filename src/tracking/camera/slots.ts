@@ -6,6 +6,21 @@
 
 export const SLOT_GATE = 0.25;
 export const SLOT_MAX_AGE = 10;
+/**
+ * A slot that has been missing for a while is less sure about where its hand is: the distance to
+ * it is divided by `SLOT_SIGMA + SLOT_SIGMA_GROWTH * age`, so a lone detection goes to the slot it
+ * fits best in relation to how long ago that slot was seen, not simply to the nearest stale point.
+ */
+export const SLOT_SIGMA = 0.1;
+export const SLOT_SIGMA_GROWTH = 0.04;
+/**
+ * The player faces the camera, so the left hand is left of the right hand. If two hands have been
+ * in the wrong order by more than SLOT_ORDER_SEPARATION for SLOT_ORDER_FRAMES frames in a row, the
+ * slots are exchanged (a wrong pick made while one hand was missing would otherwise stick for
+ * good). Arms crossed deliberately for longer than that are treated as a mix-up.
+ */
+export const SLOT_ORDER_SEPARATION = 0.12;
+export const SLOT_ORDER_FRAMES = 12;
 
 export interface SlotState {
   /** Last known palm position per slot. */
@@ -15,6 +30,8 @@ export interface SlotState {
   age: Int32Array;
   /** Whether the slot has ever been seen. */
   seen: Uint8Array;
+  /** [0]: consecutive two-hand frames in which the slots read in the wrong left/right order. */
+  order: Int32Array;
 }
 
 export function createSlotState(): SlotState {
@@ -23,6 +40,7 @@ export function createSlotState(): SlotState {
     y: new Float32Array(2),
     age: new Int32Array(2),
     seen: new Uint8Array(2),
+    order: new Int32Array(1),
   };
 }
 
@@ -31,6 +49,7 @@ export function resetSlotState(s: SlotState): void {
   s.seen[1] = 0;
   s.age[0] = 0;
   s.age[1] = 0;
+  s.order[0] = 0;
 }
 
 function tracked(s: SlotState, slot: number): boolean {
@@ -67,7 +86,10 @@ export function assignSlots(
     const d0 = t0 ? dist(state, 0, x, y) : Infinity;
     const d1 = t1 ? dist(state, 1, x, y) : Infinity;
     if (d0 <= gate || d1 <= gate) {
-      out[d0 <= d1 ? 0 : 1] = 0;
+      // Compare how well each slot explains the detection, given how stale each slot is.
+      const c0 = d0 <= gate ? d0 / (SLOT_SIGMA + SLOT_SIGMA_GROWTH * state.age[0]) : Infinity;
+      const c1 = d1 <= gate ? d1 / (SLOT_SIGMA + SLOT_SIGMA_GROWTH * state.age[1]) : Infinity;
+      out[c0 <= c1 ? 0 : 1] = 0;
     } else if (t0 && !t1) {
       // The only tracked slot is far away: this is the other hand.
       out[1] = 0;
@@ -113,6 +135,16 @@ export function assignSlots(
       swap = swappedHits > straightHits;
     } else {
       swap = swapped < straight;
+    }
+    // Slot 0 (left) must not stay right of slot 1 for long.
+    const gap = swap ? dx[1] - dx[0] : dx[0] - dx[1];
+    if (gap > SLOT_ORDER_SEPARATION) {
+      if (++state.order[0] >= SLOT_ORDER_FRAMES) {
+        swap = !swap;
+        state.order[0] = 0;
+      }
+    } else if (gap <= 0) {
+      state.order[0] = 0;
     }
     out[swap ? 1 : 0] = 0;
     out[swap ? 0 : 1] = 1;

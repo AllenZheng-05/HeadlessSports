@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { assignSlots, createSlotState, SLOT_MAX_AGE } from './slots';
+import {
+  assignSlots,
+  createSlotState,
+  SLOT_MAX_AGE,
+  SLOT_ORDER_FRAMES,
+  SLOT_ORDER_SEPARATION,
+} from './slots';
 import type { SlotState } from './slots';
 
 function run(state: SlotState, pts: [number, number][]): number[] {
@@ -70,5 +76,52 @@ describe('assignSlots', () => {
     ]);
     expect(r[0]).not.toBe(r[1]);
     expect(r.every((v) => v >= 0)).toBe(true);
+  });
+  it('gives a lone detection to the slot that was seen recently when both are in the gate', () => {
+    const s = createSlotState();
+    run(s, [
+      [0.3, 0.5],
+      [0.7, 0.5],
+    ]);
+    // The right hand is lost for a few frames; the left one keeps being seen.
+    for (let i = 0; i < 5; i++) run(s, [[0.3, 0.5]]);
+    // The right hand comes back, closer to the left hand's spot than to where it was last seen.
+    expect(run(s, [[0.5, 0.5]])).toEqual([-1, 0]);
+  });
+
+  it('puts a long-lived wrong order right, but not a short one', () => {
+    const s = createSlotState();
+    // A stuck mix-up: slot 0 follows the hand at 0.6 and slot 1 the one at 0.3.
+    s.x[0] = 0.6;
+    s.y[0] = 0.5;
+    s.x[1] = 0.3;
+    s.y[1] = 0.5;
+    s.seen[0] = 1;
+    s.seen[1] = 1;
+    expect(0.6 - 0.3).toBeGreaterThan(SLOT_ORDER_SEPARATION);
+    const both: [number, number][] = [
+      [0.6, 0.5],
+      [0.3, 0.5],
+    ];
+    // Continuity keeps the mix-up for a while...
+    for (let i = 0; i < SLOT_ORDER_FRAMES - 1; i++) expect(run(s, both)).toEqual([0, 1]);
+    // ...and then the left slot goes to the left-most hand, and stays there.
+    expect(run(s, both)).toEqual([1, 0]);
+    expect(run(s, both)).toEqual([1, 0]);
+  });
+
+  it('lets hands cross and come back without exchanging slots', () => {
+    const s = createSlotState();
+    const up = 24;
+    const total = up * 2;
+    for (let i = 0; i <= total; i++) {
+      const tri = i <= up ? i / up : (total - i) / up;
+      const a: [number, number] = [0.4 + 0.2 * tri, 0.45];
+      const b: [number, number] = [0.6 - 0.2 * tri, 0.55];
+      // The detector's order alternates; the slot-0 detection must stay the hand that started left.
+      const pos = i % 2 === 0 ? [a, b] : [b, a];
+      const out = run(s, pos);
+      expect(pos[out[0]][0], `i=${i}`).toBeCloseTo(a[0], 6);
+    }
   });
 });

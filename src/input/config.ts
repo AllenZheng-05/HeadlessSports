@@ -1,4 +1,6 @@
 import type { FistConfig } from './hands/fist';
+import { sideGuardConfig } from './sideGuard';
+import type { SideGuardConfig } from './sideGuard';
 
 /**
  * One typed, mutable config object for the whole input layer. Filter values are starting points
@@ -16,6 +18,8 @@ export interface InputConfig {
     hand: { minCutoff: number; beta: number };
   };
   fist: FistConfig;
+  /** Left/right consistency guard on the pose landmarks. */
+  sideGuard: SideGuardConfig;
   /** Samples in the least-squares velocity window. */
   velocityWindow: number;
   minVisibility: number;
@@ -30,6 +34,7 @@ export const inputConfig: InputConfig = {
     hand: { minCutoff: 1.5, beta: 6 },
   },
   fist: { closeBelow: 0.9, openAbove: 1.3, holdFrames: 2 },
+  sideGuard: { ...sideGuardConfig },
   velocityWindow: 4,
   minVisibility: 0.5,
   lostAfterMs: 400,
