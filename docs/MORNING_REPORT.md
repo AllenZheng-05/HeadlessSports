@@ -101,6 +101,23 @@ Checks on the branch: typecheck and lint clean, 1713 unit tests, build, default 
 
 Loose ends: fully side-on archery reads a full draw only 6% above `drawFull` 1.65 (unchanged by this round, but worth a try; lowering to about 1.4 is the fix if it is hard). An existing test still requires a swing that started with both hands clearly visible to be dropped if one disappears for 220 ms. Whole-game end-to-end tests now carry explicit time limits (bowling, climbing, pitching mouse rounds, the camera path) because they play in real time; the global 60 s limit is unchanged. No unit test covers the `setNeeds` frame gating (no harness for `CameraLandmarkSource`). Pitching still reads glove-wrist visibility from `state.pose`.
 
+## Tutorials for every sport (2026-11-15, branch `playtest-1`)
+
+All six sports now have an optional tutorial behind the "Tutorial" button on the start screen. Checks on the branch: typecheck and lint clean, 1807 unit tests, build, default end-to-end 85 of 85, UI 99 of 99, gate 4 of 4. Camera steps are verified only under the synthetic player; mouse steps by real mouse events in the browser tests. Nothing tried by hand.
+
+| Sport | Camera steps | Mouse steps | Try first on a real camera |
+|---|---|---|---|
+| Climbing | 7: show hands, grab, other hand, pull, regrab higher, rest on two hands, climb to a flag at 3 m | 6 | The 2.2 s two-hand rest step |
+| Bowling | 7: get in view, fist to pick up, line up the arrows, swing and let go (waits for the ball to be scored), knock down what is left (or "A strike! Bowl again"), hook, one free frame | 5 | Whether "Draw your arm further back first" and "Swing a bit faster" show at the right moments |
+| Batting | 6: get in view, hands together (says which way to swing for your dominant hand), practice swing with no ball, a faster one (shows power), slow pitches until one is hit, up to three at full speed | 3 | Steps 2 and 3: they state the expected swing direction and show why a swing did not count |
+| Archery | 7: get in view, bow arm out, nock with a fist, full draw, aim, open hand to shoot, two more | 4 | "I lost your hand. Hold on, the draw is safe" timing |
+| Javelin | 6: get in view, jog, jog faster, standing practice throw (every refusal reason shown), run-up and throw before the line, one more | 3 | Step 4 for why throws are refused; the athlete is held 12 m short of the line while jogging |
+| Pitching | 7: get in view, glove hand steers the ring, hold it on a square, throw, fist for fastball, open for curveball, match the catcher's call | 4 | Fist and open-hand reads in steps 5 and 6 (accepts a fallback after two failed reads) |
+
+In every tutorial: no timer, no limits on attempts, nothing that can be lost, nothing saved, "Skip step" and "End tutorial" always available (mouse or `S`; a camera player pauses by stepping out of frame). A review confirmed normal rounds are unchanged and "Play now" inherits nothing from the tutorial.
+
+Loose end: `e2e/game.spec.ts` "the how-to overlay pauses the round and resumes it" has failed twice across many full runs (phase still `paused` after Escape closes the overlay), both times on a heavily loaded machine, and passed every other time. Not yet explained; watch for it.
+
 ## How to run
 
 ```

@@ -33,7 +33,7 @@ Fixes from Allen's first playtest, 2026-11-14. Details and retest list in the mo
 | Round 4: swing and throw detection for real, side-on motion (batting, javelin) | B | done | Needs real recordings in `tests/recordings/` to tune |
 | Round 4: one cursor per hand, fist to select, "dominant hand" wording, climbing setup hands | B | done | Fist reliability needs a real camera |
 | Optional tutorials: shared framework and climbing | B | done | Button on the start screen, never forced |
-| Optional tutorials: bowling, batting, archery, javelin, pitching | B | todo | After the framework and round 4 detection land |
+| Optional tutorials: bowling, batting, archery, javelin, pitching | B | done | Camera steps verified only under the synthetic player |
 | Local multiplayer, pass-and-play: up to 4 players, typed names, turns by natural unit (bowling frame, archery arrow, javelin attempt, sets of pitches, whole climb), "step in" handover, per-player calibration, ranked results, no bests saved | B | todo | Allen's decisions 2026-11-15: always pass-and-play, no simultaneous play, no pitcher-against-batter mode. After tutorials |
 | Deploy to `headlesssports.allenzheng.com` | owner | todo | Allen deploys later; repo already points at the domain, route still commented in `wrangler.jsonc` |
 | Decide mouse javelin distance (93 to 96 m against 52 to 61 m with the camera bot) | owner | todo | Tune down or separate score tables |
