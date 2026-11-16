@@ -18,5 +18,6 @@ export const meta: SportMeta = {
     'Throw before the foul line',
   ],
   hasTutorial: true,
+  multiplayer: { turnLabel: 'attempt', maxPlayers: 4 },
   debugKeys: ['Hold the button to run', 'Let go just before the line to throw'],
 };

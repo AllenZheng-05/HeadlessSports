@@ -319,3 +319,19 @@ export function pointerStep(
   drive(ctl, 0, state, cfg, field, input.left, px, py, bx, by, dt, letGo);
   drive(ctl, 1, state, cfg, field, input.right, px, py, bx, by, dt, letGo);
 }
+
+/** Back to a fresh pointer for the next climber. The press and release counts are the caller's. */
+export function resetPointerControl(ctl: PointerControl): void {
+  ctl.active = 1;
+  ctl.dragging = false;
+  ctl.bodyX = 0;
+  ctl.bodyY = 0;
+  ctl.lastPX = 0;
+  ctl.lastPY = 0;
+  ctl.freeOther = false;
+  for (const h of [ctl.left, ctl.right]) {
+    h.phase = FREE;
+    h.target = -1;
+    h.closingMs = 0;
+  }
+}

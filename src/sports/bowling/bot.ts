@@ -19,7 +19,7 @@ export interface BotView {
  */
 export function createBowlingBot(
   view: BotView,
-  hand: Side,
+  handOf: Side | (() => Side),
   random: () => number,
   aimBias = 0,
   probe?: TutorialProbe,
@@ -31,6 +31,8 @@ export function createBowlingBot(
   return {
     next(enqueue: (steps: ScriptStep[]) => void): void {
       const steps: ScriptStep[] = [];
+      // Pass-and-play: the bowling hand follows whoever is on the lane.
+      const hand = typeof handOf === 'function' ? handOf() : handOf;
       // Without a tutorial the bot does everything; with one it waits for the step that asks.
       const gate = probe === undefined ? 3 : probe.gate;
       if (view.phase !== 'aim') wiggled = false;

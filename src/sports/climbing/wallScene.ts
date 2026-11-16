@@ -29,6 +29,7 @@ import type { Layout } from './layout';
 const HOLD_POOL = 80;
 const LEDGE_POOL = 3;
 const MARKER_POOL = 4;
+const SEAT_POOL = 3;
 const SEAM_POOL = 14;
 const SEAM_EVERY = 1.5;
 const MARKER_EVERY = 5;
@@ -58,6 +59,7 @@ export class WallScene {
   private readonly ledges: InstancedMesh;
   private readonly seams: InstancedMesh;
   private readonly markers: InstancedMesh;
+  private readonly seatMarks: InstancedMesh | null = null;
   private readonly plates: {
     mesh: Mesh;
     canvas: HTMLCanvasElement;
@@ -86,7 +88,7 @@ export class WallScene {
   private readonly crimpColor = new Color(CRIMP_COLOUR);
   private readonly crimpLit = new Color();
 
-  constructor(scene: Scene, cfg: ClimbingConfig, layout: Layout) {
+  constructor(scene: Scene, cfg: ClimbingConfig, layout: Layout, multi = false) {
     this.scene = scene;
     this.cfg = cfg;
     this.layout = layout;
@@ -124,6 +126,15 @@ export class WallScene {
     this.geometries.push(markerGeo);
     this.markers = this.pool(markerGeo, MARKER_POOL, PALETTE.chalk, 'height-markers');
 
+    // Earlier climbers' best heights (multiplayer only): one coloured line each, one draw call.
+    if (multi) {
+      const seatGeo = new BoxGeometry(cfg.wallWidth - 1.1, 0.09, 0.02);
+      this.geometries.push(seatGeo);
+      const marks = this.pool(seatGeo, SEAT_POOL, 0xffffff, 'seat-marks');
+      marks.instanceColor = new InstancedBufferAttribute(new Float32Array(SEAT_POOL * 3), 3);
+      this.seatMarks = marks;
+    }
+
     // Number plates.
     const plateGeo = new PlaneGeometry(0.62, 0.31);
     this.geometries.push(plateGeo);
@@ -153,7 +164,7 @@ export class WallScene {
       this.jugLit.push(new Color().copy(base).lerp(new Color(0xffffff), 0.55));
     }
     this.crimpLit.copy(this.crimpColor).lerp(new Color(0xffffff), 0.45);
-    this.drawCalls = 4 + this.plates.length + 1;
+    this.drawCalls = 4 + this.plates.length + 1 + (multi ? 1 : 0);
   }
 
   private pool(geo: BufferGeometry, n: number, color: number, name: string): InstancedMesh {
@@ -303,6 +314,26 @@ export class WallScene {
     this.meshes.push(mesh);
   }
 
+  /**
+   * Multiplayer: a coloured line across the wall at each earlier climber's best height (feet,
+   * world metres). Call at a handover, not per frame. At most three; `n` 0 clears them.
+   */
+  setSeatMarks(heights: readonly number[], colors: readonly number[], n: number): void {
+    const marks = this.seatMarks;
+    if (marks === null) return;
+    const count = Math.min(n, SEAT_POOL);
+    for (let i = 0; i < count; i++) {
+      this.p.set(0, heights[i]!, this.cfg.wallZ + 0.02);
+      this.q.identity();
+      this.s.set(1, 1, 1);
+      marks.setMatrixAt(i, this.m.compose(this.p, this.q, this.s));
+      marks.setColorAt(i, this.c.setHex(colors[i]!));
+    }
+    marks.count = count;
+    marks.instanceMatrix.needsUpdate = true;
+    if (marks.instanceColor) marks.instanceColor.needsUpdate = true;
+  }
+
   /** Highlight up to four holds (hover and held, per hand). -1 for none. Cheap when unchanged. */
   setLit(a: number, b: number, c: number, d: number): void {
     const lit = this.lit;
@@ -320,6 +351,7 @@ export class WallScene {
   dispose(): void {
     for (const mesh of this.meshes) mesh.removeFromParent();
     for (const mesh of [this.holds, this.ledges, this.seams, this.markers]) mesh.dispose();
+    this.seatMarks?.dispose();
     for (const plate of this.plates) {
       plate.texture.dispose();
       (plate.mesh.material as MeshBasicMaterial).dispose();

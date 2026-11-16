@@ -341,3 +341,17 @@ export function buildMarkerGeometry(): BufferGeometry {
   paintGeometry(foot, PALETTE.chalk);
   return mergePainted([post, flag, foot]);
 }
+
+/**
+ * A small white pennant on a post, origin at the foot: the mark of a player's best throw in a
+ * pass-and-play game, tinted per instance with the player's colour.
+ */
+export function buildSeatMarkGeometry(): BufferGeometry {
+  const post = new CylinderGeometry(0.04, 0.05, 1.5, 6);
+  post.translate(0, 0.75, 0);
+  paintGeometry(post, 0xffffff);
+  const flag = new BoxGeometry(0.7, 0.45, 0.04);
+  flag.translate(0.35, 1.25, 0);
+  paintGeometry(flag, 0xffffff);
+  return mergePainted([post, flag]);
+}

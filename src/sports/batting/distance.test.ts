@@ -191,5 +191,6 @@ describe('bot rounds are the same difficulty at 350 ft', () => {
     }
     expect(homersNew).toBe(homersOld);
     expect(homersOld).toBeGreaterThan(40);
-  });
+    // About 0.6 s alone; sixteen full rounds run slowly on a busy machine, so allow a wide margin.
+  }, 30000);
 });

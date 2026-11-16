@@ -418,6 +418,30 @@ function nextAttempt(s: GameState): void {
 }
 
 /**
+ * Pass-and-play: a new player steps up. Back to the start of the runway in the ready beat, with
+ * no run speed, cadence history, throw lockout, refusal or flight left over from the last player.
+ * The seat's own attempts (`attempt`, `records`, `best`, `bestIndex`) are the sport's to swap in.
+ */
+export function resetRun(s: GameState): void {
+  s.phase = 'ready';
+  s.phaseT = 0;
+  s.runT = 0;
+  s.position = 0;
+  s.speed = 0;
+  s.cadence = 0;
+  s.cadenceNow = 0;
+  s.lastStepMs = -1e9;
+  s.lockoutUntilMs = 0;
+  s.idleHint = false;
+  s.crossT = 0;
+  s.flightFoul = false;
+  s.dropped = false;
+  s.lastDistance = 0;
+  s.lastFoul = false;
+  s.refusal = '';
+}
+
+/**
  * Tutorial only: start a fresh run-up at once (no get-ready beat, no attempt counted), from any
  * phase. The throw lockout starts now.
  */
@@ -508,4 +532,9 @@ function plant(s: GameState, cfg: JavelinConfig, dt: number): void {
 export function attemptLine(i: number, r: AttemptRecord): string {
   if (r.foul) return `${i + 1}: Foul`;
   return `${i + 1}: ${r.distance.toFixed(2)} m`;
+}
+
+/** A distance at the precision the table shows (2 decimals), so the score agrees with the headline. */
+export function shownDistance(m: number): number {
+  return Number(m.toFixed(2));
 }

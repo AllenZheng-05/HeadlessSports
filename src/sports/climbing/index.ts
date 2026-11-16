@@ -1,4 +1,4 @@
-import type { Sport, SportContext, SportFactory } from '../../core/sport';
+import type { RoundResult, Sport, SportContext, SportFactory } from '../../core/sport';
 import { AvatarAnimator } from '../../render/avatar/AvatarAnimator';
 import { Group, Vector3 } from 'three/webgpu';
 import { createClimbBot } from './bot';
@@ -8,6 +8,7 @@ import { Layout, mulberry32 } from './layout';
 import { chooseHold } from './plan';
 import {
   createPointerControl,
+  resetPointerControl,
   pointerPress,
   pointerRelease,
   pointerStep,
@@ -22,7 +23,9 @@ import {
   createClimbState,
   createStepInput,
   heightOf,
+  resetClimbState,
   shoulderDrop,
+  shownHeight,
   step,
 } from './rules';
 import type { HandSlot } from './rules';
@@ -58,6 +61,13 @@ export interface ClimbingSport extends Sport {
   readonly tutorialStep: number;
   /** Tutorial rounds: the number of steps, or 0 in a normal round. */
   readonly tutorialSteps: number;
+  /** Pass-and-play: the seat climbing now (0 when alone). */
+  readonly seat: number;
+  readonly seatCount: number;
+  /** True from the end of a climb until the next climber is in place. */
+  readonly handingOver: boolean;
+  /** Pass-and-play: each seat's best height so far, metres, in seat order. */
+  readonly seatBest: readonly number[];
 }
 
 const SHOULDER_X = 0.2;
@@ -85,6 +95,31 @@ export const createClimbing: SportFactory = (ctx: SportContext): ClimbingSport =
   const rng = mulberry32(Math.floor(ctx.random() * 4294967296));
   const layout = new Layout(rng, cfg);
   const tut = ctx.tutorial;
+  // Pass-and-play: each seat does one whole climb on the same wall, one after the other.
+  const turns = ctx.turns;
+  const multi = turns.count > 1 && !tut;
+  const seatCount = multi ? turns.count : 1;
+  let seat = 0;
+  let handingOver = false;
+  // Per seat, in seat order. Allocated once.
+  const seatBest: number[] = [];
+  const seatSecs: number[] = [];
+  const seatGrabs: number[] = [];
+  const seatFalls: number[] = [];
+  const seatReason: string[] = [];
+  const seatColors: number[] = [];
+  for (let i = 0; i < seatCount; i++) {
+    seatBest.push(0);
+    seatSecs.push(0);
+    seatGrabs.push(0);
+    seatFalls.push(0);
+    seatReason.push('');
+    seatColors.push(turns.players[i]?.color ?? 0xffffff);
+  }
+  /** The climb's best so far as last seen, and the second it was reached. */
+  let lastBest = 0;
+  let bestAtSecs = 0;
+  let shownBestTenths = -1;
   // A tutorial has no timer.
   const roundSeconds = tut
     ? Number.POSITIVE_INFINITY
@@ -97,7 +132,7 @@ export const createClimbing: SportFactory = (ctx: SportContext): ClimbingSport =
   animator.setBreathing(false);
   const unregister = ctx.tunables.register('climbing', 'Rock climbing', cfg, climbingRanges);
 
-  const wall = new WallScene(ctx.stage.scene, cfg, layout);
+  const wall = new WallScene(ctx.stage.scene, cfg, layout, multi);
   const drop = shoulderDrop(cfg);
   // The tutorial ends at a low flag a few metres up.
   if (tut) wall.addFinishFlag(cfg.tutorialTopM + drop + 0.55);
@@ -181,8 +216,11 @@ export const createClimbing: SportFactory = (ctx: SportContext): ClimbingSport =
     const secs = Math.max(0, Math.ceil(state.roundSeconds - state.elapsed));
     if (!tut && secs !== shownSecs) {
       shownSecs = secs;
+      const who = multi ? `${turns.players[seat]?.name ?? ''} · ` : '';
       ctx.hud.setSubScore(
-        ctx.best === null ? `${secs} s left` : `${secs} s left · Best ${ctx.best.toFixed(1)} m`,
+        ctx.best === null
+          ? `${who}${secs} s left`
+          : `${who}${secs} s left · Best ${ctx.best.toFixed(1)} m`,
       );
     }
     // In a tutorial the stamina bar appears with the step that explains it.
@@ -255,15 +293,96 @@ export const createClimbing: SportFactory = (ctx: SportContext): ClimbingSport =
     }
   };
 
+  const endReasonText = (): string =>
+    state.endReason === 'time'
+      ? 'Timed out'
+      : state.endReason === 'stamina'
+        ? 'Out of stamina'
+        : 'Slipped';
+
+  /** The next climber is in place: a fresh climb on the same wall. */
+  const switchSeat = (next: number): void => {
+    seat = next;
+    resetClimbState(state, cfg);
+    resetPointerControl(pointer);
+    if (ptr) {
+      pointer.seenPresses = ptr.pointerPresses;
+      pointer.seenReleases = ptr.pointerReleases;
+      ptr.selectHand('right');
+    }
+    animator.reset();
+    camVel[0] = 0;
+    camY = state.y + (cfg.cameraAboveM - cfg.cameraBelowM) / 2;
+    camAnchor = state.y;
+    climbBlend = 0;
+    milestone = 0;
+    ledgeShown = 0;
+    cheered = false;
+    endHandled = false;
+    finishIn = 0;
+    lastBest = 0;
+    bestAtSecs = 0;
+    shownBestTenths = -1;
+    shownTenths = -1;
+    shownSecs = -1;
+    shownStamina = -1;
+    shownActive = -1;
+    shownDragging = false;
+    // What the earlier climbers reached, so this one can see what to beat.
+    wall.setSeatMarks(seatBest, seatColors, next);
+    ctx.hud.setBanner(ptr ? 'Press and hold a hold to start' : 'Close a hand on a hold to start');
+    if (!ptr) ctx.hud.setHint('Grab, pull down, reach with the other hand');
+    handingOver = false;
+    camera.position.set(state.x * 0.3, camY, cfg.wallZ + camDist());
+    wall.update(camY);
+    refreshHud();
+  };
+
+  /** One climb is over: record it, then hand over or finish the game. */
+  const endTurn = (): void => {
+    seatBest[seat] = state.best;
+    seatSecs[seat] = bestAtSecs;
+    seatGrabs[seat] = state.grabs;
+    seatFalls[seat] = state.falls;
+    seatReason[seat] = endReasonText();
+    turns.setStanding(seat, shownHeight(state.best), `${shownHeight(state.best).toFixed(1)} m`);
+    if (seat < seatCount - 1) {
+      handingOver = true;
+      const next = seat + 1;
+      turns.handOver(next, () => switchSeat(next));
+      return;
+    }
+    finished = true;
+    const results: RoundResult[] = [];
+    for (let i = 0; i < seatCount; i++) {
+      const h = seatBest[i]!;
+      // Rank on what the table shows, so equal-looking heights fall to the time tie-break.
+      const shown = shownHeight(h);
+      results.push({
+        score: shown,
+        headline: `${shown.toFixed(1)} m`,
+        // Equal heights: the faster climber ranks higher.
+        tieBreak: -seatSecs[i]!,
+        lines: [`${seatReason[i]}, best at ${seatSecs[i]!.toFixed(1)} s`],
+        detail: {
+          height: h,
+          grabs: seatGrabs[i]!,
+          seconds: seatSecs[i]!,
+          falls: seatFalls[i]!,
+        },
+      });
+    }
+    ctx.finishMulti(results);
+  };
+
   const finish = (): void => {
+    if (multi) {
+      endTurn();
+      return;
+    }
     finished = true;
     const best = state.best;
-    const reason =
-      state.endReason === 'time'
-        ? 'Timed out'
-        : state.endReason === 'stamina'
-          ? 'Out of stamina'
-          : 'Slipped';
+    const reason = endReasonText();
     ctx.finish({
       score: best,
       headline: `${best.toFixed(1)} m`,
@@ -390,12 +509,24 @@ export const createClimbing: SportFactory = (ctx: SportContext): ClimbingSport =
       return tutorial === null ? -1 : tutorial.step;
     },
 
+    get seat(): number {
+      return seat;
+    },
+    seatCount,
+    get handingOver(): boolean {
+      return handingOver;
+    },
+    seatBest,
+
     get tutorialSteps(): number {
       return tutorial === null ? 0 : tutorial.stepCount;
     },
 
     start(): void {
       started = true;
+      if (multi) {
+        for (let i = 0; i < seatCount; i++) turns.setStanding(i, 0, '0.0 m');
+      }
       if (tut) {
         // The coach panel gives the instructions; no banner, hint, timer or best.
         ctx.hud.setSubScore(null);
@@ -431,7 +562,7 @@ export const createClimbing: SportFactory = (ctx: SportContext): ClimbingSport =
 
     fixedUpdate(dt: number): void {
       // Grab and release come from hand state read here, so nothing changes while paused.
-      if (finished || ctx.paused) {
+      if (finished || handingOver || ctx.paused) {
         if (ptr) {
           pointer.seenPresses = ptr.pointerPresses;
           pointer.seenReleases = ptr.pointerReleases;
@@ -475,6 +606,15 @@ export const createClimbing: SportFactory = (ctx: SportContext): ClimbingSport =
         pointerStep(pointer, state, cfg, layout, input, ptr.pointerX, ptr.pointerY, dt);
       }
       step(state, cfg, layout, input, dt);
+      if (state.best > lastBest) {
+        lastBest = state.best;
+        bestAtSecs = state.elapsed;
+        const tenths = Math.floor(lastBest * 10);
+        if (multi && tenths !== shownBestTenths) {
+          shownBestTenths = tenths;
+          turns.setStanding(seat, lastBest, `${(tenths / 10).toFixed(1)} m`);
+        }
+      }
       if (tut) keepSafe(state, cfg);
       handleEvents();
       handleEnd();

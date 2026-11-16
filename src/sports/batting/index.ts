@@ -1,4 +1,4 @@
-import type { Sport, SportBot, SportContext, SportFactory } from '../../core/sport';
+import type { RoundResult, Sport, SportBot, SportContext, SportFactory } from '../../core/sport';
 import { asMouseControl } from '../../input/debug/mouseControl';
 import { recognizerConfig } from '../../input/recognizers/config';
 import type { Side } from '../../input/types';
@@ -41,6 +41,7 @@ import {
   readStance,
 } from './tutorial';
 import type { BattingTutorial, PitchMode } from './tutorial';
+import { DrawTape } from './tape';
 import { buildWorld } from './world';
 import { formatFeet } from './units';
 
@@ -93,7 +94,18 @@ export interface BattingProbe {
     distance: number;
     timingError: number | null;
     homer: boolean;
+    /** The pitch itself: height band, lateral wobble (m), flight time and the length of the set (ms). */
+    band: number;
+    tx: number;
+    flightMs: number;
+    setMs: number;
   }[];
+  /** Pass-and-play: the seat at bat, the number of seats and each seat's finished score (ft). */
+  readonly seat: number;
+  readonly seatCount: number;
+  readonly scores: readonly number[];
+  /** The handedness the batter is using now (re-read from the calibration at each handover). */
+  readonly handedness: Side;
 }
 
 export const createBatting: SportFactory = (ctx: SportContext): Sport & BattingProbe => {
@@ -101,7 +113,21 @@ export const createBatting: SportFactory = (ctx: SportContext): Sport & BattingP
   const unregister = ctx.tunables.register('batting', 'Batting', cfg, battingRanges);
   const tut = ctx.tutorial;
   const handedness = (): Side => ctx.calibration?.handedness ?? 'right';
-  const sg = handedness() === 'right' ? 1 : -1;
+  // Pass-and-play: each seat bats one whole set of pitches, one after another. Hands are the
+  // current seat's: read again at every handover.
+  const turns = ctx.turns;
+  const multi = turns.count > 1 && !tut;
+  const seatCount = multi ? turns.count : 1;
+  let seat = 0;
+  let handover = false;
+  const seatSummaries: (RoundSummary | null)[] = [];
+  for (let i = 0; i < seatCount; i++) seatSummaries.push(null);
+  /** Seat 0 records the round's random draws, the later seats replay them: the same pitches. */
+  const tape = new DrawTape();
+  let roundRandom: () => number = multi ? tape.recorder(ctx.random) : ctx.random;
+  /** The bot's per-pitch jitter, kept by pitch index so every seat's bot leans the same way. */
+  const jitters = new Float64Array(64).fill(Number.NaN);
+  let sg = handedness() === 'right' ? 1 : -1;
   const sourceKind = ctx.input.source?.kind;
   const realtime = sourceKind !== 'synthetic' && sourceKind !== 'replay';
   const scene = ctx.stage.scene;
@@ -110,16 +136,16 @@ export const createBatting: SportFactory = (ctx: SportContext): Sport & BattingP
 
   // ---- props ----
   // Side-on in the box: a right-hander on the screen-left of the plate, chest toward it.
-  const hand = handedness();
+  let hand = handedness();
   // The swing goes toward the plate; the load (hands going back) does not start it.
   const restoreRecognizer = applyBattingRecognizer(hand, recognizerConfig);
-  const standX = batterX(hand, cfg);
-  const stanceYaw = batterYaw(hand);
+  let standX = batterX(hand, cfg);
+  let stanceYaw = batterYaw(hand);
   ctx.avatar.root.position.set(standX, 0, batterZ(cfg));
   ctx.avatar.root.rotation.y = stanceYaw;
   ctx.avatar.setMittCurl('left', 1);
   ctx.avatar.setMittCurl('right', 1);
-  const pose = new BatterPose(cfg, hand);
+  let pose = new BatterPose(cfg, hand);
   const world = buildWorld(scene, cfg, standX);
   ctx.stage.ground.visible = false;
 
@@ -224,7 +250,7 @@ export const createBatting: SportFactory = (ctx: SportContext): Sport & BattingP
   // Camera-off play: a click is the whole control (see mouseSwing.ts). No keys, no aiming.
   const mouse = asMouseControl(ctx.input);
   mouse?.setManualMode(true);
-  const swinger = mouse === null ? null : new MouseSwinger(mouse, cfg);
+  let swinger = mouse === null ? null : new MouseSwinger(mouse, cfg);
   // Why a seen arm motion did not count, said for a moment (a short hint over the usual one).
   const hint = new HintLine((text) => ctx.hud.setHint(text), cfg.noticeMs);
   let seenRejected = ctx.input.state.rejected?.seq ?? 0;
@@ -256,6 +282,7 @@ export const createBatting: SportFactory = (ctx: SportContext): Sport & BattingP
     if (s.score === shownScore) return;
     shownScore = s.score;
     ctx.hud.setScore(formatFeet(s.score));
+    if (multi) turns.setStanding(seat, s.score, formatFeet(s.score));
   };
 
   const timingText = (j: Judgement): string => {
@@ -323,6 +350,10 @@ export const createBatting: SportFactory = (ctx: SportContext): Sport & BattingP
       distance: r.distance,
       timingError: j === null ? null : j.timingError,
       homer: r.homer,
+      band: r.pitch.band,
+      tx: r.pitch.tx,
+      flightMs: r.pitch.flightMs,
+      setMs: r.pitch.windupStartMs - r.pitch.setStartMs,
     });
     if (r.kind === 'hit') {
       const q = j!.quality;
@@ -361,7 +392,79 @@ export const createBatting: SportFactory = (ctx: SportContext): Sport & BattingP
     celebrateAtMs = -1;
   };
 
+  /** One seat's whole set as a result row: the sport's usual score, the table's headline in feet. */
+  const seatResult = (s: RoundSummary): RoundResult => ({
+    score: s.score,
+    headline: formatFeet(s.score),
+    lines: [
+      `${s.homers === 1 ? '1 home run' : `${s.homers} home runs`}, longest ${formatFeet(s.best)}`,
+    ],
+    detail: {
+      pitches: s.pitches,
+      hits: s.hits,
+      homers: s.homers,
+      fouls: s.fouls,
+      misses: s.misses,
+      best: s.best,
+      totalTimingErrorMs: Math.round(s.totalTimingErrorMs),
+    },
+  });
+
+  /** Put the next seat at bat: its own handedness, stance, side of the plate and a fresh round. */
+  const switchSeat = (next: number): void => {
+    seat = next;
+    handover = false;
+    // Hand-bound things are rebuilt from the new seat's calibration; the recognizer's swing
+    // direction follows (the first apply's restore still puts the originals back on dispose).
+    hand = handedness();
+    sg = hand === 'right' ? 1 : -1;
+    applyBattingRecognizer(hand, recognizerConfig);
+    standX = batterX(hand, cfg);
+    stanceYaw = batterYaw(hand);
+    pose = new BatterPose(cfg, hand);
+    ctx.avatar.root.position.set(standX, 0, batterZ(cfg));
+    ctx.avatar.root.rotation.y = stanceYaw;
+    animator.reset();
+    ctx.avatar.setMittCurl('left', 1);
+    ctx.avatar.setMittCurl('right', 1);
+    camBase.x = cfg.cameraSide * sg;
+    camera.position.copy(camBase);
+    camera.lookAt(lookBase);
+    follow = 0;
+    // The same pitches as the first seat: the round plays back the recorded draws.
+    roundRandom = tape.replayer(ctx.random);
+    round = null;
+    pitcherClipPlayed = false;
+    batContactMs = -1e9;
+    batHeight = 1;
+    over = false;
+    bat.visible = true;
+    waggle = 0;
+    celebrateAtMs = -1;
+    shownScore = -1;
+    queue.n = 0;
+    results.length = 0;
+    swinger = mouse === null ? null : new MouseSwinger(mouse, cfg);
+    seenRejected = ctx.input.state.rejected?.seq ?? 0;
+    hint.setBase(null);
+    ctx.hud.setBanner(null);
+    ctx.hud.setScore(formatFeet(0));
+    ctx.hud.setSubScore(turns.players[seat]?.name ?? null);
+  };
+
   const onFinish = (s: RoundSummary): void => {
+    if (multi) {
+      seatSummaries[seat] = { ...s };
+      const next = seat + 1;
+      if (next < seatCount) {
+        // Everyone bats the same set: pass the bat once the banner and the celebration are done.
+        handover = true;
+        turns.handOver(next, () => switchSeat(next));
+        return;
+      }
+      ctx.finishMulti(seatSummaries.map((r) => seatResult(r ?? s)));
+      return;
+    }
     const lines = [`${s.hits} of ${s.pitches} pitches hit`, `Longest hit ${formatFeet(s.best)}`];
     lines.push(s.homers === 1 ? '1 home run' : `${s.homers} home runs`);
     ctx.finish({
@@ -385,7 +488,7 @@ export const createBatting: SportFactory = (ctx: SportContext): Sport & BattingP
       cfg,
       short: ctx.short,
       startMs,
-      random: ctx.random,
+      random: roundRandom,
       handedness,
       realtime,
       endless: tut,
@@ -545,7 +648,12 @@ export const createBatting: SportFactory = (ctx: SportContext): Sport & BattingP
         });
         return;
       }
-      ctx.hud.setSubScore(ctx.best === null ? null : `Best ${formatFeet(ctx.best)}`);
+      if (multi) {
+        for (let i = 0; i < seatCount; i++) turns.setStanding(i, 0, formatFeet(0));
+        ctx.hud.setSubScore(turns.players[0]?.name ?? null);
+      } else {
+        ctx.hud.setSubScore(ctx.best === null ? null : `Best ${formatFeet(ctx.best)}`);
+      }
       hint.setBase(
         mouse === null
           ? 'Hold both hands together like a bat. Swing as the ball arrives.'
@@ -555,7 +663,7 @@ export const createBatting: SportFactory = (ctx: SportContext): Sport & BattingP
 
     fixedUpdate(_dt: number, nowMs: number): void {
       clock = nowMs;
-      if (!started) return;
+      if (!started || handover) return;
       // A tutorial starts its pitching with the step that needs it; until then swings are practice.
       if (round === null && !tut) round = makeRound(nowMs);
       if (round !== null) swinger?.poll(round, nowMs, ctx.paused);
@@ -617,7 +725,20 @@ export const createBatting: SportFactory = (ctx: SportContext): Sport & BattingP
       return createBattingBot({
         cfg,
         random: ctx.random,
-        direction: sg > 0 ? 1 : -1,
+        direction: () => (sg > 0 ? 1 : -1),
+        jitterDraw: multi
+          ? (index) => {
+              // Seat 0 draws; the later seats lean the same way on the same pitch (no draws).
+              if (index >= jitters.length) return seat === 0 ? ctx.random() : 0.5;
+              if (seat === 0) {
+                const v = ctx.random();
+                jitters[index] = v;
+                return v;
+              }
+              const v = jitters[index]!;
+              return Number.isNaN(v) ? 0.5 : v;
+            }
+          : undefined,
         probe: tut ? probe : undefined,
         view: {
           pitch: () =>
@@ -686,7 +807,21 @@ export const createBatting: SportFactory = (ctx: SportContext): Sport & BattingP
       return round === null ? 0 : round.started;
     },
     get phase(): string {
-      return round === null ? 'waiting' : round.phase;
+      return handover ? 'handover' : round === null ? 'waiting' : round.phase;
+    },
+    get seat(): number {
+      return seat;
+    },
+    get seatCount(): number {
+      return seatCount;
+    },
+    get scores(): readonly number[] {
+      return seatSummaries.map((s, i) =>
+        i === seat && round !== null ? round.summary.score : (s?.score ?? 0),
+      );
+    },
+    get handedness(): Side {
+      return hand;
     },
     get stage(): string {
       return round === null ? 'waiting' : round.stage(clock);

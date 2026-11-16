@@ -1,7 +1,7 @@
 import { mkdirSync } from 'node:fs';
 import { expect, test } from '@playwright/test';
 import type { Page } from '@playwright/test';
-import { expectNoHintFor, tutorialStuck } from './tutorialHelpers';
+import { expectNoHintFor, tutorialStuck, waitSeatUp } from './tutorialHelpers';
 
 const SHOTS = 'e2e/screenshots';
 mkdirSync(SHOTS, { recursive: true });
@@ -85,6 +85,9 @@ const stepsSeen = (page: Page): Promise<number[]> =>
   );
 
 const SYNTHETIC = '/?sport=climbing&source=synthetic&skipGate=1&short=1&timeScale=3';
+
+/** One climb takes about 19 s alone; more than twice that, well under the test timeout. */
+const SEAT_WAIT_MS = 50_000;
 
 test.describe('rock climbing', () => {
   test('the synthetic climber plays a full short round', async ({ page }) => {
@@ -527,6 +530,195 @@ test.describe('rock climbing', () => {
     );
     expect(result).toBeNull();
     await page.screenshot({ path: `${SHOTS}/climbing-tutorial-mouse-done.png` });
+    expect(problems).toEqual([]);
+  });
+
+  // ---- pass-and-play ----
+
+  interface MultiHook {
+    phase: string;
+    players: number;
+    seat: number;
+    ranking: { rank: number; name: string; score: number; headline: string }[] | null;
+    result: unknown;
+    isBest: boolean | null;
+  }
+
+  const multiHook = (page: Page): Promise<MultiHook> =>
+    page.evaluate(() => {
+      const g = (window as unknown as { __game: MultiHook }).__game;
+      return {
+        phase: g.phase,
+        players: g.players,
+        seat: g.seat,
+        ranking: g.ranking === null ? null : g.ranking.map((r) => ({ ...r })),
+        result: g.result,
+        isBest: g.isBest,
+      };
+    });
+
+  const climbState = (
+    page: Page,
+  ): Promise<{
+    seat: number;
+    handingOver: boolean;
+    height: number;
+    grabs: number;
+    status: string;
+  }> =>
+    page.evaluate(() => {
+      const s = (window as unknown as { __game: ClimbingHook }).__game.sport as unknown as {
+        seat: number;
+        handingOver: boolean;
+        height: number;
+        grabs: number;
+        status: string;
+      };
+      return {
+        seat: s.seat,
+        handingOver: s.handingOver,
+        height: s.height,
+        grabs: s.grabs,
+        status: s.status,
+      };
+    });
+
+  /** Wait for a handover card by its title, with the game and sport state if it never comes. */
+  async function waitHandover(page: Page, title: string, timeout: number): Promise<void> {
+    try {
+      await expect(page.locator('.handover h1')).toHaveText(title, { timeout });
+    } catch (err) {
+      const game = await multiHook(page).catch(() => null);
+      const sport = await climbState(page).catch(() => null);
+      throw new Error(
+        `Never saw the handover card "${title}"; game ${JSON.stringify(game)}, sport ${JSON.stringify(sport)}.`,
+        { cause: err },
+      );
+    }
+  }
+
+  /** Take `n` holds with the real mouse, hand over hand, pulling down a little each time. */
+  async function mouseGrabs(page: Page, n: number): Promise<void> {
+    const vp = page.viewportSize()!;
+    for (let i = 0; i < n; i++) {
+      const aim = await page.evaluate(() => {
+        const s = (window as unknown as { __game: ClimbingHook }).__game.sport!;
+        return s.pointerHand === 'left' ? s.aimImage('left') : s.aimImage('right');
+      });
+      expect(aim, `grab ${i + 1}: a hold to aim at`).not.toBeNull();
+      await page.mouse.move(aim!.x * vp.width, aim!.y * vp.height);
+      await page.waitForTimeout(120);
+      await page.mouse.down();
+      await page.waitForTimeout(250);
+      await page.mouse.move(aim!.x * vp.width, (aim!.y + 0.2) * vp.height, { steps: 6 });
+      await page.waitForTimeout(150);
+      await page.mouse.up();
+      await page.waitForTimeout(150);
+    }
+  }
+
+  test('three synthetic players climb in turn, rank in a table and nothing is saved', async ({
+    page,
+  }) => {
+    test.setTimeout(145_000); // 57 s alone at three times speed, 2.5x
+    const problems = watch(page);
+    await page.addInitScript(() => {
+      const w = window as unknown as {
+        __seats: number[];
+        __game?: { phase: string; seat: number };
+      };
+      w.__seats = [];
+      setInterval(() => {
+        const g = w.__game;
+        if (g && g.phase === 'playing' && w.__seats[w.__seats.length - 1] !== g.seat) {
+          w.__seats.push(g.seat);
+        }
+      }, 20);
+    });
+    await page.goto(
+      '/?sport=climbing&players=3&names=Mia,Sam,Zoe&source=synthetic&skipGate=1&short=1&timeScale=3',
+    );
+    await waitPhase(page, 'playing');
+    expect(await multiHook(page)).toMatchObject({ players: 3, seat: 0 });
+    await expect(page.locator('.standing')).toHaveCount(3);
+    await expect(page.locator('.standing.current .standing-name')).toHaveText('Mia');
+
+    // One bounded checkpoint per handover: seats 0, 1, 2.
+    for (const seat of [1, 2]) {
+      await waitSeatUp(page, 'climbing, three synthetic players', seat, SEAT_WAIT_MS);
+    }
+    await waitPhase(page, 'results', SEAT_WAIT_MS);
+    await page.waitForTimeout(500);
+    await page.screenshot({ path: `${SHOTS}/climbing-multi-results.png` });
+    const seats = await page.evaluate(() => [
+      ...(window as unknown as { __seats: number[] }).__seats,
+    ]);
+    expect(seats).toEqual([0, 1, 2]);
+
+    const g = await multiHook(page);
+    expect(g.ranking).toHaveLength(3);
+    expect(g.ranking?.map((r) => r.name).sort()).toEqual(['Mia', 'Sam', 'Zoe']);
+    const scores = g.ranking?.map((r) => r.score) ?? [];
+    expect([...scores].sort((a, b) => b - a)).toEqual(scores);
+    expect(scores.every((v) => v > 2)).toBe(true);
+    expect(g.ranking?.[0]?.rank).toBe(1);
+    expect(g.result).toBeNull();
+    expect(g.isBest).toBeNull();
+    await expect(page.locator('.rank-row')).toHaveCount(3);
+    await expect(page.locator('.best-badge')).toHaveCount(0);
+    await expect(page.locator('.results-best')).toHaveCount(0);
+
+    await page.keyboard.press('Escape');
+    await waitPhase(page, 'menu', 10000);
+    await expect(page.locator('.sport-card[data-sport="climbing"] .sport-best')).toHaveText(
+      'No score yet',
+    );
+    expect(problems).toEqual([]);
+  });
+
+  test('two players with the mouse: one handover, a fresh climb, a ranked table', async ({
+    page,
+  }) => {
+    test.setTimeout(255_000); // 102 s alone (two 25 s climbs plus mouse play), 2.5x
+    const problems = watch(page);
+    await page.goto('/?sport=climbing&players=2&names=Mia,Sam&input=debug&skipGate=1&short=1');
+    await waitPhase(page, 'playing');
+    await page.waitForTimeout(400);
+    expect(await multiHook(page)).toMatchObject({ players: 2, seat: 0 });
+    await mouseGrabs(page, 3);
+    const mia = await climbState(page);
+    expect(mia.grabs).toBeGreaterThanOrEqual(3);
+    expect(mia.height).toBeGreaterThan(0.3);
+
+    // The 25 s climb runs out: the card for Sam, with the round paused under it.
+    await waitHandover(page, "Sam, you're up", 100_000);
+    await page.screenshot({ path: `${SHOTS}/climbing-handover.png` });
+    expect((await multiHook(page)).phase).toBe('handover');
+    expect((await climbState(page)).handingOver).toBe(true);
+    await page.getByRole('button', { name: 'Ready' }).click();
+    await expect(page.locator('.handover')).toHaveCount(0);
+    await expect.poll(async () => (await climbState(page)).seat, { timeout: 5000 }).toBe(1);
+    const sam = await climbState(page);
+    expect(sam).toMatchObject({ handingOver: false, grabs: 0, status: 'ready' });
+    expect(sam.height).toBeLessThan(0.05);
+    await expect(page.locator('.standing.current .standing-name')).toHaveText('Sam');
+    await page.waitForTimeout(600);
+    await page.screenshot({ path: `${SHOTS}/climbing-second-climber.png` });
+    await mouseGrabs(page, 2);
+    expect((await climbState(page)).grabs).toBeGreaterThanOrEqual(2);
+
+    await waitPhase(page, 'results', 100_000);
+    await page.waitForTimeout(400);
+    await expect(page.locator('.rank-row')).toHaveCount(2);
+    const g = await multiHook(page);
+    expect(g.ranking?.map((r) => r.name).sort()).toEqual(['Mia', 'Sam']);
+    expect(g.result).toBeNull();
+    await expect(page.locator('.best-badge')).toHaveCount(0);
+    await page.keyboard.press('Escape');
+    await waitPhase(page, 'menu', 10000);
+    await expect(page.locator('.sport-card[data-sport="climbing"] .sport-best')).toHaveText(
+      'No score yet',
+    );
     expect(problems).toEqual([]);
   });
 });

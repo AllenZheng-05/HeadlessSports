@@ -20,4 +20,5 @@ export const meta: SportMeta = {
   ],
   debugKeys: ['Click to swing as the ball reaches the plate'],
   hasTutorial: true,
+  multiplayer: { turnLabel: 'set of pitches', maxPlayers: 4 },
 };

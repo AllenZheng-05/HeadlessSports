@@ -22,4 +22,5 @@ export const meta: SportMeta = {
     'Press and hold on the field to aim the ring, let go to throw',
   ],
   hasTutorial: true,
+  multiplayer: { turnLabel: 'set of pitches', maxPlayers: 4 },
 };

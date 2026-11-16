@@ -46,7 +46,8 @@ export interface TutorialProbe {
 export function createJavelinBot(
   cfg: JavelinConfig,
   state: GameState,
-  hand: 'left' | 'right',
+  /** A function when the seat (and so the throwing hand) can change between turns. */
+  handSource: 'left' | 'right' | (() => 'left' | 'right'),
   random: () => number,
   variant: 'slow' | 'fast' | null = null,
   style: 'legs' | 'jog' = 'legs',
@@ -56,12 +57,14 @@ export function createJavelinBot(
   const loftDeg = 95 + 15 * random();
   /** Steps jogged so far in this run: the next burst carries on with the same leg and arm phase. */
   let stepsDone = 0;
+  const hand = (): 'left' | 'right' =>
+    typeof handSource === 'function' ? handSource() : handSource;
   return {
     next(enqueue): void {
       switch (state.phase) {
         case 'run': {
           if (probe?.standing === true && !probe.hold) {
-            enqueue(overarmThrow(hand, { power, loftDeg }));
+            enqueue(overarmThrow(hand(), { power, loftDeg }));
             return;
           }
           const sps =
@@ -77,7 +80,7 @@ export function createJavelinBot(
           const slack = remaining - need;
           const burst = probe?.hold === true ? 4 : Math.min(4, Math.floor((slack / v) * sps));
           if (burst < 1) {
-            enqueue(overarmThrow(hand, { power, loftDeg }));
+            enqueue(overarmThrow(hand(), { power, loftDeg }));
             return;
           }
           const steps = stepsDone === 0 ? Math.max(burst, 3) : burst;

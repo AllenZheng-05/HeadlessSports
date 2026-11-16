@@ -120,6 +120,43 @@ export function createClimbState(cfg: ClimbingConfig, roundSeconds: number): Cli
   };
 }
 
+function resetSlot(slot: HandSlot): void {
+  slot.closed = false;
+  slot.cursorX = 0;
+  slot.cursorY = 0;
+  slot.holding = false;
+  slot.hold = -1;
+  slot.lostMs = 0;
+  slot.windowMs = 0;
+}
+
+/**
+ * Put a state back to the start of a climb, in place (the bot and the sport hold this object).
+ * The event counters keep counting, so whoever compares them with its own copy sees no false
+ * event, and `oneHandDrainMult` is the sport's setting, not the climb's.
+ */
+export function resetClimbState(state: ClimbState, cfg: Pick<ClimbingConfig, 'avatarScale'>): void {
+  state.status = 'ready';
+  state.endReason = 'none';
+  state.x = 0;
+  state.y = shoulderDrop(cfg);
+  state.targetX = 0;
+  state.targetY = shoulderDrop(cfg);
+  state.speed = 0;
+  state.stamina = 1;
+  state.elapsed = 0;
+  state.best = 0;
+  state.slipMs = 0;
+  state.fallVy = 0;
+  state.standing = true;
+  resetSlot(state.left);
+  resetSlot(state.right);
+  state.grabs = 0;
+  state.crimpGrabs = 0;
+  state.falls = 0;
+  state.lastRelease = 'none';
+}
+
 /** Height of the feet above the ground. */
 export function heightOf(state: ClimbState, cfg: Pick<ClimbingConfig, 'avatarScale'>): number {
   return state.y - shoulderDrop(cfg);
@@ -314,4 +351,9 @@ export function step(
 
   const h = state.y - drop;
   if (h > state.best) state.best = h;
+}
+
+/** A height at the precision the table shows: floored to 0.1 m (what the live height reads). */
+export function shownHeight(h: number): number {
+  return Math.floor(h * 10) / 10;
 }

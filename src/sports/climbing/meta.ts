@@ -13,6 +13,7 @@ export const meta: SportMeta = {
   usesHandedness: false,
   needsSpace: false,
   hasTutorial: true,
+  multiplayer: { turnLabel: 'climb', maxPlayers: 4 },
   score: { label: 'Height', unit: 'm', decimals: 1, higherIsBetter: true },
   howTo: [
     'Hold both hands up close to the camera.',

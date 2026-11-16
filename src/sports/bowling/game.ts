@@ -15,7 +15,7 @@ import { nextBall, runningTotal } from './scoring';
 import type { NextBall } from './scoring';
 
 /** The explicit phases of a round. */
-export type BowlPhase = 'pickup' | 'aim' | 'rolling' | 'settle' | 'reset' | 'done';
+export type BowlPhase = 'pickup' | 'aim' | 'rolling' | 'settle' | 'reset' | 'done' | 'handover';
 
 /** The slice of InputState the rules read. Structural, so tests can fake it. */
 export interface PlayerView {
@@ -70,6 +70,11 @@ export interface GameEvents {
   pinsDown?(count: number): void;
   rolled?(outcome: RollOutcome): void;
   finished?(total: number, rolls: readonly number[]): void;
+  /**
+   * Pass-and-play only: this player's frame is over (the game is now in 'handover'). `complete`
+   * is true when it was their last frame. Call `start()` again for their next frame.
+   */
+  turnEnded?(complete: boolean): void;
 }
 
 export interface GameOptions {
@@ -81,6 +86,11 @@ export interface GameOptions {
    * (`onFistClosed`, `onWindup`, `onThrow`) and the hold-still pickup are off.
    */
   mouse?: boolean;
+  /**
+   * Pass-and-play: stop in 'handover' after every frame instead of racking the next one, and
+   * never enter 'done'. The caller restarts the game with `start()` when this seat is up again.
+   */
+  turns?: boolean;
 }
 
 /**
@@ -121,6 +131,9 @@ export class BowlingGame {
   private windingUp = false;
   private releasePending = false;
   private aimHoldLeft = 0;
+  private readonly turnMode: boolean;
+  /** The frame this turn started on (pass-and-play). */
+  private turnFrame = 0;
 
   constructor(
     physics: BowlingPhysics,
@@ -135,6 +148,7 @@ export class BowlingGame {
     this.frames = options.frames;
     this.next = nextBall(this.rolls, this.frames);
     this.mouse = options.mouse ?? false;
+    this.turnMode = options.turns ?? false;
     this.aimLateral = sideSign(options.hand) * cfg.neutralLateral;
   }
 
@@ -169,8 +183,17 @@ export class BowlingGame {
     return runningTotal(this.rolls, this.frames);
   }
 
+  /** Begin the round, or (pass-and-play) this seat's next frame on a fresh, fully reset rack. */
   start(): void {
     this.started = true;
+    // Nothing of the last turn carries over: same place on the lane, neutral aim, no stale pose.
+    this.turnFrame = this.next.frame;
+    this.bowlerX = 0;
+    this.aimLateral = sideSign(this.hand) * this.cfg.neutralLateral;
+    this.latestView = null;
+    this.mouseAim = 0;
+    this.liveDown = 0;
+    this.physics.removeBall();
     this.physics.rack(true);
     this.enter('pickup');
   }
@@ -235,7 +258,8 @@ export class BowlingGame {
 
   /** Run the rules for one fixed step. */
   fixedUpdate(dt: number, view: PlayerView): void {
-    if (!this.started || (this.phase === 'done' && this.finishedFired)) return;
+    if (!this.started || this.phase === 'handover') return;
+    if (this.phase === 'done' && this.finishedFired) return;
     this.phaseTime += dt;
     this.latestView = view;
     this.physics.step(dt);
@@ -385,6 +409,13 @@ export class BowlingGame {
   }
 
   private endSettle(): void {
+    if (this.turnMode && (this.next.done || this.next.frame !== this.turnFrame)) {
+      // This player's frame is over: stop here and let the caller hand the lane over.
+      this.physics.removeBall();
+      this.enter('handover');
+      this.events.turnEnded?.(this.next.done);
+      return;
+    }
     if (this.next.done) {
       this.physics.removeBall();
       this.enter('done');

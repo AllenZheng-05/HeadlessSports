@@ -60,19 +60,32 @@ export function createBattingBot(options: {
   view: BotView;
   random: () => number;
   /** Which way the swing goes in the image: toward the plate (1 for a right-hander, -1 for a left-hander). */
-  direction?: -1 | 1;
+  direction?: -1 | 1 | (() => -1 | 1);
   /** Tutorial only: the steps that are not "hit the pitch". */
   probe?: TutorialProbe;
+  /**
+   * Pass-and-play: the unit random number for the jitter of pitch `index`, so every seat's bot
+   * leans the same way on the same pitch. Default: the next draw from `random`.
+   */
+  jitterDraw?: (index: number) => number;
 }): SportBot {
   const { cfg, view, random, probe } = options;
-  const direction = options.direction ?? 1;
+  const directionOpt = options.direction ?? 1;
+  const jitterDraw = options.jitterDraw ?? ((): number => random());
+  // Pass-and-play: the next seat may bat the other way round.
+  let direction: -1 | 1 = 1;
   let swungFor = 0;
   let jitterFor = 0;
   let jitter = 0;
   let lowered = false;
   return {
     next(enqueue, rel): void {
+      direction = typeof directionOpt === 'function' ? directionOpt() : directionOpt;
+      if (!view.over()) lowered = false;
       if (view.over()) {
+        // The next seat's pitches count from 1 again.
+        swungFor = 0;
+        jitterFor = 0;
         // Hands down and open, away from the results screen's buttons (hand cursors can press them).
         if (lowered) enqueue(idle(200));
         else {
@@ -106,7 +119,7 @@ export function createBattingBot(options: {
       }
       if (jitterFor !== p.index) {
         jitterFor = p.index;
-        jitter = (random() * 2 - 1) * cfg.botJitterMs;
+        jitter = (jitterDraw(p.index) * 2 - 1) * cfg.botJitterMs;
       }
       const startAt = p.arrivalMs - cfg.batTravelMs - cfg.botOnsetOffsetMs + jitter;
       const remaining = startAt - now;

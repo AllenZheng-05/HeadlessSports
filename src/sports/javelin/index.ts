@@ -1,12 +1,19 @@
 import { mirrorUpperBody } from '../../core/avatarDrive';
-import type { MeterTone, Sport, SportBot, SportContext, SportFactory } from '../../core/sport';
+import type {
+  MeterTone,
+  RoundResult,
+  Sport,
+  SportBot,
+  SportContext,
+  SportFactory,
+} from '../../core/sport';
 import { asMouseControl } from '../../input/debug/mouseControl';
 import { recognizerConfig } from '../../input/recognizers/config';
 import type { GameEvent, Side } from '../../input/types';
 import { AvatarAnimator } from '../../render/avatar/AvatarAnimator';
 import { BlobShadow } from '../../render/style/blobShadow';
 import { vertexColorToonMaterial } from '../../render/style/toon';
-import { Mesh, Vector3 } from 'three/webgpu';
+import { Color, InstancedMesh, Matrix4, Mesh, Vector3 } from 'three/webgpu';
 import type { Fog } from 'three/webgpu';
 import { createJavelinBot } from './bot';
 import type { TutorialProbe } from './bot';
@@ -23,17 +30,26 @@ import {
   onStep,
   onThrow,
   refusalWorthSaying,
+  resetRun,
+  shownDistance,
   showsRejection,
   stepGame,
 } from './game';
 import type { AttemptRecord, Phase } from './game';
 import { createJavelinTutorial, holdBack } from './tutorial';
 import type { JavelinTutorial } from './tutorial';
-import { JAVELIN_TIP, buildJavelinGeometry, buildMarkerGeometry, buildWorld } from './world';
+import {
+  JAVELIN_TIP,
+  buildJavelinGeometry,
+  buildMarkerGeometry,
+  buildSeatMarkGeometry,
+  buildWorld,
+} from './world';
 
 /** What the browser tests and the debugging overlay read from `__game.sport`. */
 export interface JavelinSport extends Sport {
-  readonly phase: Phase;
+  /** The rules' phase, or 'handover' while the next player steps in (pass-and-play). */
+  readonly phase: Phase | 'handover';
   /** Metres from the start of the runway. */
   readonly position: number;
   /** Metres left to the foul line. */
@@ -52,6 +68,33 @@ export interface JavelinSport extends Sport {
   readonly tutorialStep: number;
   /** Tutorial rounds: the number of steps, or 0 in a normal round. */
   readonly tutorialSteps: number;
+  /** Seat in front of the camera, and the number of seats (1 for a normal round). */
+  readonly seat: number;
+  readonly seatCount: number;
+  /** The throwing hand of the seat in front of the camera. */
+  readonly handedness: Side;
+  /** Each seat's best distance so far, in seat order (0 for no mark). */
+  readonly scores: readonly number[];
+}
+
+/** Where a seat's best-mark pennant stands, to the left of the runway, and how big it is. */
+const MARK_X = -2.2;
+const MARK_STEP = 1.1;
+const MARK_SCALE = 0.8;
+
+/** One seat's attempts, swapped into the shared rules state while that seat is up. */
+interface SeatData {
+  attempt: number;
+  records: AttemptRecord[];
+  best: number;
+  bestIndex: number;
+}
+
+/** "31.2, foul, 34.2": a seat's attempts at a glance. */
+function attemptList(records: readonly AttemptRecord[]): string {
+  const parts: string[] = [];
+  for (const r of records) parts.push(r.foul ? 'foul' : r.distance.toFixed(1));
+  return parts.join(', ');
 }
 
 /** Pitch of the javelin when held, radians (nose up). */
@@ -86,8 +129,18 @@ function botStyle(): 'legs' | 'jog' {
 
 export const createJavelin: SportFactory = (ctx: SportContext): JavelinSport => {
   const cfg = javelinConfig;
-  const hand: Side = ctx.calibration?.handedness ?? 'right';
+  // Pass-and-play: seats take turns one attempt at a time. The hand is the seat's, read again
+  // after every handover.
+  let hand: Side = ctx.calibration?.handedness ?? 'right';
   const tut = ctx.tutorial;
+  const turns = ctx.turns;
+  const multi = turns.count > 1 && !tut;
+  const seatCount = multi ? turns.count : 1;
+  let seat = 0;
+  let handingOver = false;
+  const seats: SeatData[] = [];
+  for (let i = 0; i < seatCount; i++)
+    seats.push({ attempt: 0, records: [], best: 0, bestIndex: -1 });
   // A tutorial has no attempt limit.
   const game = createGame(tut ? Number.MAX_SAFE_INTEGER : attemptsFor(cfg, ctx.short));
   const probe: TutorialProbe = { hold: false, standing: false };
@@ -127,6 +180,23 @@ export const createJavelin: SportFactory = (ctx: SportContext): JavelinSport => 
   marker.name = 'distance-marker';
   marker.visible = false;
   stage.scene.add(marker);
+  // Each seat's best mark, as pennants in the seat's colour (one instanced draw call).
+  const tmpM = new Matrix4();
+  const tmpColor = new Color();
+  let markGeometry: ReturnType<typeof buildSeatMarkGeometry> | null = null;
+  let marks: InstancedMesh | null = null;
+  if (multi) {
+    markGeometry = buildSeatMarkGeometry();
+    marks = new InstancedMesh(markGeometry, material, seatCount);
+    marks.name = 'seat-marks';
+    marks.frustumCulled = false;
+    tmpM.makeScale(0, 0, 0);
+    for (let i = 0; i < seatCount; i++) {
+      marks.setMatrixAt(i, tmpM);
+      marks.setColorAt(i, tmpColor.setHex(turns.players[i]?.color ?? 0xffffff));
+    }
+    stage.scene.add(marks);
+  }
   const javelinShadow = new BlobShadow(0.6);
   stage.scene.add(javelinShadow.mesh);
 
@@ -422,6 +492,7 @@ export const createJavelin: SportFactory = (ctx: SportContext): JavelinSport => 
       const phi = Math.max(0.35, Math.min(1.25, Math.atan2(-f.vy, Math.max(1e-3, Math.abs(f.vx)))));
       stickPitch = -phi;
       stickPhi = phi;
+      if (multi) turns.setStanding(seat, shownDistance(game.best), bestText(game.best));
       if (game.lastFoul) {
         // A foul is explained in a tutorial, not punished.
         if (!tut) {
@@ -435,6 +506,7 @@ export const createJavelin: SportFactory = (ctx: SportContext): JavelinSport => 
         const d = game.lastDistance;
         marker.visible = true;
         marker.position.set(1.3, 0, -f.x);
+        if (multi && game.bestIndex === game.records.length - 1) placeMark(seat, d);
         marker.scale.setScalar(1 + d * 0.02);
         ctx.hud.setBanner(`${d.toFixed(2)} m`);
         ctx.audio.play('good');
@@ -453,6 +525,12 @@ export const createJavelin: SportFactory = (ctx: SportContext): JavelinSport => 
         );
       }
     }
+    if (game.nextSeq !== seenNext && multi) {
+      // The attempt is over and shown: the next player is up (the same seat never continues).
+      seenNext = game.nextSeq;
+      endTurn();
+      return;
+    }
     if (game.nextSeq !== seenNext) {
       seenNext = game.nextSeq;
       holdJavelin();
@@ -463,8 +541,97 @@ export const createJavelin: SportFactory = (ctx: SportContext): JavelinSport => 
     }
     if (game.doneSeq !== seenDone) {
       seenDone = game.doneSeq;
-      finish();
+      if (multi) endTurn();
+      else finish();
     }
+  };
+
+  // ---- Pass-and-play ----
+  const bestText = (best: number): string => (best > 0 ? `${best.toFixed(2)} m` : 'no mark');
+
+  const stash = (): void => {
+    const d = seats[seat]!;
+    d.attempt = game.attempt;
+    d.records = game.records;
+    d.best = game.best;
+    d.bestIndex = game.bestIndex;
+  };
+
+  /** A seat's best mark just changed: stand its pennant at the distance. */
+  const placeMark = (at: number, distance: number): void => {
+    if (marks === null) return;
+    tmpM.makeScale(MARK_SCALE, MARK_SCALE, MARK_SCALE);
+    tmpM.setPosition(MARK_X - at * MARK_STEP, 0, -(cfg.runwayLength + distance));
+    marks.setMatrixAt(at, tmpM);
+    marks.instanceMatrix.needsUpdate = true;
+  };
+
+  /** The attempt is over and shown: hand over to the next seat, or finish when all are done. */
+  const endTurn = (): void => {
+    stash();
+    let allDone = true;
+    for (const d of seats) if (d.records.length < game.total) allDone = false;
+    if (allDone) {
+      finishMulti();
+      return;
+    }
+    const next = (seat + 1) % seatCount;
+    handingOver = true;
+    ctx.hud.setBanner(null);
+    setHint(null);
+    turns.handOver(next, () => switchSeat(next));
+  };
+
+  /** The next player is in place: their attempts, their hand, a clean run-up. */
+  const switchSeat = (next: number): void => {
+    seat = next;
+    const d = seats[next]!;
+    game.attempt = d.attempt;
+    game.records = d.records;
+    game.best = d.best;
+    game.bestIndex = d.bestIndex;
+    resetRun(game);
+    // Handedness comes from this seat's calibration; the javelin follows the mitt each frame.
+    hand = ctx.calibration?.handedness ?? 'right';
+    // Nothing the last player did carries over.
+    pending.length = 0;
+    seenRejected = ctx.input.state.rejected?.seq ?? seenRejected;
+    noticeText = '';
+    noticeUntil = 0;
+    if (mouse) {
+      mouseRun = createMouseRun(mouse.pointerReleases);
+      mouseCadenceSet = 0;
+      mouse.setRunCadence(0);
+    }
+    speedFrac = 0;
+    animator.stop();
+    holdJavelin();
+    snapCamera = true;
+    shownThrow = -1;
+    shownBestCm = -1;
+    shownSpeed = -2;
+    shownHint = '';
+    handingOver = false;
+    ctx.hud.setBanner('Get ready');
+    setHint(mouse ? 'Hold the button to run' : 'Run on the spot to build speed');
+    refreshHud();
+  };
+
+  const finishMulti = (): void => {
+    if (finished) return;
+    finished = true;
+    const results: RoundResult[] = [];
+    for (const d of seats) {
+      let fouls = 0;
+      for (const r of d.records) if (r.foul) fouls++;
+      results.push({
+        score: shownDistance(d.best),
+        headline: d.best > 0 ? `${d.best.toFixed(2)} m` : 'No mark',
+        lines: [attemptList(d.records)],
+        detail: { attempts: d.records.length, best: d.best, fouls },
+      });
+    }
+    ctx.finishMulti(results);
   };
 
   const finish = (): void => {
@@ -542,8 +709,8 @@ export const createJavelin: SportFactory = (ctx: SportContext): JavelinSport => 
   };
 
   const sport: JavelinSport = {
-    get phase(): Phase {
-      return game.phase;
+    get phase(): Phase | 'handover' {
+      return handingOver ? 'handover' : game.phase;
     },
     get position(): number {
       return game.position;
@@ -573,6 +740,24 @@ export const createJavelin: SportFactory = (ctx: SportContext): JavelinSport => 
       return hudNow < noticeUntil ? noticeText : '';
     },
 
+    get seat(): number {
+      return seat;
+    },
+
+    get seatCount(): number {
+      return seatCount;
+    },
+
+    get handedness(): Side {
+      return hand;
+    },
+
+    get scores(): readonly number[] {
+      const out: number[] = [];
+      for (let i = 0; i < seatCount; i++) out.push(i === seat ? game.best : seats[i]!.best);
+      return out;
+    },
+
     get tutorialStep(): number {
       return tutorial === null ? -1 : tutorial.step;
     },
@@ -583,6 +768,7 @@ export const createJavelin: SportFactory = (ctx: SportContext): JavelinSport => 
 
     start(): void {
       started = true;
+      if (multi) for (let i = 0; i < seatCount; i++) turns.setStanding(i, 0, bestText(0));
       if (tut) {
         // The coach panel gives the instructions; no banner, hint, try count or best.
         ctx.hud.setScore('Practice');
@@ -610,7 +796,7 @@ export const createJavelin: SportFactory = (ctx: SportContext): JavelinSport => 
     },
 
     fixedUpdate(dt: number, nowMs: number): void {
-      if (finished) return;
+      if (finished || handingOver) return;
       hudNow = nowMs;
       drain(nowMs);
       checkRejected(nowMs);
@@ -685,7 +871,7 @@ export const createJavelin: SportFactory = (ctx: SportContext): JavelinSport => 
       return createJavelinBot(
         cfg,
         game,
-        hand,
+        () => hand,
         ctx.random,
         botVariant(),
         botStyle(),
@@ -706,6 +892,9 @@ export const createJavelin: SportFactory = (ctx: SportContext): JavelinSport => 
       world.dispose();
       javelin.removeFromParent();
       marker.removeFromParent();
+      marks?.removeFromParent();
+      marks?.dispose();
+      markGeometry?.dispose();
       javelinShadow.dispose();
       javelinGeometry.dispose();
       markerGeometry.dispose();

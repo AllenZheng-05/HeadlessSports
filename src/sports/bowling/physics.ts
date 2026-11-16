@@ -239,6 +239,14 @@ export class RapierBowling implements BowlingPhysics, BowlingBodies {
   }
 
   rack(fresh: boolean): void {
+    if (fresh) {
+      // A new frame (or a new player): none of the last roll's state may carry over.
+      this.lockedDown.fill(false);
+      this.contacted = false;
+      this.contactSpeed = 0;
+      this.inGutter = false;
+      this.inPit = false;
+    }
     for (let i = 0; i < N; i++) {
       if (fresh) {
         this.removePin(i);

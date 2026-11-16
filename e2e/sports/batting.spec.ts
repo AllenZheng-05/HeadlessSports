@@ -479,3 +479,179 @@ test.describe('batting tutorial', () => {
     expect(problems).toEqual([]);
   });
 });
+
+// ---- pass-and-play ----
+
+interface MultiHook {
+  phase: string;
+  players: number;
+  seat: number;
+  ranking: { rank: number; name: string; score: number; headline: string }[] | null;
+  result: unknown;
+  isBest: boolean | null;
+}
+
+function multiHook(page: Page): Promise<MultiHook> {
+  return page.evaluate(() => {
+    const g = (window as unknown as { __game: MultiHook }).__game;
+    return {
+      phase: g.phase,
+      players: g.players,
+      seat: g.seat,
+      ranking: g.ranking === null ? null : g.ranking.map((r) => ({ ...r })),
+      result: g.result,
+      isBest: g.isBest,
+    };
+  });
+}
+
+function sportState(page: Page): Promise<{ phase: string; seat: number; handedness: string }> {
+  return page.evaluate(() => {
+    const s = (
+      window as unknown as {
+        __game: { sport: { phase: string; seat: number; handedness: string } };
+      }
+    ).__game.sport;
+    return { phase: s.phase, seat: s.seat, handedness: s.handedness };
+  });
+}
+
+/** Wait for a handover card in the page: its title text. The error says where the game is. */
+async function waitHandover(page: Page, title: string, timeout = 30000): Promise<void> {
+  try {
+    await expect(page.locator('.handover h1')).toHaveText(title, { timeout });
+  } catch (err) {
+    const now = await multiHook(page).catch(() => null);
+    const sport = await sportState(page).catch(() => null);
+    throw new Error(
+      `Never saw the handover card "${title}"; game ${JSON.stringify(now)}, sport ${JSON.stringify(sport)}.`,
+      { cause: err },
+    );
+  }
+}
+
+test.describe('batting pass-and-play', () => {
+  test('three synthetic players bat a set each, rank in a table and nothing is saved', async ({
+    page,
+  }) => {
+    test.setTimeout(85_000); // 33 s alone at timeScale 3, 2.5x
+    const problems = watch(page);
+    await page.addInitScript(() => {
+      const w = window as unknown as {
+        __game?: { phase: string; seat: number };
+        __phases: string[];
+        __seats: number[];
+      };
+      w.__phases = [];
+      w.__seats = [];
+      setInterval(() => {
+        const g = w.__game;
+        if (!g) return;
+        if (!w.__phases.includes(g.phase)) w.__phases.push(g.phase);
+        if (w.__seats[w.__seats.length - 1] !== g.seat && g.phase === 'playing')
+          w.__seats.push(g.seat);
+      }, 20);
+    });
+    await page.goto(
+      '/?sport=batting&players=3&names=Mia,Sam,Zoe&source=synthetic&skipGate=1&short=1&timeScale=3',
+    );
+    await waitPhase(page, 'playing');
+    expect(await multiHook(page)).toMatchObject({ players: 3, seat: 0 });
+    await expect(page.locator('.standing')).toHaveCount(3);
+    await expect(page.locator('.standing.current .standing-name')).toHaveText('Mia');
+
+    // A deadline under the test timeout, so a hang says where it is stuck.
+    try {
+      await waitPhase(page, 'results', 45_000);
+    } catch (err) {
+      const now = await sportState(page).catch(() => null);
+      throw new Error(`Batting never reached the results; sport ${JSON.stringify(now)}.`, {
+        cause: err,
+      });
+    }
+    await page.waitForTimeout(500);
+    await page.screenshot({ path: `${SHOTS}/batting-multi-results.png` });
+    const w = (): Promise<{ phases: string[]; seats: number[] }> =>
+      page.evaluate(() => {
+        const x = window as unknown as { __phases: string[]; __seats: number[] };
+        return { phases: [...x.__phases], seats: [...x.__seats] };
+      });
+    const seen = await w();
+    // One whole set each, in seat order.
+    expect(seen.seats).toEqual([0, 1, 2]);
+    expect(seen.phases).toContain('handover');
+
+    const g = await multiHook(page);
+    expect(g.players).toBe(3);
+    expect(g.ranking).toHaveLength(3);
+    expect(g.ranking?.map((r) => r.name).sort()).toEqual(['Mia', 'Sam', 'Zoe']);
+    const scores = g.ranking?.map((r) => r.score) ?? [];
+    expect([...scores].sort((a, b) => b - a)).toEqual(scores);
+    expect(g.ranking?.[0]?.rank).toBe(1);
+    for (const r of g.ranking ?? []) expect(r.headline).toMatch(/^\d+ ft$/);
+    expect(g.result).toBeNull();
+    expect(g.isBest).toBeNull();
+    await expect(page.locator('.rank-row')).toHaveCount(3);
+    await expect(page.locator('.best-badge')).toHaveCount(0);
+    await expect(page.locator('.results-best')).toHaveCount(0);
+
+    // Nothing was saved: back at the menu the sport still has no score.
+    await page.keyboard.press('Escape');
+    await waitPhase(page, 'menu', 10000);
+    await expect(page.locator('.sport-card[data-sport="batting"] .sport-best')).toHaveText(
+      'No score yet',
+    );
+    expect(problems).toEqual([]);
+  });
+
+  test('two players with the mouse: a set each, a handover card between, a ranked table', async ({
+    page,
+  }) => {
+    test.setTimeout(75_000); // 29 s alone in real time (6 pitches, 1 handover), 2.5x
+    const problems = watch(page);
+    // A small viewport keeps the software renderer fast, so a frame is short next to the timing window.
+    await page.setViewportSize({ width: 480, height: 270 });
+    await page.goto('/?sport=batting&players=2&input=debug&skipGate=1&short=1');
+    await waitPhase(page, 'playing');
+    expect(await multiHook(page)).toMatchObject({ players: 2, seat: 0 });
+    const timing: ClickTiming = { lead: 150 };
+
+    for (let n = 1; n <= 3; n++) {
+      await clickAt(page, 0, timing);
+      await waitResolved(page, n);
+    }
+    // The first set is done: the card for the next batter, with the round paused under it.
+    await waitHandover(page, "Player 2, you're up", 60000);
+    expect((await multiHook(page)).phase).toBe('handover');
+    expect((await sportState(page)).phase).toBe('handover');
+    expect((await multiHook(page)).seat).toBe(0);
+    await page.screenshot({ path: `${SHOTS}/batting-handover.png` });
+    await page.getByRole('button', { name: 'Ready' }).click();
+    await expect(page.locator('.handover')).toHaveCount(0);
+    await expect.poll(async () => (await multiHook(page)).seat, { timeout: 3000 }).toBe(1);
+    expect((await multiHook(page)).phase).toBe('playing');
+    // A fresh set: nothing resolved yet for the new batter.
+    expect(await resolved(page)).toHaveLength(0);
+    await expect(page.locator('.standing.current .standing-name')).toHaveText('Player 2');
+
+    for (let n = 1; n <= 3; n++) {
+      await clickAt(page, 0, timing);
+      await waitResolved(page, n);
+    }
+    await waitPhase(page, 'results', 60000);
+    await page.waitForTimeout(400);
+    await page.screenshot({ path: `${SHOTS}/batting-multi-mouse-results.png` });
+    await expect(page.locator('.rank-row')).toHaveCount(2);
+    const g = await multiHook(page);
+    expect(g.result).toBeNull();
+    expect(g.isBest).toBeNull();
+    await expect(page.locator('.best-badge')).toHaveCount(0);
+
+    await page.keyboard.press('Escape');
+    await waitPhase(page, 'menu', 10000);
+    await expect(page.locator('.sport-card[data-sport="batting"] .sport-best')).toHaveText(
+      'No score yet',
+    );
+    expect(problems).toEqual([]);
+  });
+});

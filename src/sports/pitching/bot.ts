@@ -69,10 +69,12 @@ export function botGloveTarget(
 export function createPitchingBot(
   cfg: PitchingConfig,
   game: GameState,
-  hand: Side,
+  handOrGetter: Side | (() => Side),
   random: () => number,
   probe?: TutorialProbe,
 ): SportBot {
+  // Pass-and-play: the next player may throw with the other hand, so the sport passes a getter.
+  let hand: Side = typeof handOrGetter === 'function' ? handOrGetter() : handOrGetter;
   /** The glove wrist for a cell, with a fastball's ring (the tutorial's glove steps pick it for you). */
   const reach = (cell: number, ms: number): ScriptStep[] => {
     const g = botGloveTarget(cfg, hand, cell, 'fastball');
@@ -80,6 +82,7 @@ export function createPitchingBot(
   };
   return {
     next(enqueue): void {
+      if (typeof handOrGetter === 'function') hand = handOrGetter();
       const stage = probe?.stage ?? 'normal';
       if (stage === 'steer') {
         // Sweep the glove across the zone: the top left tile, then the bottom right one.

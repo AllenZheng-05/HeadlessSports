@@ -12,6 +12,7 @@ export const meta: SportMeta = {
   seatedOk: false,
   needsSpace: true,
   hasTutorial: true,
+  multiplayer: { turnLabel: 'frame', maxPlayers: 4 },
   score: { label: 'Score', unit: 'pts', decimals: 0, higherIsBetter: true },
   howTo: [
     'Close your fist to pick up the ball.',

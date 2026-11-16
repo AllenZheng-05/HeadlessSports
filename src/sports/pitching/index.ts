@@ -1,5 +1,12 @@
 import { mirrorUpperBody } from '../../core/avatarDrive';
-import type { MeterTone, Sport, SportBot, SportContext, SportFactory } from '../../core/sport';
+import type {
+  MeterTone,
+  RoundResult,
+  Sport,
+  SportBot,
+  SportContext,
+  SportFactory,
+} from '../../core/sport';
 import { asMouseControl } from '../../input/debug/mouseControl';
 import type { MouseControl } from '../../input/debug/mouseControl';
 import type { GameEvent, Side } from '../../input/types';
@@ -35,12 +42,14 @@ import {
   onThrow,
   pickKind,
   pitchesFor,
+  resetForSeat,
   ringShown,
   stepGame,
   totalIgnored,
 } from './game';
 import type { HandInput, Phase, Reading } from './game';
 import { summarize } from './scoring';
+import type { RoundSummary } from './scoring';
 import type { PitchRecord, Tier } from './scoring';
 import { createPitchTutorial } from './tutorial';
 import type { PitchTutorial, RingView, SeenView } from './tutorial';
@@ -75,7 +84,13 @@ export interface PitchProbe {
 
 /** What the browser tests and the debugging overlay read from `__game.sport`. */
 export interface PitchingSport extends Sport {
-  readonly phase: Phase;
+  /** The rules' phase, or 'handover' while the next player steps in (pass-and-play). */
+  readonly phase: Phase | 'handover';
+  /** Seat currently throwing, how many seats play, and each seat's points so far. */
+  readonly seat: number;
+  readonly seatCount: number;
+  readonly seatScores: readonly number[];
+  readonly handedness: Side;
   readonly index: number;
   readonly kind: PitchKind;
   /** The pitch the catcher called, and the words of the call. */
@@ -127,16 +142,41 @@ const MOUSE_SUB: Record<PitchKind, string> = {
 
 export const createPitching: SportFactory = (ctx: SportContext): PitchingSport => {
   const cfg = pitchingConfig;
-  const hand: Side = ctx.calibration?.handedness ?? 'right';
-  const sg = sideSign(hand);
-  const gloveHand = gloveSide(hand);
+  // Pass-and-play: seats take turns, one whole set of pitches each. Everything below that belongs
+  // to a player is per seat, and the hand is read again after every handover.
+  const turns = ctx.turns;
+  const multi = turns.count > 1 && !ctx.tutorial;
+  const seatCount = multi ? turns.count : 1;
+  let seat = 0;
+  let hand: Side = ctx.calibration?.handedness ?? 'right';
+  let sg = sideSign(hand);
+  let gloveHand = gloveSide(hand);
+  const seatRecords: PitchRecord[][] = [];
+  const seatPoints: number[] = [];
+  for (let i = 0; i < seatCount; i++) {
+    seatRecords.push([]);
+    seatPoints.push(0);
+  }
+  let handover = false;
+  // Every seat gets the same calls: seat 0 draws them from the seeded source, in the single-player
+  // order, and the later seats replay that tape. Single player draws straight from ctx.random.
+  const tape: number[] = [];
+  let tapeAt = 0;
+  let replaying = false;
+  const planRandom = (): number => {
+    if (replaying && tapeAt < tape.length) return tape[tapeAt++]!;
+    const v = ctx.random();
+    tape.push(v);
+    tapeAt++;
+    return v;
+  };
   const isDebug = ctx.input.source === null;
   const mc = isDebug ? asMouseControl(ctx.input) : null;
   const mouse = mc !== null;
   const tut = ctx.tutorial;
   const game = createGame(
     tut ? TUTORIAL_PITCHES : pitchesFor(cfg, ctx.short),
-    ctx.random,
+    multi ? planRandom : ctx.random,
     isDebug,
     tut ? cfg.tutorialGapScale : ctx.short ? cfg.shortGapScale : 1,
     tut ? 0 : cfg.firstPitchExtraMs,
@@ -220,7 +260,7 @@ export const createPitching: SportFactory = (ctx: SportContext): PitchingSport =
   ball.frustumCulled = false;
   const ballShadow = new BlobShadow(0.16);
   scene.add(ballShadow.mesh);
-  const heldMitt = ctx.avatar.mitts[hand];
+  let heldMitt = ctx.avatar.mitts[hand];
   heldMitt.add(ball);
   ball.position.set(0, 0.02, -0.03);
   /** 0 held in the pitcher's mitt, 1 in the air, 2 in the catcher's mitt (or past it). */
@@ -424,6 +464,8 @@ export const createPitching: SportFactory = (ctx: SportContext): PitchingSport =
         heldBall();
       } else {
         runningScore += r.score.points;
+        seatPoints[seat] = runningScore;
+        if (multi) turns.setStanding(seat, runningScore, `${runningScore} pts`);
         drawn(to, r.x, r.y);
         ballState = 2;
         ball.position.set(to.x, to.y, plateZ + 0.05);
@@ -473,8 +515,91 @@ export const createPitching: SportFactory = (ctx: SportContext): PitchingSport =
     }
   };
 
+  const seatResult = (records: readonly PitchRecord[]): RoundResult => {
+    const s: RoundSummary = summarize(records);
+    const bulls = s.bullseyes === 1 ? '1 bullseye' : `${s.bullseyes} bullseyes`;
+    return {
+      score: s.score,
+      headline: `${s.score} pts`,
+      lines: [
+        s.bestKmh > 0 ? `${bulls}, top speed ${s.bestKmh} km/h` : `${bulls}, no pitch thrown`,
+      ],
+      detail: {
+        pitches: s.pitches,
+        strikes: s.strikes,
+        bullseyes: s.bullseyes,
+        balks: s.balks,
+        fastballs: s.fastballs,
+        curves: s.curves,
+        asCalled: s.asCalled,
+        bestKmh: s.bestKmh,
+        meanMissCm: s.meanMissCm,
+      },
+    };
+  };
+
+  /** The next seat is in place: its hand, a clean zone, and a fresh first call. */
+  const switchSeat = (next: number): void => {
+    ctx.avatar.setMittCurl(hand, 0);
+    seat = next;
+    hand = ctx.calibration?.handedness ?? 'right';
+    sg = sideSign(hand);
+    gloveHand = gloveSide(hand);
+    heldMitt = ctx.avatar.mitts[hand];
+    mc?.selectHand(hand);
+    // The last player's transient input is not this player's.
+    pending.length = 0;
+    winding = false;
+    pressArmed = false;
+    seenPresses = mc?.pointerPresses ?? 0;
+    lastCurvature = 0;
+    lastSpeed = 0;
+    runningScore = 0;
+    kmhShown = 0;
+    lungeGoal = 0;
+    liveAim.reset();
+    liveVisible = false;
+    if (animator.busy) animator.stop();
+    zone.setLit(-1);
+    zone.clearDots();
+    heldBall();
+    setCrops(true);
+    // The same calls as everyone else: replay the tape from the top.
+    replaying = true;
+    tapeAt = 0;
+    resetForSeat(game, cfg.curveShare, cfg.firstPitchExtraMs);
+    handover = false;
+    shownScore = '';
+    shownSub = '';
+    probeCount = -1;
+    turns.setStanding(seat, 0, '0 pts');
+    setHint('The catcher is calling the first pitch');
+    refreshHud();
+  };
+
+  /** A set is over: hand to the next seat, or finish with every seat's result. */
+  const endTurn = (): void => {
+    seatRecords[seat] = game.records;
+    seatPoints[seat] = runningScore;
+    if (seat + 1 < seatCount) {
+      const next = seat + 1;
+      handover = true;
+      setHint(null);
+      turns.handOver(next, () => switchSeat(next));
+      return;
+    }
+    finished = true;
+    const results: RoundResult[] = [];
+    for (let i = 0; i < seatCount; i++) results.push(seatResult(seatRecords[i] ?? []));
+    ctx.finishMulti(results);
+  };
+
   const finish = (): void => {
-    if (finished) return;
+    if (finished || handover) return;
+    if (multi) {
+      endTurn();
+      return;
+    }
     finished = true;
     const s = summarize(game.records);
     if (s.score > (ctx.best ?? 0)) {
@@ -674,8 +799,20 @@ export const createPitching: SportFactory = (ctx: SportContext): PitchingSport =
   };
 
   const sport: PitchingSport = {
-    get phase(): Phase {
-      return game.phase;
+    get phase(): Phase | 'handover' {
+      return handover ? 'handover' : game.phase;
+    },
+    get seat(): number {
+      return seat;
+    },
+    get seatCount(): number {
+      return seatCount;
+    },
+    get seatScores(): readonly number[] {
+      return seatPoints;
+    },
+    get handedness(): Side {
+      return hand;
     },
     get index(): number {
       return game.index;
@@ -744,6 +881,9 @@ export const createPitching: SportFactory = (ctx: SportContext): PitchingSport =
 
     start(): void {
       started = true;
+      if (multi) {
+        for (let i = 0; i < seatCount; i++) turns.setStanding(i, 0, '0 pts');
+      }
       if (mc !== null) {
         // The button is the sport's: no built-in fist close; the mouse moves the throwing hand.
         mc.setManualMode(true);
@@ -772,7 +912,7 @@ export const createPitching: SportFactory = (ctx: SportContext): PitchingSport =
     },
 
     fixedUpdate(dt: number, nowMs: number): void {
-      if (finished || !started) return;
+      if (finished || !started || handover) return;
       if (mc !== null) {
         updateMouseLive(mc, nowMs);
         driveMouseThrow(mc);
@@ -859,7 +999,7 @@ export const createPitching: SportFactory = (ctx: SportContext): PitchingSport =
     },
 
     createBot(): SportBot {
-      return createPitchingBot(cfg, game, hand, ctx.random, tut ? botProbe : undefined);
+      return createPitchingBot(cfg, game, () => hand, ctx.random, tut ? botProbe : undefined);
     },
 
     dispose(): void {

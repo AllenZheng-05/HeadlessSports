@@ -176,6 +176,34 @@ export function createGame(
   return g;
 }
 
+/**
+ * Pass-and-play: start a fresh set for the next player. Everything that belongs to one player's
+ * set goes back to the first call (with the extra setup beat); the event counters keep counting,
+ * so the sport still sees the new call as new. The seeded `random` is whatever the sport hands in.
+ */
+export function resetForSeat(g: GameState, curveShare: number, firstExtraMs: number): void {
+  g.index = 0;
+  g.kind = 'fastball';
+  g.called = 'fastball';
+  g.bubbleOn = false;
+  g.extraMs = firstExtraMs * g.gapScale;
+  g.reading = 'none';
+  g.holdMs = 0;
+  g.stillTotalMs = 0;
+  g.usedFallback = false;
+  g.lockoutMs = 0;
+  g.windupMs = 0;
+  g.target = -1;
+  g.lastTarget = -1;
+  g.flightMs = 1;
+  g.flightElapsedMs = 0;
+  g.aim = createAim();
+  g.score = BALK_SCORE;
+  g.balk = false;
+  g.records = [];
+  startCall(g, curveShare);
+}
+
 /** The catcher picks the next pitch and spot (seeded, so a seed always gives the same calls). */
 export function startCall(g: GameState, curveShare: number): void {
   const roll = g.random();

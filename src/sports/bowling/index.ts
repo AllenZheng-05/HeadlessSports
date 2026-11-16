@@ -1,12 +1,13 @@
 import { mirrorUpperBody } from '../../core/avatarDrive';
-import type { Sport, SportBot, SportContext, SportFactory } from '../../core/sport';
+import type { RoundResult, Sport, SportBot, SportContext, SportFactory } from '../../core/sport';
+import type { Side } from '../../input/types';
 import { AvatarAnimator } from '../../render/avatar/AvatarAnimator';
 import { asMouseControl } from '../../input/debug/mouseControl';
 import { createBowlingBot } from './bot';
 import { pointerAimAngle } from './mouseAim';
 import { bowlingConfig, bowlingRanges } from './config';
 import { BowlingGame, rollBanner } from './game';
-import type { BowlPhase, RollOutcome } from './game';
+import type { BowlPhase, GameEvents, RollOutcome } from './game';
 import { createRapierBowling } from './physics';
 import type { Release } from './release';
 import { scorecardRows } from './scoring';
@@ -43,6 +44,11 @@ export interface BowlingDebug {
   readonly tutorialStep: number;
   /** Tutorial rounds: the number of steps, or 0 in a normal round. */
   readonly tutorialSteps: number;
+  /** Pass-and-play: the seat on the lane (0 with one player). */
+  readonly seat: number;
+  readonly seatCount: number;
+  /** Each started seat's running total, in seat order. */
+  readonly scores: readonly number[];
 }
 
 const CAMERA_FOR: Record<BowlPhase, CameraMode> = {
@@ -52,12 +58,18 @@ const CAMERA_FOR: Record<BowlPhase, CameraMode> = {
   settle: 'pins',
   reset: 'behind',
   done: 'pins',
+  handover: 'behind',
 };
 
 export const createBowling: SportFactory = async (ctx: SportContext) => {
   const cfg = bowlingConfig;
-  const hand = ctx.calibration?.handedness ?? 'right';
   const tut = ctx.tutorial;
+  // Pass-and-play: seats alternate frame by frame, each with their own scorecard. The lane is shared.
+  const turns = ctx.turns;
+  const multi = turns.count > 1 && !tut;
+  const seatCount = multi ? turns.count : 1;
+  // The bowling hand is the current seat's: read again at every handover.
+  let hand: Side = ctx.calibration?.handedness ?? 'right';
   // A tutorial is a lane session: a whole game's frames, so it never runs out before the steps do.
   const frames = ctx.short && !tut ? cfg.shortFrames : cfg.frames;
   const counts = createTutorialCounts();
@@ -68,10 +80,10 @@ export const createBowling: SportFactory = async (ctx: SportContext) => {
   const physics = await createRapierBowling(cfg);
   const animator = new AvatarAnimator(ctx.avatar);
   const unregister = ctx.tunables.register('bowling', 'Bowling', cfg, bowlingRanges);
-  const disposeAlley = buildAlley(ctx.stage.scene, hand);
+  let disposeAlley = buildAlley(ctx.stage.scene, hand);
   const view = new BowlingView(ctx.stage.scene, ctx.stage.camera);
-  const rack = rackSpot(hand);
-  const mitt = ctx.avatar.mitts[hand];
+  let rack = rackSpot(hand);
+  let mitt = ctx.avatar.mitts[hand];
 
   ctx.stage.camera.fov = cfg.cameraFov;
   ctx.stage.camera.updateProjectionMatrix();
@@ -87,17 +99,22 @@ export const createBowling: SportFactory = async (ctx: SportContext) => {
   let shownScore = -1;
   let shownSub = '';
   let launches = 0;
+  let seat = 0;
 
   // Camera off: the mouse is the whole interface (see docs: one button, no keys).
   const mouse = asMouseControl(ctx.input);
   let seenPresses = 0;
   let seenReleases = 0;
+  /** The arm hangs at the side; the cursor aims the arrows, it does not wave the arm about. */
+  const seatMouseHand = (): void => {
+    if (!mouse) return;
+    mouse.selectHand(hand);
+    mouse.setHandTarget(hand, 0.5 + (hand === 'right' ? 1 : -1) * 0.06, 0.85);
+  };
   if (mouse) {
     mouse.setManualMode(true);
     mouse.setPointerFollow(false);
-    mouse.selectHand(hand);
-    // The arm hangs at the side; the cursor aims the arrows, it does not wave the arm about.
-    mouse.setHandTarget(hand, 0.5 + (hand === 'right' ? 1 : -1) * 0.06, 0.85);
+    seatMouseHand();
     seenPresses = mouse.pointerPresses;
     seenReleases = mouse.pointerReleases;
   }
@@ -115,15 +132,24 @@ export const createBowling: SportFactory = async (ctx: SportContext) => {
     const frame = Math.min(n.frame + 1, frames);
     const ball = Math.min(n.ball + 1, frame === frames ? 3 : 2);
     const best = ctx.best === null ? '' : ` · Best ${Math.round(ctx.best)}`;
-    const text = `Frame ${frame}, ball ${ball}${best}`;
+    const who = multi ? `${playerName()} · ` : '';
+    const text = `${who}Frame ${frame}, ball ${ball}${best}`;
     if (text === shownSub) return;
     shownSub = text;
     ctx.hud.setSubScore(text);
   };
 
+  const playerName = (): string => turns.players[seat]?.name ?? `Player ${seat + 1}`;
+
   const refreshCard = (): void => {
     rows = scorecardRows(game.rolls, frames);
-    ctx.hud.setTable(rows, Math.min(game.next.frame, frames - 1));
+    if (multi) {
+      // The player's name leads the card; the extra column shifts the highlight by one.
+      rows[0]?.unshift(playerName());
+      rows[1]?.unshift('');
+      rows[2]?.unshift('');
+    }
+    ctx.hud.setTable(rows, Math.min(game.next.frame, frames - 1) + (multi ? 1 : 0));
     if (game.total !== shownScore) {
       shownScore = game.total;
       ctx.hud.setScore(String(shownScore));
@@ -136,6 +162,7 @@ export const createBowling: SportFactory = async (ctx: SportContext) => {
     countRoll(counts, o.kind);
     ctx.hud.setHint(null);
     refreshCard();
+    if (multi) turns.setStanding(seat, game.total, `${game.total} pts`);
     switch (o.kind) {
       case 'strike':
         ctx.hud.setBanner(rollBanner(o), 1600);
@@ -206,68 +233,120 @@ export const createBowling: SportFactory = async (ctx: SportContext) => {
     }
   };
 
-  const game: BowlingGame = new BowlingGame(
-    physics,
-    cfg,
-    {
-      phase: onPhase,
-      pickedUp: () => {
-        countPickup(counts);
-        holding = true;
-        view.attachBallTo(mitt);
-        setHandCrops(false);
-        ctx.audio.play('grab');
-        ctx.avatar.squash(0.9);
-      },
-      released: (release) => {
-        holding = false;
-        launches++;
-        countRelease(counts, release.hook);
-        releases.push(release);
-        view.setAim(false, 0, 0);
-        animator.play('throw-under', { side: hand, strength: 0.4 + 0.6 * release.power });
-        ctx.audio.play('whoosh', { pitch: 0.8 + 0.5 * release.power });
-        ctx.hud.setMeter('power', release.power, `${release.ballSpeed.toFixed(1)} m/s`, 'good');
-        meterLeft = cfg.powerMeterS;
-        // Ends the input's wind-up so the arm swings through and the next press can start one.
-        mouse?.releaseThrow(1, { lateral: 0, curvature: 0 });
-      },
-      pinsDown: (count) => {
-        if (count > 0) ctx.hud.setHint(count === 1 ? '1 pin down' : `${count} pins down`);
-      },
-      contact: (speed) => {
-        ctx.audio.play('clatter', { volume: Math.min(1, Math.max(0.35, speed / 8)) });
-      },
-      rolled: onRolled,
-      finished: (total, rolls) => {
-        // A tutorial ends through its own steps and saves nothing.
-        if (finished || tut) return;
+  /** Everything the seats' games share: one lane, one set of callbacks. */
+  const events: GameEvents = {
+    phase: onPhase,
+    pickedUp: () => {
+      countPickup(counts);
+      holding = true;
+      view.attachBallTo(mitt);
+      setHandCrops(false);
+      ctx.audio.play('grab');
+      ctx.avatar.squash(0.9);
+    },
+    released: (release) => {
+      holding = false;
+      launches++;
+      countRelease(counts, release.hook);
+      releases.push(release);
+      view.setAim(false, 0, 0);
+      animator.play('throw-under', { side: hand, strength: 0.4 + 0.6 * release.power });
+      ctx.audio.play('whoosh', { pitch: 0.8 + 0.5 * release.power });
+      ctx.hud.setMeter('power', release.power, `${release.ballSpeed.toFixed(1)} m/s`, 'good');
+      meterLeft = cfg.powerMeterS;
+      // Ends the input's wind-up so the arm swings through and the next press can start one.
+      mouse?.releaseThrow(1, { lateral: 0, curvature: 0 });
+    },
+    pinsDown: (count) => {
+      if (count > 0) ctx.hud.setHint(count === 1 ? '1 pin down' : `${count} pins down`);
+    },
+    contact: (speed) => {
+      ctx.audio.play('clatter', { volume: Math.min(1, Math.max(0.35, speed / 8)) });
+    },
+    rolled: onRolled,
+    finished: (total, rolls) => {
+      // A tutorial ends through its own steps and saves nothing.
+      if (finished || tut) return;
+      finished = true;
+      let pins = 0;
+      for (const r of rolls) pins += r;
+      ctx.finish({
+        score: total,
+        headline: String(total),
+        lines: [
+          `${game.strikes} strikes, ${game.spares} spares`,
+          `${pins} pins in ${rolls.length} balls`,
+        ],
+        detail: {
+          balls: rolls.length,
+          strikes: game.strikes,
+          spares: game.spares,
+          pins,
+          frames,
+        },
+      });
+    },
+    turnEnded: (complete) => {
+      if (!multi || finished) return;
+      // Everyone has bowled their last frame once the last seat in the order completes.
+      if (complete && seat === seatCount - 1 && games.every((g) => g.next.done)) {
         finished = true;
-        let pins = 0;
-        for (const r of rolls) pins += r;
-        ctx.finish({
-          score: total,
-          headline: String(total),
-          lines: [
-            `${game.strikes} strikes, ${game.spares} spares`,
-            `${pins} pins in ${rolls.length} balls`,
-          ],
-          detail: {
-            balls: rolls.length,
-            strikes: game.strikes,
-            spares: game.spares,
-            pins,
-            frames,
-          },
-        });
-      },
+        const results: RoundResult[] = [];
+        for (const g of games) {
+          results.push({
+            score: g.total,
+            headline: `${g.total} pts`,
+            lines: [`${g.strikes} strikes, ${g.spares} spares`],
+            detail: { strikes: g.strikes, spares: g.spares, balls: g.rolls.length, frames },
+          });
+        }
+        ctx.finishMulti(results);
+        return;
+      }
+      const next = (seat + 1) % seatCount;
+      turns.handOver(next, () => switchSeat(next));
     },
-    {
-      hand,
-      frames,
-      mouse: mouse !== null,
-    },
-  );
+  };
+
+  const makeGame = (): BowlingGame =>
+    new BowlingGame(physics, cfg, events, { hand, frames, mouse: mouse !== null, turns: multi });
+  const games: BowlingGame[] = [makeGame()];
+  let game: BowlingGame = games[0] as BowlingGame;
+
+  /** The next seat is in place: its hand, its card, a fresh rack and a clean aim. */
+  const switchSeat = (next: number): void => {
+    seat = next;
+    const h: Side = ctx.calibration?.handedness ?? 'right';
+    if (h !== hand) {
+      ctx.avatar.setMittCurl(hand, 0);
+      hand = h;
+      disposeAlley();
+      disposeAlley = buildAlley(ctx.stage.scene, hand);
+      rack = rackSpot(hand);
+      mitt = ctx.avatar.mitts[hand];
+      seatMouseHand();
+    }
+    holding = false;
+    meterLeft = 0;
+    ctx.hud.setMeter('power', null);
+    view.setAim(false, 0, 0);
+    // A press that confirmed the handover card is not a bowling press.
+    if (mouse) {
+      seenPresses = mouse.pointerPresses;
+      seenReleases = mouse.pointerReleases;
+    }
+    let g = games[next];
+    if (g === undefined) {
+      g = makeGame();
+      games[next] = g;
+    }
+    game = g;
+    shownScore = -1;
+    shownSub = '';
+    refreshCard();
+    // Back to a ready lane: a fresh rack, the aim reset, the pickup phase.
+    game.start();
+  };
 
   // Mouse play has no gestures: presses and releases are polled in fixedUpdate instead.
   const unsubscribers = mouse
@@ -303,6 +382,7 @@ export const createBowling: SportFactory = async (ctx: SportContext) => {
       game.start();
       ctx.hud.setScore('0');
       shownScore = 0;
+      if (multi) for (let i = 0; i < seatCount; i++) turns.setStanding(i, 0, '0 pts');
       if (tut) {
         ctx.hud.setSubScore(null);
         const input = ctx.input;
@@ -399,7 +479,7 @@ export const createBowling: SportFactory = async (ctx: SportContext) => {
     },
 
     createBot(): SportBot {
-      return createBowlingBot(botView, hand, ctx.random, -0.14, tut ? probe : undefined);
+      return createBowlingBot(botView, () => hand, ctx.random, -0.14, tut ? probe : undefined);
     },
 
     dispose(): void {
@@ -447,6 +527,15 @@ export const createBowling: SportFactory = async (ctx: SportContext) => {
     },
     get standing(): number {
       return physics.standingCount();
+    },
+    get seat(): number {
+      return seat;
+    },
+    get seatCount(): number {
+      return seatCount;
+    },
+    get scores(): readonly number[] {
+      return games.map((g) => g.total);
     },
     get tutorialStep(): number {
       return tutorial === null ? -1 : tutorial.step;

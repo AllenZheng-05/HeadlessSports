@@ -2,7 +2,13 @@ import { mkdirSync } from 'node:fs';
 import { expect, test } from '@playwright/test';
 import type { Page } from '@playwright/test';
 import type { GameHook } from '../../src/core/shell/hook';
-import { expectNoHintFor, hintHasText, tutorialStuck, waitTutorialDone } from './tutorialHelpers';
+import {
+  expectNoHintFor,
+  hintHasText,
+  tutorialStuck,
+  waitSeatUp,
+  waitTutorialDone,
+} from './tutorialHelpers';
 
 const SHOTS = 'e2e/screenshots';
 mkdirSync(SHOTS, { recursive: true });
@@ -136,6 +142,53 @@ const readTutorial = (page: Page): Promise<{ step: number; phase: string; sport:
     const g = (window as unknown as { __game: TutorialHook }).__game;
     return { step: g.sport?.tutorialStep ?? -1, phase: g.phase, sport: g.sport?.phase ?? '' };
   });
+
+interface MultiHook {
+  phase: string;
+  players: number;
+  seat: number;
+  ranking: { rank: number; name: string; score: number; headline: string }[] | null;
+  result: unknown;
+  isBest: boolean | null;
+}
+
+function multiHook(page: Page): Promise<MultiHook> {
+  return page.evaluate(() => {
+    const g = (window as unknown as { __game: MultiHook }).__game;
+    return {
+      phase: g.phase,
+      players: g.players,
+      seat: g.seat,
+      ranking: g.ranking === null ? null : g.ranking.map((r) => ({ ...r })),
+      result: g.result,
+      isBest: g.isBest,
+    };
+  });
+}
+
+/** Seats seen while playing, recorded in the page from the first frame. Call before `page.goto`. */
+async function recordSeats(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const w = window as unknown as {
+      __game?: { phase: string; seat: number };
+      __seats: number[];
+    };
+    w.__seats = [];
+    setInterval(() => {
+      const g = w.__game;
+      if (!g) return;
+      if (w.__seats[w.__seats.length - 1] !== g.seat && g.phase === 'playing') {
+        w.__seats.push(g.seat);
+      }
+    }, 20);
+  });
+}
+
+const seatsSeen = (page: Page): Promise<number[]> =>
+  page.evaluate(() => [...(window as unknown as { __seats: number[] }).__seats]);
+
+/** One handover leg takes about 13 s alone; three times that, well under the test timeout. */
+const SEAT_WAIT_MS = 40_000;
 
 test.describe('bowling', () => {
   test('the synthetic player bowls a short game to the results screen', async ({ page }) => {
@@ -394,6 +447,118 @@ test.describe('bowling', () => {
     );
     expect(result).toBeNull();
     await page.screenshot({ path: `${SHOTS}/bowling-tutorial-mouse-done.png` });
+    expect(problems).toEqual([]);
+  });
+
+  // ---- pass-and-play ----
+
+  test('three synthetic players alternate frames, rank in a table and nothing is saved', async ({
+    page,
+  }) => {
+    test.setTimeout(195_000); // 78 s alone (3x speed, 6 frames), 2.5x
+    const problems = watch(page);
+    await recordSeats(page);
+    await page.goto(
+      '/?sport=bowling&players=3&names=Mia,Sam,Zoe&source=synthetic&skipGate=1&short=1&timeScale=3',
+    );
+    await waitPhase(page, 'playing');
+    expect(await multiHook(page)).toMatchObject({ players: 3, seat: 0 });
+    await expect(page.locator('.standing')).toHaveCount(3);
+    await expect(page.locator('.standing.current .standing-name')).toHaveText('Mia');
+    // The card leads with the player's name.
+    await expect(page.locator('.hud-table th').first()).toHaveText('Mia');
+
+    // One bounded checkpoint per handover: seats 0, 1, 2, 0, 1, 2.
+    for (const seat of [1, 2, 0, 1, 2]) {
+      await waitSeatUp(page, 'bowling, three synthetic players', seat, SEAT_WAIT_MS);
+    }
+    await waitPhase(page, 'results', SEAT_WAIT_MS);
+    await page.waitForTimeout(500);
+    await page.screenshot({ path: `${SHOTS}/bowling-multi-results.png` });
+    // One frame each, in seat order: 0, 1, 2, 0, 1, 2.
+    expect(await seatsSeen(page)).toEqual([0, 1, 2, 0, 1, 2]);
+    const g = await multiHook(page);
+    expect(g.players).toBe(3);
+    expect(g.ranking).toHaveLength(3);
+    expect(g.ranking?.map((r) => r.name).sort()).toEqual(['Mia', 'Sam', 'Zoe']);
+    const scores = g.ranking?.map((r) => r.score) ?? [];
+    expect([...scores].sort((a, b) => b - a)).toEqual(scores);
+    expect(g.ranking?.[0]?.rank).toBe(1);
+    expect(g.ranking?.every((r) => /^\d+ pts$/.test(r.headline))).toBe(true);
+    expect(g.result).toBeNull();
+    expect(g.isBest).toBeNull();
+    await expect(page.locator('.rank-row')).toHaveCount(3);
+    await expect(page.locator('.best-badge')).toHaveCount(0);
+    await expect(page.locator('.results-best')).toHaveCount(0);
+
+    await page.getByRole('button', { name: 'Back to menu' }).click();
+    await waitPhase(page, 'menu', 10000);
+    await expect(page.locator('.sport-card[data-sport="bowling"] .sport-best')).toHaveText(
+      'No score yet',
+    );
+    expect(problems).toEqual([]);
+  });
+
+  test('two players with the mouse bowl through the handover cards to a ranked table', async ({
+    page,
+  }) => {
+    test.setTimeout(285_000); // 114 s alone (real time, 4 or more balls), 2.5x
+    const problems = watch(page);
+    await recordSeats(page);
+    await page.goto('/?sport=bowling&players=2&names=Mia,Sam&input=debug&skipGate=1&short=1');
+    await waitPhase(page, 'playing');
+    expect(await multiHook(page)).toMatchObject({ players: 2, seat: 0 });
+    await expect(page.locator('.hud-table th').first()).toHaveText('Mia');
+    const vp = page.viewportSize() ?? { width: 1280, height: 720 };
+    await page.mouse.move(vp.width * 0.5, vp.height * 0.6);
+
+    const deadline = Date.now() + 470_000;
+    let handovers = 0;
+    for (;;) {
+      const now = await multiHook(page);
+      if (now.phase === 'results') break;
+      if (Date.now() > deadline) {
+        const s = await probe(page).catch(() => null);
+        throw new Error(
+          `Mouse pass-and-play stuck after ${handovers} handovers; game ${JSON.stringify(now)}, sport ${JSON.stringify(s)}.`,
+        );
+      }
+      const sportPhase = (await probe(page))?.phase ?? '';
+      if (sportPhase === 'handover' && (await page.locator('.handover').count()) > 0) {
+        handovers++;
+        if (handovers === 1) {
+          await expect(page.locator('.handover h1')).toHaveText("Sam, you're up");
+          // The round is paused under the card: still Mia's seat until Sam is ready.
+          expect((await multiHook(page)).seat).toBe(0);
+          await page.screenshot({ path: `${SHOTS}/bowling-handover.png` });
+        }
+        await page.getByRole('button', { name: 'Ready' }).click();
+        await expect(page.locator('.handover')).toHaveCount(0);
+      } else if (sportPhase === 'pickup' && now.phase === 'playing') {
+        await page.mouse.down();
+        await waitSport(page, (s) => s.phase === 'aim', 3000);
+        await page.waitForTimeout(400);
+        await page.mouse.up();
+        await waitSport(page, (s) => s.phase !== 'aim', 3000);
+      } else {
+        await page.waitForTimeout(100);
+      }
+    }
+    await page.waitForTimeout(400);
+    await page.screenshot({ path: `${SHOTS}/bowling-multi-mouse-results.png` });
+    // Frames alternate: 0, 1, 0, 1, and every handover card was answered.
+    expect(await seatsSeen(page)).toEqual([0, 1, 0, 1]);
+    expect(handovers).toBe(3);
+    const g = await multiHook(page);
+    expect(g.ranking?.map((r) => r.name).sort()).toEqual(['Mia', 'Sam']);
+    expect(g.result).toBeNull();
+    await expect(page.locator('.rank-row')).toHaveCount(2);
+    await expect(page.locator('.best-badge')).toHaveCount(0);
+    await page.getByRole('button', { name: 'Back to menu' }).click();
+    await waitPhase(page, 'menu', 10000);
+    await expect(page.locator('.sport-card[data-sport="bowling"] .sport-best')).toHaveText(
+      'No score yet',
+    );
     expect(problems).toEqual([]);
   });
 
