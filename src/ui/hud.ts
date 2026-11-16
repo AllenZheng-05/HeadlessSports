@@ -1,6 +1,8 @@
 import type { FlashKind, Hud, MeterTone } from '../core/sport';
 import { clamp, h } from './dom';
 import { PCT_INT, pctTenth } from './format';
+import { createStandings } from './standings';
+import type { Standings } from './types';
 
 interface MeterItem {
   root: HTMLElement;
@@ -32,6 +34,7 @@ const TONE_ICON: Record<MeterTone, string> = {
 
 export interface UiHud extends Hud {
   readonly el: HTMLElement;
+  readonly standings: Standings;
   setVisible(visible: boolean): void;
   /**
    * Mouse input: hand cursors drawn through `setCursor` sit exactly on the real
@@ -66,6 +69,7 @@ export function createHud(parent: HTMLElement): UiHud {
   const cursorLayer = h('div', 'hud-cursors');
   el.append(flashEl, topLeft, metersEl, tableHost, bannerEl, hintEl, cursorLayer);
   parent.append(el);
+  const standings = createStandings(el);
 
   let lastScore = '';
   let lastSub: string | null = null;
@@ -356,10 +360,12 @@ export function createHud(parent: HTMLElement): UiHud {
     cursors.clear();
     setPointerMode(false);
     flashEl.classList.remove('go');
+    standings.hide();
   }
 
   return {
     el,
+    standings,
     setVisible(visible: boolean): void {
       el.hidden = !visible;
     },

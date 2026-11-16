@@ -62,6 +62,23 @@ export interface SportMeta {
   scoreKey?: string;
   /** True when the sport implements tutorial mode (ctx.tutorial). Shows the Tutorial button. */
   hasTutorial?: boolean;
+  /** Present when the sport supports pass-and-play (2 to 4 players, one on camera at a time). */
+  multiplayer?: MultiplayerMeta;
+}
+
+/** One seat in a pass-and-play game. */
+export interface PlayerInfo {
+  /** 0-based seat. */
+  index: number;
+  name: string;
+  /** Hex colour for chips, scorecard rows and the athlete's accent. */
+  color: number;
+}
+
+export interface MultiplayerMeta {
+  /** What one turn is, for the names screen and standings, e.g. 'arrow', 'frame'. */
+  turnLabel: string;
+  maxPlayers: 2 | 3 | 4;
 }
 
 export interface RoundResult {
@@ -167,6 +184,25 @@ export interface Coach {
   hide(): void;
 }
 
+/**
+ * Pass-and-play services. With one player every method is a cheap no-op and `count` is 1.
+ * Players take turns in front of the camera; the sport decides the unit of a turn and the order.
+ */
+export interface Turns {
+  readonly count: number;
+  readonly players: readonly PlayerInfo[];
+  /** Seat currently in front of the camera. */
+  readonly current: number;
+  /**
+   * Ask for seat `index` to step in. The shell pauses the round (ctx.paused is true), shows the
+   * handover card, switches calibration, handedness and athlete colour, then calls `onReady` once.
+   * Calling it for the current seat calls `onReady` on the next frame with no card.
+   */
+  handOver(index: number, onReady: () => void): void;
+  /** Update a seat's running score text and number on the standings strip (cheap; call on change). */
+  setStanding(index: number, score: number, text: string): void;
+}
+
 export interface SportContext {
   /** A fresh Field Day scene and camera for this sport to fill. The shell renders it. */
   stage: FieldDayScene;
@@ -176,7 +212,11 @@ export interface SportContext {
   hud: Hud;
   audio: AudioKit;
   tunables: Tunables;
-  calibration: Calibration | null;
+  /**
+   * The current seat's calibration (a getter: it changes at handover, so read it again after
+   * `turns.handOver` calls back instead of copying it at start).
+   */
+  readonly calibration: Calibration | null;
   /** Personal best for this sport before this round, or null. */
   best: number | null;
   /** Seeded random source in [0, 1). Use this, never Math.random, so rounds are reproducible. */
@@ -195,6 +235,14 @@ export interface SportContext {
   readonly paused: boolean;
   /** Call once when the round is over. The shell saves the score and shows the results screen. */
   finish(result: RoundResult): void;
+  /** Pass-and-play services. A single-seat no-op object when one player is playing. */
+  turns: Turns;
+  /**
+   * Multiplayer finish: one result per seat, in seat order. The shell ranks them with
+   * `meta.score.higherIsBetter`, shows the ranked table, and saves nothing. Use this instead of
+   * `finish` when `turns.count > 1`.
+   */
+  finishMulti(results: readonly RoundResult[]): void;
   /**
    * True when the player chose Tutorial on the start screen. The sport runs its guided steps
    * instead of a scored round and ends by calling finishTutorial().

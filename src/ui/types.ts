@@ -7,7 +7,16 @@
  */
 
 import type { GateReport } from '../core/gate/types';
-import type { AudioKit, Coach, Hud, RoundResult, SportMeta, Tunables } from '../core/sport';
+import type { RankedRow } from '../core/multiplayer/ranking';
+import type {
+  AudioKit,
+  Coach,
+  Hud,
+  PlayerInfo,
+  RoundResult,
+  SportMeta,
+  Tunables,
+} from '../core/sport';
 import type { FrameProblem, InputProvider, Side } from '../input/types';
 import type { TrackingErrorCode } from '../tracking/types';
 
@@ -45,6 +54,43 @@ export interface HowToOptions {
   onHandedness(side: Side): void;
 }
 
+/** The "Players" control on the how-to card (sports with `meta.multiplayer` only). */
+export interface PlayersControl {
+  /** Players selected now, 1 to `meta.multiplayer.maxPlayers`. */
+  count: number;
+  onCount(count: number): void;
+}
+
+/** One seat on the standings strip and the handover card. */
+export interface StandingEntry {
+  player: PlayerInfo;
+  /** The sport's score text for this seat, e.g. '24 pts'. Empty before the first score. */
+  text: string;
+}
+
+/** What the handover card shows. */
+export interface HandoverInfo {
+  /** Who is stepping in. */
+  player: PlayerInfo;
+  /** 'up': between turns in a round. 'step-in': per-player setup before the round (camera). */
+  mode: 'up' | 'step-in';
+  /** Camera input: the card says a fist on Ready works and the camera can move on by itself. */
+  camera: boolean;
+  /** Current standings, in seat order. */
+  standings: readonly StandingEntry[];
+}
+
+/** The pass-and-play strip of name chips during a round. */
+export interface Standings {
+  /** Show one chip per player. */
+  show(players: readonly PlayerInfo[]): void;
+  /** Update a seat's score text. Cheap; ignores unchanged text. */
+  set(index: number, text: string): void;
+  /** Highlight the seat in front of the camera. */
+  setCurrent(index: number): void;
+  hide(): void;
+}
+
 export interface ResultsOutcome {
   isBest: boolean;
   /** Personal best after this round, in the sport's unit. */
@@ -64,6 +110,8 @@ export interface PlayingOptions {
 
 export interface Ui {
   readonly hud: Hud;
+  /** The pass-and-play name chips. Hidden until a multiplayer round shows them. */
+  readonly standings: Standings;
   /**
    * The tutorial panel. Only shows while a tutorial round is on screen (`showPlaying` with
    * `tutorial: true`); calls made at other times do nothing visible.
@@ -126,7 +174,36 @@ export interface Ui {
    * (non-camera input) the card shows a "Dominant hand: Right / Left" toggle. A "Tutorial" button
    * sits beside Start when `meta.hasTutorial` is true; it resolves 'tutorial'.
    */
-  showHowTo(meta: SportMeta, debugInput: boolean, options?: HowToOptions): Promise<HowToChoice>;
+  showHowTo(
+    meta: SportMeta,
+    debugInput: boolean,
+    options?: HowToOptions,
+    players?: PlayersControl,
+  ): Promise<HowToChoice>;
+
+  /**
+   * Names screen: one text field per player, each labelled and marked with that player's colour.
+   * Keyboard and mouse only (the hand cursor can press Start and Back, not type). Resolves with
+   * the names as typed (the shell sanitises them), or null for Back.
+   */
+  showNames(meta: SportMeta, prefill: readonly string[]): Promise<string[] | null>;
+
+  /**
+   * The "<name>, you're up" card (or "<name>, step in" before the round), full screen in the
+   * player's colour with the standings. Resolves 'ready' when Ready is chosen (click, Enter or a
+   * fist from the hand cursor) and 'cancel' when Back or Escape is used in 'step-in' mode. In 'up'
+   * mode Escape quits the round as usual. Close it with `hideHandover`.
+   */
+  showHandover(info: HandoverInfo): Promise<'ready' | 'cancel'>;
+  /** Remove the handover card if it is showing (the shell decided the player is ready). */
+  hideHandover(): void;
+
+  /** Ranked results of a pass-and-play game. Nothing is saved. */
+  showMultiResults(
+    meta: SportMeta,
+    rows: readonly RankedRow[],
+    winner: string,
+  ): Promise<'again' | 'change' | 'menu'>;
 
   /** Calibration guide (silhouette for the sport's stance) over the mirrored camera view. */
   showCalibration(meta: SportMeta): CalibrationScreen;

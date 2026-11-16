@@ -19,6 +19,8 @@ describe('parseFlags', () => {
       short: false,
       hand: null,
       tutorial: false,
+      players: 1,
+      names: null,
     });
   });
 
@@ -42,6 +44,8 @@ describe('parseFlags', () => {
       short: false,
       hand: null,
       tutorial: false,
+      players: 1,
+      names: null,
     });
   });
 
@@ -49,6 +53,16 @@ describe('parseFlags', () => {
     expect(parseFlags('?sport=climbing&tutorial=1').tutorial).toBe(true);
     expect(parseFlags('?tutorial=0').tutorial).toBe(false);
     expect(parseFlags('?tutorial=true').tutorial).toBe(false);
+  });
+
+  it('reads players (2 to 4) and names for a direct pass-and-play start', () => {
+    expect(parseFlags('?sport=archery&players=3').players).toBe(3);
+    expect(parseFlags('?players=9').players).toBe(4);
+    expect(parseFlags('?players=1').players).toBe(1);
+    expect(parseFlags('?players=abc').players).toBe(1);
+    expect(parseFlags('?players=2.5').players).toBe(1);
+    expect(parseFlags('?players=3&names=Mia,Sam').names).toEqual(['Mia', 'Sam']);
+    expect(parseFlags('').names).toBeNull();
   });
 
   it('accepts URLSearchParams and the replay source', () => {

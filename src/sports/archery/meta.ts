@@ -18,5 +18,6 @@ export const meta: SportMeta = {
     'Open your hand to let the arrow go.',
   ],
   hasTutorial: true,
+  multiplayer: { turnLabel: 'arrow', maxPlayers: 4 },
   debugKeys: ['Move the mouse to aim', 'Hold the button to draw, let go to shoot'],
 };

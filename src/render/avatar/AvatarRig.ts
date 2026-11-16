@@ -119,6 +119,8 @@ export class AvatarRig {
   private readonly arms: { left: Arm; right: Arm };
   private readonly legs: { left: Leg; right: Leg };
   private readonly geometries: BufferGeometry[] = [];
+  /** The meshes that carry the player colour (mitts and feet). */
+  private readonly playerMeshes: Mesh[] = [];
   private pelvisOffset = 0;
   private lean = 0;
   private twist = 0;
@@ -206,6 +208,7 @@ export class AvatarRig {
     mitt.name = `mitt-${side}`;
     const mittMesh = new Mesh(this.track(new SphereGeometry(0.095, 16, 12)), playerMat);
     mittMesh.name = `mitt-${side}-mesh`;
+    this.playerMeshes.push(mittMesh);
     mitt.add(mittMesh);
 
     this.torso.add(upper, fore, mitt);
@@ -260,6 +263,7 @@ export class AvatarRig {
     footGeo.scale(0.08, 0.048, 0.115);
     const foot = new Mesh(footGeo, playerMat);
     foot.name = `foot-${side}`;
+    this.playerMeshes.push(foot);
     // Ankle is at the shin pivot's local y = -shin; the foot centre sits 0.008 above that (ground + half height).
     foot.position.set(0, -DIM.shin + 0.008, 0.0);
     shin.add(foot);
@@ -508,6 +512,12 @@ export class AvatarRig {
       MITT_OPEN.y + (MITT_FIST - MITT_OPEN.y) * c,
       MITT_OPEN.z + (MITT_FIST - MITT_OPEN.z) * c,
     );
+  }
+
+  /** Tint the mitts and feet (pass-and-play seat colours). Uses the shared per-colour material. */
+  setPlayerColor(color: number): void {
+    const material = toonMaterial(color);
+    for (const mesh of this.playerMeshes) mesh.material = material;
   }
 
   dispose(): void {

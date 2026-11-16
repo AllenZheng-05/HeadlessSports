@@ -1,6 +1,7 @@
 import {
   BoxGeometry,
   CircleGeometry,
+  Color,
   ConeGeometry,
   CylinderGeometry,
   Group,
@@ -33,13 +34,18 @@ const tmpQ = new Quaternion();
 const tmpM = new Matrix4();
 const tmpV = new Vector3();
 const tmpD = new Vector3();
+const tmpScale = new Vector3();
+const tmpColor = new Color();
 
 const STRAW = 0xe9c46a;
 const HEDGE = 0x6fbf7a;
 const HEDGE_LIGHT = 0x84cf8c;
 const HEDGE_DARK = 0x4f9f69;
 const WOOD = 0xc9a27a;
+/** Stuck arrows a normal round can hold; a pass-and-play game passes its own total. */
 const STUCK_CAPACITY = 12;
+/** The shooter's colour bead on a stuck arrow's tail, m. */
+const BEAD_RADIUS = 0.055;
 const ARROW_LENGTH = 0.75;
 /** How far a stuck arrow's tip sits behind the face, m. */
 const EMBED = 0.12;
@@ -118,8 +124,19 @@ export interface ArcheryWorld {
   /** Orient and place the flying arrow from its tip and velocity. */
   showFlying(x: number, y: number, z: number, vx: number, vy: number, vz: number): void;
   hideFlying(): void;
-  /** Leave an arrow stuck with its tip at (x, y, z), flying along (dx, dy, dz). */
-  addStuck(x: number, y: number, z: number, dx: number, dy: number, dz: number): void;
+  /**
+   * Leave an arrow stuck with its tip at (x, y, z), flying along (dx, dy, dz). With `color` (a
+   * pass-and-play game) the arrow's tail carries a bead in the shooter's colour.
+   */
+  addStuck(
+    x: number,
+    y: number,
+    z: number,
+    dx: number,
+    dy: number,
+    dz: number,
+    color?: number,
+  ): void;
   dispose(): void;
 }
 
@@ -127,7 +144,12 @@ export interface ArcheryWorld {
  * The range: striped lane, chalk line, hedges and trees, the ringed target on a tripod in front of
  * a hedge backstop, the wind flag. Static parts are merged into one mesh.
  */
-export function createWorld(scene: Scene, cfg: ArcheryConfig): ArcheryWorld {
+export function createWorld(
+  scene: Scene,
+  cfg: ArcheryConfig,
+  capacity: number = STUCK_CAPACITY,
+): ArcheryWorld {
+  const stuckCapacity = Math.max(STUCK_CAPACITY, Math.floor(capacity));
   const D = cfg.targetDistance;
   const th = cfg.targetHeight;
   const parts: BufferGeometry[] = [];
@@ -260,10 +282,13 @@ export function createWorld(scene: Scene, cfg: ArcheryConfig): ArcheryWorld {
   flying.visible = false;
   flying.frustumCulled = false;
   scene.add(flying);
-  const stuck = new InstancedMesh(arrowGeometry, arrowMat, STUCK_CAPACITY);
+  const stuck = new InstancedMesh(arrowGeometry, arrowMat, stuckCapacity);
   stuck.count = 0;
   stuck.frustumCulled = false;
   scene.add(stuck);
+  // Colour beads on the tails: only created when an arrow is added with a colour.
+  let beadGeometry: SphereGeometry | null = null;
+  let beads: InstancedMesh | null = null;
 
   // Reticle: a ring, a dark halo and a dot, drawn on top of everything.
   const ringGeo = new RingGeometry(0.86, 1, 40);
@@ -313,13 +338,30 @@ export function createWorld(scene: Scene, cfg: ArcheryConfig): ArcheryWorld {
     hideFlying(): void {
       flying.visible = false;
     },
-    addStuck(x, y, z, dx, dy, dz): void {
-      if (stuck.count >= STUCK_CAPACITY) return;
+    addStuck(x, y, z, dx, dy, dz, color): void {
+      if (stuck.count >= stuckCapacity) return;
       tmpD.set(dx, dy, dz).normalize();
       tmpQ.setFromUnitVectors(NEG_Z, tmpD);
       tmpV.set(x + tmpD.x * EMBED, y + tmpD.y * EMBED, z + tmpD.z * EMBED);
       tmpM.compose(tmpV, tmpQ, new Vector3(1, 1, 1));
       stuck.setMatrixAt(stuck.count, tmpM);
+      if (color !== undefined) {
+        if (beads === null) {
+          beadGeometry = new SphereGeometry(BEAD_RADIUS, 10, 8);
+          beads = new InstancedMesh(beadGeometry, toonMaterial(0xffffff), stuckCapacity);
+          beads.count = 0;
+          beads.frustumCulled = false;
+          scene.add(beads);
+        }
+        // The tail is one arrow length behind the tip, back along the flight line.
+        tmpV.set(x, y, z).addScaledVector(tmpD, EMBED - ARROW_LENGTH);
+        tmpM.compose(tmpV, tmpQ.identity(), tmpScale.set(1, 1, 1));
+        beads.setMatrixAt(beads.count, tmpM);
+        beads.setColorAt(beads.count, tmpColor.setHex(color));
+        beads.count++;
+        beads.instanceMatrix.needsUpdate = true;
+        if (beads.instanceColor) beads.instanceColor.needsUpdate = true;
+      }
       stuck.count++;
       stuck.instanceMatrix.needsUpdate = true;
     },
@@ -331,6 +373,11 @@ export function createWorld(scene: Scene, cfg: ArcheryConfig): ArcheryWorld {
       flying.removeFromParent();
       stuck.removeFromParent();
       stuck.dispose();
+      if (beads !== null) {
+        beads.removeFromParent();
+        beads.dispose();
+      }
+      beadGeometry?.dispose();
       arrowGeometry.dispose();
       reticle.removeFromParent();
       ringGeo.dispose();

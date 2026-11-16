@@ -4,7 +4,7 @@ import { h, selectButton } from '../dom';
 import { formatScore, hexColor } from '../format';
 import type { ScreenHost, ScreenSpec } from './shared';
 import { screenShell } from './shared';
-import type { HowToChoice, HowToOptions, TutorialDoneChoice } from '../types';
+import type { HowToChoice, HowToOptions, PlayersControl, TutorialDoneChoice } from '../types';
 
 /** How long the menu notice stays up. */
 export const NOTICE_MS = 6000;
@@ -100,11 +100,49 @@ function handednessToggle(options: HowToOptions): HTMLElement {
   return wrap;
 }
 
+/**
+ * "Players: 1 2 3 4" for sports with pass-and-play. Text and a check mark show the choice, not
+ * colour alone. With more than one player Start leads to the names screen.
+ */
+function playersToggle(meta: SportMeta, control: PlayersControl): HTMLElement {
+  const wrap = h('div', 'players-toggle');
+  wrap.setAttribute('role', 'group');
+  wrap.setAttribute('aria-label', 'Players');
+  wrap.append(h('p', 'hand-title', 'Players'));
+  const row = h('div', 'hand-row');
+  const buttons: HTMLButtonElement[] = [];
+  const refresh = (count: number): void => {
+    buttons.forEach((b, i) => {
+      const on = i + 1 === count;
+      b.setAttribute('aria-pressed', String(on));
+      b.classList.toggle('on', on);
+      b.textContent = on ? `✓ ${i + 1}` : String(i + 1);
+    });
+  };
+  const max = meta.multiplayer?.maxPlayers ?? 1;
+  for (let n = 1; n <= max; n++) {
+    const b = selectButton('', 'btn btn-small btn-secondary players-opt');
+    b.dataset.players = String(n);
+    b.setAttribute('aria-label', n === 1 ? '1 player' : `${n} players`);
+    b.addEventListener('click', () => {
+      control.count = n;
+      control.onCount(n);
+      refresh(n);
+    });
+    buttons.push(b);
+    row.append(b);
+  }
+  refresh(control.count);
+  wrap.append(row);
+  return wrap;
+}
+
 /** The steps, notes and (for mouse play) the sport's "With the mouse" lines. Shared by the card and the in-play overlay. */
 export function howToBody(
   meta: SportMeta,
   debugInput: boolean,
   options?: HowToOptions,
+  players?: PlayersControl,
 ): HTMLElement {
   const body = h('div', 'howto-body');
   const cols = h('div', 'howto-cols');
@@ -114,6 +152,9 @@ export function howToBody(
 
   const side = h('div', 'howto-side');
   if (options && meta.usesHandedness !== false) side.append(handednessToggle(options));
+  if (players !== undefined && meta.multiplayer !== undefined) {
+    side.append(playersToggle(meta, players));
+  }
   if (meta.needsSpace) {
     side.append(h('p', 'note note-space', 'Clear a 2 by 2 metre space around you.'));
   }
@@ -157,6 +198,7 @@ export function buildHowTo(
   resolve: (choice: HowToChoice) => void,
   host: ScreenHost,
   options?: HowToOptions,
+  players?: PlayersControl,
 ): ScreenSpec {
   const { el, card } = screenShell('howto', 'card-howto');
   el.style.setProperty('--accent', hexColor(meta.accent));
@@ -166,7 +208,7 @@ export function buildHowTo(
   head.append(swatch, h('h1', 'heading', meta.title));
   card.append(head);
 
-  card.append(howToBody(meta, debugInput, options));
+  card.append(howToBody(meta, debugInput, options, players));
 
   const actions = h('div', 'actions');
   const start = selectButton('Start', 'btn btn-big');

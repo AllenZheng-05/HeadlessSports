@@ -9,6 +9,11 @@ import type { FieldDayScene } from '../../render/style/scene';
 import type { SyntheticSource } from '../../tracking/synthetic/SyntheticSource';
 import type { ScriptStep } from '../../tracking/synthetic/script';
 import type { Ui } from '../../ui/types';
+import { HandoverReadiness, createPresenceSample, samplePresence } from '../multiplayer/readiness';
+import type { PresenceSample } from '../multiplayer/readiness';
+import { PLAYER_COLORS } from '../multiplayer/players';
+import { singleResultFallback } from '../multiplayer/ranking';
+import { MULTI_DONE } from '../multiplayer/result';
 import type { Flags } from '../flags';
 import type { GameLoop } from '../loop';
 import { mulberry32 } from '../random';
@@ -16,7 +21,7 @@ import type { ScoreStore } from '../scores';
 import { scoreKeyOf } from '../sport';
 import { NO_COACH } from '../tutorial/noCoach';
 import { TUTORIAL_DONE } from '../tutorial/result';
-import type { RoundResult, Sport, SportContext, SportEntry } from '../sport';
+import type { PlayerInfo, RoundResult, Sport, SportContext, SportEntry, Turns } from '../sport';
 import { Lobby } from './Lobby';
 
 export type HostPhase = 'idle' | 'loading' | 'playing' | 'paused' | 'finished';
@@ -35,10 +40,32 @@ export const PAUSE_AFTER_MS = 700;
 /** The problem has to stay gone this long before the round resumes. */
 export const RESUME_AFTER_MS = 300;
 
+/** Who is playing a pass-and-play game, and how each seat was calibrated. */
+export interface MultiplayerSetup {
+  players: readonly PlayerInfo[];
+  /** One per seat, in seat order. */
+  calibrations: readonly (Calibration | null)[];
+}
+
 export interface PlayOptions {
   /** Run the sport's tutorial instead of a scored round. Ignored unless `meta.hasTutorial`. */
   tutorial?: boolean;
+  /**
+   * Pass-and-play with 2 or more seats. Ignored unless `meta.multiplayer`, and never combined with
+   * a tutorial. The `calibration` argument of `play` is then ignored in favour of seat 0's.
+   */
+  multiplayer?: MultiplayerSetup;
 }
+
+/** A handover in progress: the round is paused until the next seat is ready. */
+interface Handover {
+  index: number;
+  onReady: () => void;
+  readiness: HandoverReadiness;
+}
+
+/** The "Go" that follows a handover, ms. */
+const GO_BANNER_MS = 800;
 
 /** The same trackers plus hand crops, for overlays the hand cursor operates (fist select). */
 export function withHandCrops(needs: TrackerNeeds): TrackerNeeds {
@@ -48,6 +75,8 @@ export function withHandCrops(needs: TrackerNeeds): TrackerNeeds {
 
 interface Round {
   tutorial: boolean;
+  /** Pass-and-play round (two or more seats). */
+  multi: boolean;
   resolve(result: RoundResult | null): void;
   finished: boolean;
   settled: boolean;
@@ -64,6 +93,8 @@ export class SportHost {
   sport: Sport | null = null;
   /** True when the last `play` ended because the sport (or its factory) threw. Reset by `play`. */
   lastRoundFailed = false;
+  /** Per-seat results of the last pass-and-play game, set when `play` resolves with MULTI_DONE. */
+  multiResults: readonly RoundResult[] | null = null;
 
   private readonly renderer: RendererHandle;
   private readonly ui: Ui;
@@ -82,6 +113,16 @@ export class SportHost {
   private inputErrorLogged = false;
   /** The how-to overlay is open: the round stays paused whatever the camera says. */
   private manualPause = false;
+  /** Seats of the current round: one for a normal game. */
+  private players: readonly PlayerInfo[] = [];
+  private calibrations: readonly (Calibration | null)[] = [];
+  /** Seat in front of the camera. */
+  private seatNow = 0;
+  private standingText: string[] = [];
+  private handover: Handover | null = null;
+  /** The sport asked for the seat that is already up: its callback fires on the next frame. */
+  private sameSeat: (() => void) | null = null;
+  private readonly presence: PresenceSample = createPresenceSample();
   /** The sport's own tracker needs while a round is live, else null. */
   private needs: TrackerNeeds | null = null;
   /** Hand crops are on for an overlay (pause, how-to, results, tutorial done). */
@@ -119,8 +160,26 @@ export class SportHost {
   ): Promise<RoundResult | null> {
     this.teardown();
     const gen = this.generation;
+    const tutorial = options.tutorial === true && entry.meta.hasTutorial === true;
+    const setup = options.multiplayer;
+    const multi =
+      !tutorial &&
+      setup !== undefined &&
+      setup.players.length >= 2 &&
+      entry.meta.multiplayer !== undefined;
+    if (multi) {
+      this.players = setup.players;
+      this.calibrations = setup.calibrations;
+    } else {
+      this.players = [{ index: 0, name: 'Player 1', color: PLAYER_COLORS[0] as number }];
+      this.calibrations = [calibration];
+    }
+    this.seatNow = 0;
+    this.standingText = this.players.map(() => '');
+    this.multiResults = null;
     const round: Round = {
-      tutorial: options.tutorial === true && entry.meta.hasTutorial === true,
+      tutorial,
+      multi,
       resolve: () => undefined,
       finished: false,
       settled: false,
@@ -151,6 +210,21 @@ export class SportHost {
     this.teardown();
   }
 
+  /** Number of seats in the current round (1 unless pass-and-play). */
+  get playerCount(): number {
+    return this.players.length;
+  }
+
+  /** Seat in front of the camera. */
+  get seat(): number {
+    return this.seatNow;
+  }
+
+  /** A handover card is up and the round is waiting for the next seat. */
+  get handingOver(): boolean {
+    return this.handover !== null;
+  }
+
   /** Called by the shell's loop callbacks. */
   begin(nowMs: number, _dt: number): void {
     try {
@@ -162,7 +236,13 @@ export class SportHost {
         console.error('Input update failed', err);
       }
     }
-    if (this.phase === 'playing' || this.phase === 'paused') this.checkPause(nowMs);
+    if (this.sameSeat !== null && this.phase === 'playing') {
+      const next = this.sameSeat;
+      this.sameSeat = null;
+      next();
+    }
+    if (this.handover !== null) this.checkHandover(nowMs);
+    else if (this.phase === 'playing' || this.phase === 'paused') this.checkPause(nowMs);
   }
 
   fixed(dt: number, nowMs: number): void {
@@ -220,6 +300,8 @@ export class SportHost {
   private setManualPause(open: boolean): void {
     if (open && this.phase !== 'playing' && this.phase !== 'paused') return;
     this.manualPause = open;
+    // A handover owns the pause: closing the how-to must not resume the round under the card.
+    if (this.handover !== null) return;
     if (open) {
       if (this.phase !== 'playing') return;
       this.phase = 'paused';
@@ -324,6 +406,26 @@ export class SportHost {
       if (gen !== this.generation) return;
       this.needs = meta.requiredTrackers;
       this.overlayNeeds = false;
+      const multi = round.multi;
+      const players = this.players;
+      const seatOf = (): number => this.seatNow;
+      const calibrationOf = (): Calibration | null =>
+        multi ? (this.calibrations[this.seatNow] ?? null) : calibration;
+      if (multi) {
+        this.input.setCalibration(this.calibrations[0] ?? null);
+        avatar.setPlayerColor((players[0] as PlayerInfo).color);
+        this.ui.standings.show(players);
+        this.ui.standings.setCurrent(0);
+      }
+      const turns: Turns = {
+        count: players.length,
+        players,
+        get current(): number {
+          return seatOf();
+        },
+        handOver: (index, onReady) => this.handOver(round, index, onReady),
+        setStanding: (index, score, text) => this.setStanding(round, index, score, text),
+      };
       const ctx: SportContext = {
         stage,
         avatar,
@@ -331,8 +433,10 @@ export class SportHost {
         hud: this.ui.hud,
         audio: this.ui.audio,
         tunables: this.ui.tunables,
-        calibration,
-        best,
+        get calibration(): Calibration | null {
+          return calibrationOf();
+        },
+        best: multi ? null : best,
         random: mulberry32(this.flags.seed),
         debug: this.flags.debug,
         short: this.flags.short,
@@ -340,8 +444,16 @@ export class SportHost {
           return isPaused();
         },
         // A tutorial never produces a result: a stray finish() ends the tutorial instead.
-        finish: (result) =>
-          round.tutorial ? this.finishTutorialRound(round) : this.finishRound(round, result),
+        finish: (result) => {
+          if (round.tutorial) this.finishTutorialRound(round);
+          else if (multi) {
+            // A sport bug: it should call finishMulti. Show the one result it gave, for this seat.
+            console.error('finish() was called in a pass-and-play game; use finishMulti()');
+            this.finishMulti(round, singleResultFallback(players.length, this.seatNow, result));
+          } else this.finishRound(round, result);
+        },
+        turns,
+        finishMulti: (results) => this.finishMulti(round, results),
         tutorial: round.tutorial,
         coach: round.tutorial ? this.ui.coach : NO_COACH,
         finishTutorial: () => this.finishTutorialRound(round),
@@ -389,6 +501,93 @@ export class SportHost {
     this.settle(round, result);
   }
 
+  /** Pass-and-play finish: remember the per-seat results; `play` resolves with MULTI_DONE. */
+  private finishMulti(round: Round, results: readonly RoundResult[]): void {
+    if (round.finished || round !== this.round) return;
+    if (!round.multi) {
+      // A sport that always calls finishMulti: with one seat that is a plain finish.
+      const only = results[0];
+      if (only !== undefined) this.finishRound(round, only);
+      return;
+    }
+    this.multiResults = results;
+    this.finishRound(round, MULTI_DONE);
+  }
+
+  private setStanding(round: Round, index: number, _score: number, text: string): void {
+    if (!round.multi || round !== this.round || index < 0 || index >= this.players.length) return;
+    this.standingText[index] = text;
+    this.ui.standings.set(index, text);
+  }
+
+  /** Ask for seat `index`: pause, show the card, and call `onReady` once the player is in place. */
+  private handOver(round: Round, index: number, onReady: () => void): void {
+    if (round !== this.round || round.finished) return;
+    if (index === this.seatNow) {
+      this.sameSeat = onReady;
+      return;
+    }
+    if (!round.multi || index < 0 || index >= this.players.length) {
+      console.error(`handOver(${index}) is not a seat of this game`);
+      return;
+    }
+    if (this.handover !== null) {
+      console.error('handOver() while a handover is already in progress');
+      return;
+    }
+    const source = this.input.source;
+    const hv: Handover = {
+      index,
+      onReady,
+      readiness: new HandoverReadiness({
+        requireChange: true,
+        timeOnly: source !== null && source.kind !== 'camera',
+      }),
+    };
+    this.handover = hv;
+    this.phase = 'paused';
+    this.loop.paused = true;
+    this.ui.showPause(null);
+    this.syncOverlayNeeds();
+    const entries = this.players.map((player) => ({
+      player,
+      text: this.standingText[player.index] ?? '',
+    }));
+    void this.ui
+      .showHandover({
+        player: this.players[index] as PlayerInfo,
+        mode: 'up',
+        camera: source !== null && source.kind === 'camera',
+        standings: entries,
+      })
+      .then((choice) => {
+        if (choice === 'ready' && this.handover === hv) this.completeHandover(hv);
+      });
+  }
+
+  /** Camera input moves on by itself once the next person is in place (see readiness.ts). */
+  private checkHandover(nowMs: number): void {
+    const hv = this.handover;
+    const source = this.input.source;
+    if (hv === null || source === null) return;
+    samplePresence(this.input.state, this.presence);
+    if (hv.readiness.update(nowMs, this.presence)) this.completeHandover(hv);
+  }
+
+  private completeHandover(hv: Handover): void {
+    if (this.handover !== hv) return;
+    this.handover = null;
+    this.ui.hideHandover();
+    this.seatNow = hv.index;
+    const player = this.players[hv.index] as PlayerInfo;
+    this.input.setCalibration(this.calibrations[hv.index] ?? null);
+    this.avatar?.setPlayerColor(player.color);
+    this.ui.standings.setCurrent(hv.index);
+    this.ui.hud.setBanner('Go', GO_BANNER_MS);
+    if (this.phase === 'paused' && !this.manualPause) this.resume();
+    hv.onReady();
+  }
+
   private settle(round: Round, result: RoundResult | null): void {
     if (round.settled) return;
     round.settled = true;
@@ -432,6 +631,9 @@ export class SportHost {
         console.error('Sport dispose failed', err);
       }
     }
+    if (this.handover !== null) this.ui.hideHandover();
+    this.handover = null;
+    this.sameSeat = null;
     if (this.phase !== 'idle') this.ui.hud.clear();
     if (this.phase === 'paused') this.ui.showPause(null);
     this.shadow?.dispose();

@@ -8,7 +8,7 @@ import { isTrackingError } from '../../tracking/camera/errors';
 import { createLandmarkSource } from '../../tracking/createSource';
 import type { TrackerNeeds } from '../../tracking/types';
 import { createUi } from '../../ui/createUi';
-import type { Ui } from '../../ui/types';
+import type { PlayersControl, Ui } from '../../ui/types';
 import {
   CalibrationSession,
   defaultCalibration,
@@ -19,14 +19,26 @@ import type { Flags } from '../flags';
 import { gateVerdict } from '../gate/evaluate';
 import { runGate } from '../gate/runGate';
 import { GameLoop } from '../loop';
+import {
+  clampPlayers,
+  defaultName,
+  loadLastNames,
+  makePlayers,
+  prefillNames,
+  sanitiseName,
+  saveLastNames,
+} from '../multiplayer/players';
+import { HandoverReadiness, createPresenceSample, samplePresence } from '../multiplayer/readiness';
 import { createScoreStore } from '../scores';
 import type { ScoreStore } from '../scores';
 import { scoreKeyOf } from '../sport';
-import type { SportEntry, SportMeta, Stance } from '../sport';
+import type { PlayerInfo, SportEntry, SportMeta, Stance } from '../sport';
 import { IdleInput } from './IdleInput';
 import { SportHost } from './SportHost';
+import type { MultiplayerSetup } from './SportHost';
 import { createHook } from './hook';
 import { playRounds } from './playRounds';
+import type { RoundsEnd } from './playRounds';
 import type { GameHook } from './hook';
 
 const POSE_ONLY: TrackerNeeds = { pose: true, handCrops: false, fullFrameHands: false };
@@ -41,6 +53,17 @@ const ROUND_BROKE_NOTICE = 'That round broke. Pick a sport to try again.';
 
 function message(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/** The how-to card's Players control: it keeps its own count, starting at one player. */
+function playersControl(): PlayersControl {
+  const control: PlayersControl = {
+    count: 1,
+    onCount: (n) => {
+      control.count = n;
+    },
+  };
+  return control;
 }
 
 /** Hand-only stances swap the trackers; the rest keep pose and add hands in the background. */
@@ -162,12 +185,17 @@ class Shell {
       if (entry === null) throw new Error(`Unknown sport "${flags.sport}".`);
       await this.attachInput(await this.makeInput());
       const epoch = this.epoch;
-      await this.playSport(
-        entry,
-        defaultCalibration(entry.meta.stance, this.hand),
-        epoch,
-        flags.tutorial,
-      );
+      const seats = this.directSeats(entry.meta);
+      if (seats !== null) {
+        await this.runMulti(entry, seats.length, epoch, this.defaultSetup(entry.meta, seats));
+      } else {
+        await this.playSport(
+          entry,
+          defaultCalibration(entry.meta.stance, this.hand),
+          epoch,
+          flags.tutorial,
+        );
+      }
       if (epoch === this.epoch) await this.menuLoop(epoch);
       return;
     }
@@ -209,8 +237,12 @@ class Shell {
     hook.rendererMemory.geometries = mem.geometries;
     hook.rendererMemory.textures = mem.textures;
     hook.sport = host.sport;
+    hook.players = host.playerCount;
+    hook.seat = host.seat;
     const p = host.phase;
-    if (p === 'playing' || p === 'paused' || p === 'loading') hook.phase = p;
+    if (p === 'playing' || p === 'paused' || p === 'loading') {
+      hook.phase = host.handingOver ? 'handover' : p;
+    }
   }
 
   // ---- input ----
@@ -321,27 +353,164 @@ class Shell {
       const entry = entries.find((e) => e.meta.id === id);
       if (entry === undefined) continue;
 
-      this.hook.phase = 'howto';
-      const choice = await this.ui.showHowTo(
-        entry.meta,
-        this.input.source === null,
-        this.input.source?.kind === 'camera' || entry.meta.usesHandedness === false
-          ? undefined
-          : {
-              handedness: this.hand,
-              onHandedness: (side) => {
-                this.hand = side;
+      // The Players control exists for sports with pass-and-play; it starts at one player.
+      const control = entry.meta.multiplayer === undefined ? undefined : playersControl();
+      for (;;) {
+        this.hook.phase = 'howto';
+        const choice = await this.ui.showHowTo(
+          entry.meta,
+          this.input.source === null,
+          this.input.source?.kind === 'camera' || entry.meta.usesHandedness === false
+            ? undefined
+            : {
+                handedness: this.hand,
+                onHandedness: (side) => {
+                  this.hand = side;
+                },
               },
-            },
-      );
-      if (epoch !== this.epoch) return;
-      if (choice === 'back') continue;
+          control,
+        );
+        if (epoch !== this.epoch) return;
+        if (choice === 'back') break;
 
-      // Tutorial goes through the same pre-round path as a normal round (calibration included).
-      const calibration = await this.calibrate(entry.meta, epoch);
-      if (epoch !== this.epoch) return;
-      await this.playSport(entry, calibration, epoch, choice === 'tutorial');
+        // Two or more players: names, per-player setup, then a pass-and-play game. A tutorial
+        // stays single-player whatever the Players control says.
+        if (choice === 'start' && control !== undefined && control.count >= 2) {
+          const result = await this.runMulti(entry, control.count, epoch);
+          if (epoch !== this.epoch) return;
+          if (result === 'back') continue;
+          break;
+        }
+
+        // Tutorial goes through the same pre-round path as a normal round (calibration included).
+        const calibration = await this.calibrate(entry.meta, epoch);
+        if (epoch !== this.epoch) return;
+        await this.playSport(entry, calibration, epoch, choice === 'tutorial');
+        break;
+      }
     }
+  }
+
+  // ---- pass-and-play ----
+
+  /** The seats a direct start (`?sport=...&players=n`) asks for, or null for a single player. */
+  private directSeats(meta: SportMeta): PlayerInfo[] | null {
+    const multi = meta.multiplayer;
+    const flags = this.flags;
+    if (multi === undefined || flags.tutorial || flags.players < 2) return null;
+    return makePlayers(flags.names ?? [], clampPlayers(flags.players, multi.maxPlayers));
+  }
+
+  /** Everyone gets the default calibration (mouse play, synthetic and replay sources). */
+  private defaultSetup(meta: SportMeta, players: readonly PlayerInfo[]): MultiplayerSetup {
+    return {
+      players,
+      calibrations: players.map(() => defaultCalibration(meta.stance, this.hand)),
+    };
+  }
+
+  /** The typed names, sanitised and remembered for next time; null for Back. */
+  private async askNames(entry: SportEntry, count: number): Promise<PlayerInfo[] | null> {
+    this.hook.phase = 'names';
+    const typed = await this.ui.showNames(entry.meta, prefillNames(count));
+    if (typed === null) return null;
+    const names = typed.map((value, i) => sanitiseName(value, defaultName(i)));
+    const remembered = loadLastNames();
+    names.forEach((name, i) => {
+      remembered[i] = name;
+    });
+    saveLastNames(remembered);
+    return makePlayers(names, count);
+  }
+
+  /**
+   * Names, per-player setup and the game, again and again for "Change players". `first` is a ready
+   * setup (direct start) that skips the names the first time. 'back' means the names screen was
+   * left with Back (or a step-in was cancelled): the caller shows the how-to card again.
+   */
+  private async runMulti(
+    entry: SportEntry,
+    count: number,
+    epoch: number,
+    first?: MultiplayerSetup,
+  ): Promise<'done' | 'back'> {
+    let setup: MultiplayerSetup | null | undefined = first;
+    for (;;) {
+      if (setup === undefined) {
+        const players = await this.askNames(entry, count);
+        if (epoch !== this.epoch) return 'done';
+        if (players === null) return 'back';
+        setup = await this.setupSeats(entry.meta, players, epoch);
+        if (epoch !== this.epoch) return 'done';
+        // Cancelling a step-in returns to the names.
+        if (setup === null) {
+          setup = undefined;
+          continue;
+        }
+      }
+      const end: RoundsEnd = await this.playSport(
+        entry,
+        setup.calibrations[0] ?? null,
+        epoch,
+        false,
+        setup,
+      );
+      if (end !== 'change') return 'done';
+      setup = undefined;
+    }
+  }
+
+  /**
+   * Camera input: each player in turn steps in ("Mia, step in") and is calibrated like a single
+   * player. Everything else (mouse, synthetic, replay) uses the default calibration for every seat.
+   * Null when a step-in is cancelled.
+   */
+  private async setupSeats(
+    meta: SportMeta,
+    players: readonly PlayerInfo[],
+    epoch: number,
+  ): Promise<MultiplayerSetup | null> {
+    if (this.input.source?.kind !== 'camera') return this.defaultSetup(meta, players);
+    const calibrations: Calibration[] = [];
+    for (const player of players) {
+      const choice = await this.stepIn(player, player.index > 0, epoch);
+      if (epoch !== this.epoch) return null;
+      if (choice !== 'ready') return null;
+      calibrations.push(await this.calibrate(meta, epoch));
+      if (epoch !== this.epoch) return null;
+    }
+    return { players, calibrations };
+  }
+
+  /**
+   * The "Mia, step in" card before a player's calibration. It moves on when Ready is chosen (click,
+   * Enter, a fist from the hand cursor) or when the camera sees a new person standing still (see
+   * multiplayer/readiness.ts).
+   */
+  private async stepIn(
+    player: PlayerInfo,
+    requireChange: boolean,
+    epoch: number,
+  ): Promise<'ready' | 'cancel' | 'stale'> {
+    const input = this.input;
+    this.requestHands(input);
+    this.hook.phase = 'handover';
+    const readiness = new HandoverReadiness({ requireChange });
+    const sample = createPresenceSample();
+    let settle: (r: 'ready' | 'stale') => void = () => undefined;
+    const auto = new Promise<'ready' | 'stale'>((resolve) => {
+      settle = resolve;
+    });
+    const tick = (now: number): void => {
+      if (epoch !== this.epoch) settle('stale');
+      else if (readiness.update(now, samplePresence(input.state, sample))) settle('ready');
+    };
+    this.perFrame = tick;
+    const card = this.ui.showHandover({ player, mode: 'step-in', camera: true, standings: [] });
+    const choice = await Promise.race([card, auto]);
+    if (this.perFrame === tick) this.perFrame = null;
+    this.ui.hideHandover();
+    return choice;
   }
 
   /** Camera input measures the player; every other input gets a sensible default. */
@@ -416,7 +585,8 @@ class Shell {
     calibration: Calibration | null,
     epoch: number,
     tutorial: boolean,
-  ): Promise<void> {
+    multi?: MultiplayerSetup,
+  ): Promise<RoundsEnd> {
     const meta = entry.meta;
     this.input.setCalibration(calibration);
     this.hook.sportId = meta.id;
@@ -431,8 +601,9 @@ class Shell {
       entry,
       calibration,
       tutorial,
+      multi,
     );
-    if (end === 'stale') return;
+    if (end === 'stale') return end;
     if (end === 'failed') this.notice = ROUND_BROKE_NOTICE;
     this.host.release();
     this.hook.sportId = null;
@@ -443,6 +614,7 @@ class Shell {
       await this.input.setNeeds(POSE_ONLY);
     }
     this.requestHands(this.input);
+    return end;
   }
 }
 

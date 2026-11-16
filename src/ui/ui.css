@@ -1828,3 +1828,297 @@
   font-weight: 700;
   font-size: calc(22 * var(--u));
 }
+
+/* ---------- pass-and-play ---------- */
+
+.players-toggle {
+  display: flex;
+  flex-direction: column;
+  gap: calc(8 * var(--u));
+  padding: calc(12 * var(--u)) calc(20 * var(--u));
+  border-radius: calc(24 * var(--u));
+  background: var(--putty);
+}
+
+.players-opt {
+  flex: 1 1 0;
+  padding: 0 calc(8 * var(--u));
+}
+
+.players-opt.on {
+  background: var(--whistle);
+  box-shadow: inset 0 0 0 calc(4 * var(--u)) var(--ink);
+}
+
+/* A round chip in a player's colour. Outlined in ink so it reads on any background. */
+.seat-chip {
+  flex: none;
+  display: inline-block;
+  width: calc(26 * var(--u));
+  height: calc(26 * var(--u));
+  border: calc(3 * var(--u)) solid var(--ink);
+  border-radius: 50%;
+  background: var(--seat);
+}
+
+.seat-chip-big {
+  width: calc(56 * var(--u));
+  height: calc(56 * var(--u));
+  border-width: calc(4 * var(--u));
+}
+
+.card-names {
+  width: min(calc(760 * var(--u)), 100%);
+  gap: calc(14 * var(--u));
+  padding: calc(28 * var(--u)) calc(48 * var(--u)) calc(32 * var(--u));
+}
+
+.names-sub {
+  max-width: none;
+  font-size: calc(22 * var(--u));
+}
+
+.names-list {
+  display: flex;
+  flex-direction: column;
+  gap: calc(12 * var(--u));
+  width: 100%;
+}
+
+.name-row {
+  display: flex;
+  align-items: center;
+  gap: calc(20 * var(--u));
+  padding: calc(8 * var(--u)) calc(14 * var(--u));
+  border-radius: calc(999 * var(--u));
+  background: var(--putty);
+}
+
+.name-label {
+  flex: 0 0 calc(170 * var(--u));
+  display: flex;
+  align-items: center;
+  gap: calc(12 * var(--u));
+  font-family: 'Fredoka', system-ui, sans-serif;
+  font-weight: 600;
+  font-size: calc(24 * var(--u));
+  text-align: left;
+}
+
+.name-input {
+  flex: 1 1 0;
+  min-width: 0;
+  height: calc(52 * var(--u));
+  padding: 0 calc(22 * var(--u));
+  border: calc(4 * var(--u)) solid var(--ink);
+  border-radius: calc(999 * var(--u));
+  background: var(--chalk);
+  font: inherit;
+  font-weight: 700;
+  font-size: calc(28 * var(--u));
+  color: var(--ink);
+}
+
+.name-input:focus {
+  outline: calc(4 * var(--u)) solid var(--seat);
+  outline-offset: calc(2 * var(--u));
+}
+
+/* The handover card: full screen, washed in the player's colour. Between turns it sits under the
+   camera mirror (so the next player sees themselves); before the round it covers the screen. */
+.handover {
+  position: absolute;
+  inset: 0;
+  z-index: 19;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: calc(24 * var(--u));
+  background: color-mix(in srgb, var(--seat) 55%, var(--sky));
+  pointer-events: auto;
+  animation: wash-in 200ms ease-out both;
+}
+
+.handover[data-mode='step-in'] {
+  z-index: 40;
+}
+
+.card-handover {
+  width: min(calc(820 * var(--u)), 100%);
+  gap: calc(14 * var(--u));
+  padding: calc(28 * var(--u)) calc(48 * var(--u)) calc(32 * var(--u));
+  border: calc(8 * var(--u)) solid var(--seat);
+}
+
+.handover-head {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: calc(20 * var(--u));
+}
+
+.card-handover .heading {
+  font-size: calc(64 * var(--u));
+}
+
+.handover-sub {
+  max-width: none;
+  color: var(--ink-2);
+  font-weight: 700;
+  font-size: calc(24 * var(--u));
+}
+
+.handover-standings {
+  display: flex;
+  flex-direction: column;
+  gap: calc(8 * var(--u));
+  width: min(100%, calc(520 * var(--u)));
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.handover-row {
+  display: flex;
+  align-items: center;
+  gap: calc(14 * var(--u));
+  padding: calc(6 * var(--u)) calc(18 * var(--u));
+  border-radius: calc(999 * var(--u));
+  background: var(--putty);
+  font-family: 'Fredoka', system-ui, sans-serif;
+  font-weight: 500;
+  font-size: calc(26 * var(--u));
+}
+
+.handover-row.current {
+  box-shadow: inset 0 0 0 calc(4 * var(--u)) var(--ink);
+  font-weight: 600;
+}
+
+.handover-name {
+  flex: 1 1 auto;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.handover-score {
+  flex: none;
+}
+
+/* Nothing in a round can be opened from under the card. */
+.hs-ui[data-handover='true'] .howto-open {
+  visibility: hidden;
+}
+
+/* The sport's hand markers would sit on top of the card. */
+.hs-ui[data-handover='true'] .hud-cursors {
+  display: none;
+}
+
+/* The standings strip: bottom left, the one corner the sport HUDs leave free. */
+.standings {
+  position: absolute;
+  left: calc(32 * var(--u));
+  bottom: calc(24 * var(--u));
+  display: flex;
+  flex-direction: column;
+  gap: calc(6 * var(--u));
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.standing {
+  display: flex;
+  align-items: center;
+  gap: calc(10 * var(--u));
+  min-width: calc(190 * var(--u));
+  max-width: calc(300 * var(--u));
+  padding: calc(3 * var(--u)) calc(16 * var(--u)) calc(5 * var(--u)) calc(14 * var(--u));
+  border: calc(3 * var(--u)) solid var(--ink);
+  border-radius: calc(999 * var(--u));
+  background: var(--seat);
+  font-family: 'Fredoka', system-ui, sans-serif;
+  font-weight: 500;
+  font-size: calc(22 * var(--u));
+  line-height: 1.15;
+  opacity: 0.92;
+}
+
+.standing.current {
+  opacity: 1;
+  font-weight: 600;
+  box-shadow: 0 calc(4 * var(--u)) 0 rgba(39, 54, 74, 0.3);
+  transform: translateX(calc(8 * var(--u)));
+}
+
+.standing.current::before {
+  content: '\25B6';
+  font-size: 0.7em;
+}
+
+.standing-name {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.standing-score {
+  flex: none;
+}
+
+/* Results table. */
+.card-multi-results .results-headline {
+  font-size: calc(80 * var(--u));
+}
+
+.rank-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0 calc(8 * var(--u));
+  font-family: 'Fredoka', system-ui, sans-serif;
+  font-size: calc(30 * var(--u));
+  text-align: left;
+}
+
+.rank-row td {
+  padding: calc(6 * var(--u)) calc(14 * var(--u));
+  background: var(--putty);
+}
+
+.rank-row.first td {
+  background: var(--seat);
+  font-weight: 600;
+}
+
+.rank-row td:first-child {
+  width: calc(70 * var(--u));
+  border-radius: calc(999 * var(--u)) 0 0 calc(999 * var(--u));
+  text-align: center;
+  font-weight: 600;
+}
+
+.rank-row td:last-child {
+  border-radius: 0 calc(999 * var(--u)) calc(999 * var(--u)) 0;
+}
+
+.rank-who {
+  display: flex;
+  align-items: center;
+  gap: calc(12 * var(--u));
+}
+
+.rank-score {
+  text-align: right;
+  font-weight: 600;
+}
+
+.rank-detail {
+  color: var(--ink-2);
+  font-family: 'Nunito', system-ui, sans-serif;
+  font-weight: 700;
+  font-size: calc(20 * var(--u));
+}

@@ -9,6 +9,8 @@ import {
   FAKE_SPORTS,
 } from './harness/fakeData';
 import { createFakeInput } from './harness/fakeInput';
+import { makePlayers } from '../core/multiplayer/players';
+import { rankResults, winnerLine } from '../core/multiplayer/ranking';
 import type { FakeInput } from './harness/fakeInput';
 import { meta as archeryMeta } from '../sports/archery/meta';
 import { meta as battingMeta } from '../sports/batting/meta';
@@ -19,7 +21,7 @@ import { meta as pitchingMeta } from '../sports/pitching/meta';
 import { meta as warmupMeta } from '../sports/warmup/meta';
 import type { TrackingErrorCode } from '../tracking/types';
 import type { FrameProblem } from '../input/types';
-import type { CalibrationView, Ui } from './types';
+import type { CalibrationView, PlayersControl, Ui } from './types';
 
 declare global {
   interface Window {
@@ -41,6 +43,18 @@ const REAL_METAS = [
 const params = new URLSearchParams(location.search);
 const screen = params.get('screen') ?? 'title';
 const count = Math.max(1, Math.min(8, Number(params.get('n') ?? 5)));
+const seatCount = Math.max(2, Math.min(4, Number(params.get('seats') ?? 3)));
+const multiMeta = { ...archeryMeta };
+function playersControl(): PlayersControl {
+  const control: PlayersControl = {
+    count: 1,
+    onCount: (n) => {
+      control.count = n;
+      hub.resolved = `players:${n}`;
+    },
+  };
+  return control;
+}
 const sports = params.has('real') ? REAL_METAS : FAKE_SPORTS.slice(0, count);
 const root = document.getElementById('ui') as HTMLElement;
 
@@ -162,9 +176,41 @@ switch (screen) {
               },
             }
           : undefined,
+        // ?multi=1: the Players control, as for a sport with pass-and-play.
+        params.has('multi') ? playersControl() : undefined,
       ),
     );
     break;
+  case 'names':
+    track(ui.showNames(multiMeta, ['Mia', 'Player 2', 'Player 3', 'Player 4'].slice(0, seatCount)));
+    break;
+  case 'handover': {
+    const players = makePlayers(['Mia', 'Sam', 'Zoe', 'Alexander J'], seatCount);
+    const who = Math.min(players.length - 1, Number(params.get('who') ?? 1));
+    track(
+      ui.showHandover({
+        player: players[who] as (typeof players)[number],
+        mode: params.has('stepin') ? 'step-in' : 'up',
+        camera: params.has('cam'),
+        standings: params.has('stepin')
+          ? []
+          : players.map((player, i) => ({ player, text: `${i * 7 + 3} pts` })),
+      }),
+    );
+    break;
+  }
+  case 'multiresults': {
+    const players = makePlayers(['Mia', 'Sam', 'Zoe', 'Alexander J'], seatCount);
+    const scores = (params.get('scores') ?? '24,31,24,9').split(',').map(Number);
+    const results = players.map((_, i) => ({
+      score: scores[i] ?? 0,
+      headline: `${scores[i] ?? 0} pts`,
+      lines: ['Rings: 10, 8, 6'],
+    }));
+    const rows = rankResults(players, results, true);
+    track(ui.showMultiResults(multiMeta, rows, winnerLine(rows)));
+    break;
+  }
   case 'calibration': {
     const cal = ui.showCalibration(meta);
     ui.setCameraActive(true);
@@ -207,6 +253,12 @@ switch (screen) {
     );
     hud.setCursor('left', 0.3, 0.62, false);
     hud.setCursor('right', 0.68, 0.55, true);
+    if (params.has('seats')) {
+      const players = makePlayers(['Mia', 'Sam', 'Zoe', 'Alexander J'], seatCount);
+      ui.standings.show(players);
+      players.forEach((_, i) => ui.standings.set(i, `${i * 7 + 3} pts`));
+      ui.standings.setCurrent(1);
+    }
     if (screen === 'pause') ui.showPause((params.get('problem') ?? 'move-left') as FrameProblem);
     ui.onQuit(() => {
       hub.resolved = 'quit';

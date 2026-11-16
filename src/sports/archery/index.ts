@@ -1,5 +1,5 @@
 import { mirrorUpperBody } from '../../core/avatarDrive';
-import type { Sport, SportBot, SportContext, SportFactory } from '../../core/sport';
+import type { RoundResult, Sport, SportBot, SportContext, SportFactory } from '../../core/sport';
 import { AvatarAnimator } from '../../render/avatar/AvatarAnimator';
 import { Fog, Vector3 } from 'three/webgpu';
 import {
@@ -33,7 +33,7 @@ import { ArcheryRound } from './round';
 import { ringScore } from './target';
 import { createWorld } from './world';
 
-export type ArcheryPhase = 'ready' | 'drawing' | 'flying' | 'showing' | 'finishing';
+export type ArcheryPhase = 'ready' | 'drawing' | 'flying' | 'showing' | 'handover' | 'finishing';
 
 /** What tests and the bot may read from the live sport. */
 export interface ArcherySport extends Sport {
@@ -54,6 +54,14 @@ export interface ArcherySport extends Sport {
   readonly tutorialStep: number;
   /** Tutorial rounds: the number of steps, or 0 in a normal round. */
   readonly tutorialSteps: number;
+  /** Seat in front of the camera (always 0 with one player). */
+  readonly seat: number;
+  readonly seatCount: number;
+  /** Arrows shot by everyone, and the total the game holds. */
+  readonly turnsShot: number;
+  readonly turnsTotal: number;
+  /** Each seat's score, in seat order. */
+  readonly scores: readonly number[];
 }
 
 const HINTS: Record<Hint, string> = {
@@ -79,13 +87,23 @@ const TAU = Math.PI * 2;
 const STEP = 1 / 120;
 /** Height of the archer's chest, m: the camera leans toward it so the archer stays in the picture. */
 const ARCHER_CHEST = 1.2;
+/** How far to the bow side the close-up camera sits, m. */
+const SHOW_SIDE = 2.4;
 const lerp = (a: number, b: number, k: number): number => a + (b - a) * k;
 
 export const createArchery: SportFactory = (ctx: SportContext): ArcherySport => {
   const cfg = archeryConfig;
-  const drawHand = ctx.calibration?.handedness ?? 'right';
-  const bowHand = otherSide(drawHand);
-  const bowSign = sideSign(bowHand);
+  // A tutorial has no arrow limit, no wind and no sway: nothing in it can be lost.
+  const tut = ctx.tutorial;
+  // Pass-and-play: seats take turns one arrow at a time, each with the round's arrow count.
+  const turns = ctx.turns;
+  const multi = turns.count > 1 && !tut;
+  const seatCount = multi ? turns.count : 1;
+  const perSeat = tut ? cfg.tutorialArrows : ctx.short ? cfg.shortArrows : cfg.arrows;
+  // Hands are the current seat's: read again at every handover.
+  let drawHand = ctx.calibration?.handedness ?? 'right';
+  let bowHand = otherSide(drawHand);
+  let bowSign = sideSign(bowHand);
   const unregister = ctx.tunables.register('archery', 'Archery', cfg, archeryRanges);
   const animator = new AvatarAnimator(ctx.avatar);
 
@@ -96,12 +114,8 @@ export const createArchery: SportFactory = (ctx: SportContext): ArcherySport => 
     scene.fog.far = 420;
   }
   const camera = ctx.stage.camera;
-  const world = createWorld(scene, cfg);
-  const bow = new BowRig(
-    ctx.avatar.mitts[bowHand],
-    ctx.avatar.mitts[drawHand],
-    world.arrowGeometry,
-  );
+  const world = createWorld(scene, cfg, multi ? seatCount * perSeat : undefined);
+  let bow = new BowRig(ctx.avatar.mitts[bowHand], ctx.avatar.mitts[drawHand], world.arrowGeometry);
 
   const machine = new DrawMachine(cfg);
   // Camera off: the mouse aims with the bow hand and the button draws. Null for tracked input.
@@ -109,7 +123,7 @@ export const createArchery: SportFactory = (ctx: SportContext): ArcherySport => 
   const mouseDraw = new MouseDraw(cfg, mouse?.pointerPresses ?? 0, mouse?.pointerReleases ?? 0);
   const dm: DrawState = mouse !== null ? mouseDraw : machine;
   const hints = mouse !== null ? MOUSE_HINTS : HINTS;
-  const drawSign = sideSign(drawHand);
+  let drawSign = sideSign(drawHand);
   let pausedSeen = false;
   let handsClosed = false;
   if (mouse !== null) {
@@ -117,11 +131,10 @@ export const createArchery: SportFactory = (ctx: SportContext): ArcherySport => 
     mouse.setPointerFollow(true);
     mouse.selectHand(bowHand);
   }
-  // A tutorial has no arrow limit, no wind and no sway: nothing in it can be lost.
-  const tut = ctx.tutorial;
-  const round = new ArcheryRound(
-    tut ? cfg.tutorialArrows : ctx.short ? cfg.shortArrows : cfg.arrows,
-  );
+  const seatRounds: ArcheryRound[] = [];
+  for (let i = 0; i < seatCount; i++) seatRounds.push(new ArcheryRound(perSeat));
+  let seat = 0;
+  let round = seatRounds[0] as ArcheryRound;
   const base = basePitch(cfg);
   const backZ = -cfg.targetDistance - 1.45;
   const yawF = new DampedValue();
@@ -144,7 +157,8 @@ export const createArchery: SportFactory = (ctx: SportContext): ArcherySport => 
     pitch: 0,
   };
 
-  // Seeded per-round values: sway phases, and a crosswind per arrow (the first is always calm).
+  // Seeded per-round values: sway phases, and a crosswind per arrow number (the first is always
+  // calm). Every seat faces the same wind on its arrow n: the draws do not depend on the seat count.
   const phases = new Float64Array(4);
   for (let i = 0; i < 4; i++) phases[i] = ctx.random() * TAU;
   const winds: number[] = [];
@@ -191,6 +205,37 @@ export const createArchery: SportFactory = (ctx: SportContext): ArcherySport => 
     if (phase === next) return;
     phase = next;
     phaseLog.push(next);
+  };
+
+  /** The next seat is in place: its hands, its arrows, a clean draw. */
+  const switchSeat = (next: number): void => {
+    seat = next;
+    round = seatRounds[next] as ArcheryRound;
+    const hand = ctx.calibration?.handedness ?? 'right';
+    if (hand !== drawHand) {
+      if (mouse !== null && handsClosed) {
+        handsClosed = false;
+        mouse.setHandClosed(drawHand, false);
+      }
+      drawHand = hand;
+      bowHand = otherSide(drawHand);
+      bowSign = sideSign(bowHand);
+      drawSign = sideSign(drawHand);
+      bow.dispose();
+      bow = new BowRig(ctx.avatar.mitts[bowHand], ctx.avatar.mitts[drawHand], world.arrowGeometry);
+      showPos.x = bowSign * SHOW_SIDE;
+      mouse?.selectHand(bowHand);
+    }
+    // The last player's aim is not this player's.
+    frozenYaw = 0;
+    frozenPitch = 0;
+    yawF.reset(0);
+    pitchF.reset(0);
+    dm.unlock();
+    shownScore = -1;
+    shownLeft = -1;
+    shownWind = Number.NaN;
+    setPhase('ready');
   };
 
   const unsubClose = ctx.input.on('FistClosed', (e) => {
@@ -255,7 +300,16 @@ export const createArchery: SportFactory = (ctx: SportContext): ArcherySport => 
       lastImpactY = cfg.targetHeight;
     }
     round.record(ring, r);
-    world.addStuck(arrow.x, arrow.y, arrow.z, arrow.vx, arrow.vy, arrow.vz);
+    if (multi) turns.setStanding(seat, round.score, `${round.score} pts`);
+    world.addStuck(
+      arrow.x,
+      arrow.y,
+      arrow.z,
+      arrow.vx,
+      arrow.vy,
+      arrow.vz,
+      multi ? (turns.players[seat]?.color ?? undefined) : undefined,
+    );
     ctx.audio.play('thud');
     ctx.hud.setBanner(ringBanner(ring), 1200);
     if (ring === 10) {
@@ -284,8 +338,44 @@ export const createArchery: SportFactory = (ctx: SportContext): ArcherySport => 
     setPhase('flying');
   };
 
+  const seatResult = (r: ArcheryRound): RoundResult => ({
+    score: r.score,
+    headline: `${r.score} pts`,
+    lines: [`Rings: ${r.ringsText()}`, `Bullseyes: ${r.tens}`],
+    detail: {
+      arrows: r.total,
+      total: r.score,
+      tens: r.tens,
+      misses: r.misses,
+      bestRing: r.bestRing,
+      meanErrorCm: Math.round(r.meanErrorCm * 10) / 10,
+    },
+  });
+
+  const allDone = (): boolean => {
+    for (const r of seatRounds) if (!r.over) return false;
+    return true;
+  };
+
+  const topScore = (): number => {
+    let top = 0;
+    for (const r of seatRounds) if (r.score > top) top = r.score;
+    return top;
+  };
+
+  /** Hand the bow to the next seat; `switchSeat` runs once that player is in place. */
+  const passTurn = (): void => {
+    const next = (seat + 1) % seatCount;
+    setPhase('handover');
+    turns.handOver(next, () => switchSeat(next));
+  };
+
   const finishRound = (): void => {
     finished = true;
+    if (multi) {
+      ctx.finishMulti(seatRounds.map(seatResult));
+      return;
+    }
     const total = round.score;
     if (ctx.best === null || total > ctx.best) ctx.audio.play('cheer');
     ctx.finish({
@@ -315,9 +405,13 @@ export const createArchery: SportFactory = (ctx: SportContext): ArcherySport => 
     } else if (phase === 'showing') {
       showT += dt * 1000;
       if (showT >= cfg.showHitMs) {
+        if (multi && !allDone()) {
+          passTurn();
+          return;
+        }
         if (round.over) {
           setPhase('finishing');
-          const good = round.score >= round.total * 5;
+          const good = multi ? round.score >= topScore() : round.score >= round.total * 5;
           animator.play(good ? 'celebrate' : 'slump');
           finishIn = cfg.finishDelayS;
           if (good) ctx.audio.play('cheer');
@@ -441,7 +535,7 @@ export const createArchery: SportFactory = (ctx: SportContext): ArcherySport => 
   // Camera scratch.
   const basePos = new Vector3();
   const baseLook = new Vector3();
-  const showPos = new Vector3(bowSign * 2.4, 1.55, -cfg.targetDistance + 4.8);
+  const showPos = new Vector3(bowSign * SHOW_SIDE, 1.55, -cfg.targetDistance + 4.8);
   const showLook = new Vector3();
   const look = new Vector3();
   const toArcher = new Vector3();
@@ -543,6 +637,9 @@ export const createArchery: SportFactory = (ctx: SportContext): ArcherySport => 
       shownLeft = -1;
       shownWind = Number.NaN;
       shownScore = -1;
+      if (multi) {
+        for (let i = 0; i < seatCount; i++) turns.setStanding(i, 0, '0 pts');
+      }
       if (tut) {
         // The coach panel is the instruction line; no arrows-left count, wind or best.
         ctx.hud.setSubScore(null);
@@ -627,6 +724,23 @@ export const createArchery: SportFactory = (ctx: SportContext): ArcherySport => 
     },
     get tutorialSteps(): number {
       return tutorial === null ? 0 : tutorial.stepCount;
+    },
+    get seat(): number {
+      return seat;
+    },
+    get seatCount(): number {
+      return seatCount;
+    },
+    get turnsShot(): number {
+      let n = 0;
+      for (const r of seatRounds) n += r.taken;
+      return n;
+    },
+    get turnsTotal(): number {
+      return seatCount * perSeat;
+    },
+    get scores(): readonly number[] {
+      return seatRounds.map((r) => r.score);
     },
   };
 

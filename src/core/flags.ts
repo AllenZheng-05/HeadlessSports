@@ -1,5 +1,7 @@
 /** The single parser for query flags (see CLAUDE.md). */
 
+import { MAX_PLAYERS, parseNames } from './multiplayer/players';
+
 export interface Flags {
   /** `?input=debug`: mouse instead of camera. */
   input: 'camera' | 'debug';
@@ -31,10 +33,20 @@ export interface Flags {
   hand: 'left' | 'right' | null;
   /** `?tutorial=1`: the direct-start sport (`?sport=`) opens in tutorial mode, when it has one. */
   tutorial: boolean;
+  /** `?players=2..4` with `?sport=`: start a pass-and-play game with default names. 1 when absent. */
+  players: number;
+  /** `?names=Mia,Sam`: seat names for `?players=`. Null when absent. */
+  names: string[] | null;
 }
 
 export const TIME_SCALE_MIN = 0.1;
 export const TIME_SCALE_MAX = 16;
+
+/** `?players=` as 2..4, or 1 for anything else. */
+function playersFlag(raw: string | null): number {
+  const n = raw === null || raw === '' ? NaN : Number(raw);
+  return Number.isInteger(n) && n >= 2 ? Math.min(MAX_PLAYERS, n) : 1;
+}
 
 function text(params: URLSearchParams, key: string): string | null {
   const v = params.get(key);
@@ -76,6 +88,8 @@ export function parseFlags(search: string | URLSearchParams): Flags {
     short: params.get('short') === '1',
     hand: handRaw === 'left' || handRaw === 'right' ? handRaw : null,
     tutorial: params.get('tutorial') === '1',
+    players: playersFlag(params.get('players')),
+    names: parseNames(params.get('names')),
   };
 }
 

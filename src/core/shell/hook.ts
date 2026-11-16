@@ -17,6 +17,8 @@ export type GamePhase =
   | 'paused'
   | 'results'
   | 'tutorial-done'
+  | 'names'
+  | 'handover'
   | 'error';
 
 /** `window.__game`: always on, read by Playwright. One object, fields assigned in place. */
@@ -27,6 +29,12 @@ export interface GameHook {
   isBest: boolean | null;
   /** The current round is the sport's tutorial. */
   tutorial: boolean;
+  /** Seats in the current game: 1 unless pass-and-play. */
+  players: number;
+  /** Seat in front of the camera. */
+  seat: number;
+  /** Ranked rows of the last pass-and-play game (ties share a rank), or null. */
+  ranking: { rank: number; name: string; score: number; headline: string }[] | null;
   /** Rendered frames since boot. */
   frames: number;
   inputKind: 'camera' | 'synthetic' | 'replay' | 'debug' | null;
@@ -54,6 +62,9 @@ export function createHook(flags: Flags): GameHook {
     result: null,
     isBest: null,
     tutorial: false,
+    players: 1,
+    seat: 0,
+    ranking: null,
     frames: 0,
     inputKind: null,
     drawCalls: 0,

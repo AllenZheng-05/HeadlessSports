@@ -117,6 +117,89 @@ async function waitSport(page: Page, what: string, cond: Cond, timeout = 60000):
   }
 }
 
+interface MultiHook {
+  phase: string;
+  players: number;
+  seat: number;
+  ranking: { rank: number; name: string; score: number; headline: string }[] | null;
+  result: unknown;
+  isBest: boolean | null;
+}
+
+function multiHook(page: Page): Promise<MultiHook> {
+  return page.evaluate(() => {
+    const g = (window as unknown as { __game: MultiHook }).__game;
+    return {
+      phase: g.phase,
+      players: g.players,
+      seat: g.seat,
+      ranking: g.ranking === null ? null : g.ranking.map((r) => ({ ...r })),
+      result: g.result,
+      isBest: g.isBest,
+    };
+  });
+}
+
+/** Wait for a handover card in the page: its title text, the phase and the sport's own phase. */
+async function waitHandover(page: Page, title: string, timeout = 30000): Promise<void> {
+  try {
+    await expect(page.locator('.handover h1')).toHaveText(title, { timeout });
+  } catch (err) {
+    const now = await multiHook(page).catch(() => null);
+    const sport = await sportState(page).catch(() => null);
+    throw new Error(
+      `Never saw the handover card "${title}"; game ${JSON.stringify(now)}, sport ${JSON.stringify(sport)}.`,
+      { cause: err },
+    );
+  }
+}
+
+/** Seats seen at a handover and phases seen, recorded in the page from the first frame. */
+async function recordPhases(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const w = window as unknown as {
+      __game?: { phase: string; seat: number };
+      __phases: string[];
+      __seats: number[];
+    };
+    w.__phases = [];
+    w.__seats = [];
+    setInterval(() => {
+      const g = w.__game;
+      if (!g) return;
+      if (!w.__phases.includes(g.phase)) w.__phases.push(g.phase);
+      if (w.__seats[w.__seats.length - 1] !== g.seat && g.phase === 'playing')
+        w.__seats.push(g.seat);
+    }, 20);
+  });
+}
+
+const phasesSeen = (page: Page): Promise<string[]> =>
+  page.evaluate(() => [...(window as unknown as { __phases: string[] }).__phases]);
+const seatsSeen = (page: Page): Promise<number[]> =>
+  page.evaluate(() => [...(window as unknown as { __seats: number[] }).__seats]);
+
+/** The hook follows the sport by a frame: poll for the seat instead of reading it once. */
+async function expectSeat(page: Page, seat: number): Promise<void> {
+  await expect.poll(async () => (await multiHook(page)).seat, { timeout: 3000 }).toBe(seat);
+}
+
+/** Where the mouse aims at about the middle of the target (see the mouse test above). */
+function aimPoint(page: Page): { x: number; y: number } {
+  const vp = page.viewportSize() ?? { width: 1280, height: 720 };
+  return { x: vp.width * 0.376, y: vp.height * 0.307 };
+}
+
+/** One mouse arrow: aim, hold to a full draw, let go, and wait for it to land. */
+async function shootWithMouse(page: Page, landed: number): Promise<void> {
+  const aim = aimPoint(page);
+  await page.mouse.move(aim.x, aim.y, { steps: 4 });
+  await page.mouse.down();
+  await waitSport(page, 'a full draw', { phase: 'drawing', minDraw: 0.97 }, 6000);
+  await page.mouse.up();
+  await waitSport(page, 'the arrow to land', { arrowsShot: landed }, 12000);
+}
+
 test.describe('archery', () => {
   test('screenshots at full draw and of the hit, in slow motion', async ({ page }) => {
     const problems = watch(page);
@@ -366,6 +449,165 @@ test.describe('archery', () => {
     expect(await stepsSeen(page)).toEqual([0, 1, 2, 3]);
     expect((await game(page)).result).toBeNull();
     await page.screenshot({ path: `${SHOTS}/archery-tutorial-mouse-done.png` });
+    expect(problems).toEqual([]);
+  });
+
+  // ---- pass-and-play ----
+
+  test('three synthetic players take turns, rank in a table and nothing is saved', async ({
+    page,
+  }) => {
+    test.setTimeout(90_000); // 22 to 37 s measured at three times speed, 2.5x
+    const problems = watch(page);
+    await recordPhases(page);
+    await page.goto(
+      '/?sport=archery&players=3&names=Mia,Sam,Zoe&source=synthetic&skipGate=1&short=1&timeScale=3',
+    );
+    await waitPhase(page, 'playing');
+    expect(await multiHook(page)).toMatchObject({ players: 3, seat: 0 });
+    // The strip of name chips, the first player marked.
+    await expect(page.locator('.standing')).toHaveCount(3);
+    await expect(page.locator('.standing.current .standing-name')).toHaveText('Mia');
+    expect((await sportState(page)).arrowsTotal).toBe(2);
+
+    await waitPhase(page, 'results', 130_000);
+    await page.waitForTimeout(500);
+    await page.screenshot({ path: `${SHOTS}/archery-multi-results.png` });
+    const seats = await seatsSeen(page);
+    // Seats in order, one arrow each: 0, 1, 2, 0, 1, 2.
+    expect(seats).toEqual([0, 1, 2, 0, 1, 2]);
+    expect(await phasesSeen(page)).toContain('handover');
+
+    const g = await multiHook(page);
+    expect(g.players).toBe(3);
+    expect(g.ranking).toHaveLength(3);
+    expect(g.ranking?.map((r) => r.name).sort()).toEqual(['Mia', 'Sam', 'Zoe']);
+    // Ranked best first; ties share a rank.
+    const scores = g.ranking?.map((r) => r.score) ?? [];
+    expect([...scores].sort((a, b) => b - a)).toEqual(scores);
+    expect(g.ranking?.[0]?.rank).toBe(1);
+    expect(g.result).toBeNull();
+    expect(g.isBest).toBeNull();
+    await expect(page.locator('.rank-row')).toHaveCount(3);
+    await expect(page.locator('.best-badge')).toHaveCount(0);
+    await expect(page.locator('.results-best')).toHaveCount(0);
+    await expect(page.locator('.results-headline')).toHaveText(/ wins$|^It's a tie$/);
+
+    // Play again: the same players, no names screen.
+    await page.getByRole('button', { name: 'Play again' }).click();
+    await waitPhase(page, 'playing', 20000);
+    expect(await multiHook(page)).toMatchObject({ players: 3, seat: 0 });
+    await expect(page.locator('.name-input')).toHaveCount(0);
+    await expect(page.locator('.standing-name')).toHaveText(['Mia', 'Sam', 'Zoe']);
+    // Quitting a multiplayer game goes to the menu and saves nothing.
+    await page.keyboard.press('Escape');
+    await waitPhase(page, 'menu', 10000);
+    await expect(page.locator('.sport-card[data-sport="archery"] .sport-best')).toHaveText(
+      'No score yet',
+    );
+    expect(problems).toEqual([]);
+  });
+
+  test('two players with the mouse: names, handovers by Ready, a ranked table, change players', async ({
+    page,
+  }) => {
+    test.setTimeout(150_000); // 40 to 60 s measured in real time (4 arrows, 3 handovers), 2.5x
+    const problems = watch(page);
+    await page.addInitScript(() => localStorage.clear());
+    await page.goto('/?input=debug&skipGate=1&short=1');
+    await waitPhase(page, 'title');
+    await page.getByRole('button', { name: 'Start' }).click();
+    await waitPhase(page, 'menu');
+    await page.locator('.sport-card[data-sport="archery"]').click();
+    await waitPhase(page, 'howto');
+
+    // The Players control is there, at one player; two goes to the names screen.
+    await expect(page.locator('.players-opt')).toHaveCount(4);
+    await expect(page.locator('.players-opt').first()).toHaveAttribute('aria-pressed', 'true');
+    await page.locator('.players-opt[data-players="2"]').click();
+    await page.getByRole('button', { name: 'Start' }).click();
+    await waitPhase(page, 'names');
+    const inputs = page.locator('.name-input');
+    await expect(inputs).toHaveCount(2);
+    await expect(inputs.nth(0)).toHaveValue('Player 1');
+    await page.keyboard.type('Mia');
+    await page.keyboard.press('Enter');
+    await page.keyboard.type('Sam');
+    await page.keyboard.press('Enter');
+    await waitPhase(page, 'playing');
+    expect(await multiHook(page)).toMatchObject({ players: 2, seat: 0 });
+    await expect(page.locator('.standing')).toHaveCount(2);
+    await expect(page.locator('.standing-name')).toHaveText(['Mia', 'Sam']);
+    await expect(page.locator('.standing.current .standing-name')).toHaveText('Mia');
+
+    // Mia's arrow, then the card for Sam.
+    await waitSport(page, 'ready to draw', { phase: 'ready' }, 8000);
+    await shootWithMouse(page, 1);
+    await waitHandover(page, "Sam, you're up");
+    await page.screenshot({ path: `${SHOTS}/archery-handover.png` });
+    expect((await multiHook(page)).phase).toBe('handover');
+    expect((await sportState(page)).phase).toBe('handover');
+    // The round is paused under the card: still Mia's seat until Sam is ready.
+    expect((await multiHook(page)).seat).toBe(0);
+    await page.getByRole('button', { name: 'Ready' }).click();
+    await expect(page.locator('.handover')).toHaveCount(0);
+    await expect(page.locator('.hud-banner')).toHaveText('Go');
+    await waitSport(page, 'Sam ready', { phase: 'ready' }, 8000);
+    await expectSeat(page, 1);
+    expect((await multiHook(page)).phase).toBe('playing');
+    expect((await sportState(page)).arrowsShot).toBe(0);
+    await expect(page.locator('.standing.current .standing-name')).toHaveText('Sam');
+
+    await shootWithMouse(page, 1);
+    await waitHandover(page, "Mia, you're up");
+    await page.keyboard.press('Enter'); // Enter is Ready too
+    await waitSport(page, 'Mia ready', { phase: 'ready' }, 8000);
+    await expectSeat(page, 0);
+    await shootWithMouse(page, 2);
+    await waitHandover(page, "Sam, you're up");
+    await page.getByRole('button', { name: 'Ready' }).click();
+    await waitSport(page, 'Sam ready again', { phase: 'ready' }, 8000);
+    await shootWithMouse(page, 2);
+
+    await waitPhase(page, 'results', 30000);
+    await page.waitForTimeout(400);
+    await page.screenshot({ path: `${SHOTS}/archery-multi-mouse-results.png` });
+    await expect(page.locator('.rank-row')).toHaveCount(2);
+    const g = await multiHook(page);
+    expect(g.ranking?.map((r) => r.name).sort()).toEqual(['Mia', 'Sam']);
+    expect(g.result).toBeNull();
+    await expect(page.locator('.best-badge')).toHaveCount(0);
+
+    // Change players: the names screen again, with the names just used.
+    await page.getByRole('button', { name: 'Change players' }).click();
+    await waitPhase(page, 'names');
+    await expect(inputs.nth(0)).toHaveValue('Mia');
+    await expect(inputs.nth(1)).toHaveValue('Sam');
+    // Back returns to the how-to card, and Back there to the menu: nothing was saved.
+    await page.getByRole('button', { name: 'Back' }).click();
+    await waitPhase(page, 'howto');
+    await page.getByRole('button', { name: 'Back' }).click();
+    await waitPhase(page, 'menu');
+    await expect(page.locator('.sport-card[data-sport="archery"] .sport-best')).toHaveText(
+      'No score yet',
+    );
+    expect(problems).toEqual([]);
+  });
+
+  test('Escape on a handover card quits the game to the menu, saving nothing', async ({ page }) => {
+    test.setTimeout(30_000); // 7 to 11 s measured in real time, 2.5x
+    const problems = watch(page);
+    await page.goto('/?sport=archery&players=2&input=debug&skipGate=1&short=1');
+    await waitPhase(page, 'playing');
+    await waitSport(page, 'ready to draw', { phase: 'ready' }, 8000);
+    await shootWithMouse(page, 1);
+    await waitHandover(page, "Player 2, you're up");
+    await page.keyboard.press('Escape');
+    await waitPhase(page, 'menu', 10000);
+    await expect(page.locator('.handover')).toHaveCount(0);
+    await expect(page.locator('.sport-card[data-sport="archery"] .sport-best')).toHaveText(
+      'No score yet',
+    );
     expect(problems).toEqual([]);
   });
 });

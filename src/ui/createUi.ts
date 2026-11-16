@@ -4,6 +4,7 @@ import '@fontsource/nunito/latin-400.css';
 import '@fontsource/nunito/latin-700.css';
 import './ui.css';
 import type { GateReport } from '../core/gate/types';
+import type { RankedRow } from '../core/multiplayer/ranking';
 import type { SportMeta } from '../core/sport';
 import type { FrameProblem, InputProvider } from '../input/types';
 import type { TrackingErrorCode } from '../tracking/types';
@@ -24,6 +25,8 @@ import {
 } from './screens/basic';
 import { buildCalibration } from './screens/calibration';
 import { buildHowTo, buildMenu, buildTutorialDone } from './screens/menu';
+import { buildHandoverCard, buildMultiResults, buildNames } from './screens/multiplayer';
+import type { HandoverCard } from './screens/multiplayer';
 import { buildHowToOverlay, buildPlaying, buildResults, createPause } from './screens/playing';
 import type { HowToOverlay } from './screens/playing';
 import type { ScreenHost, ScreenSpec } from './screens/shared';
@@ -31,8 +34,10 @@ import { createCoach } from './coach';
 import { createTunables } from './tunablesPanel';
 import type {
   CalibrationScreen,
+  HandoverInfo,
   HowToChoice,
   HowToOptions,
+  PlayersControl,
   PlayingOptions,
   ResultsOutcome,
   TutorialDoneChoice,
@@ -76,6 +81,8 @@ export function createUi(root: HTMLElement, options: UiOptions = {}): Ui {
   /** The pause overlay is showing (the round is paused for a frame problem). */
   let pauseShown = false;
   let overlay: HowToOverlay | null = null;
+  /** The pass-and-play handover card is up (over a round, or over the screen before one). */
+  let handover: { card: HandoverCard; mode: HandoverInfo['mode'] } | null = null;
   /** The current screen is one of the lobby screens (title, menu, how-to, results). */
   let lobbyScreen = false;
   let playButtons: HTMLElement[] = [];
@@ -161,7 +168,25 @@ export function createUi(root: HTMLElement, options: UiOptions = {}): Ui {
     howToPlayHandler?.(true);
   }
 
+  let handoverTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /** Take the handover card down and give the hand cursor its screen's buttons back. */
+  function removeHandover(): void {
+    const hv = handover;
+    if (hv === null) return;
+    handover = null;
+    if (handoverTimer !== null) {
+      clearTimeout(handoverTimer);
+      handoverTimer = null;
+    }
+    hv.card.el.remove();
+    container.dataset.handover = 'false';
+    cursor.setRevealNear(current?.revealNear === true);
+    cursor.setButtons(current?.noCursor === true ? [] : (current?.cursorButtons ?? buttons));
+  }
+
   function unmount(): void {
+    removeHandover();
     closeOverlay();
     tutorialPlaying = false;
     coach.setActive(false);
@@ -219,7 +244,7 @@ export function createUi(root: HTMLElement, options: UiOptions = {}): Ui {
 
   /** The hand cursor is off while a round is actually being played. */
   function playActive(): boolean {
-    return current?.revealNear === true && overlay === null && !pauseShown;
+    return current?.revealNear === true && overlay === null && handover === null && !pauseShown;
   }
 
   function mount(spec: ScreenSpec): void {
@@ -263,9 +288,22 @@ export function createUi(root: HTMLElement, options: UiOptions = {}): Ui {
   container.addEventListener('click', onClick);
 
   const onKey = (e: KeyboardEvent): void => {
-    if (!current) return;
     const t = e.target as HTMLElement | null;
     if (t && (/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || t.closest?.('.tunables'))) return;
+    if (handover !== null) {
+      // Enter is Ready (a focused button handles its own Enter); Escape backs out of the step-in
+      // or quits the round; nothing else reaches the round while the card is up.
+      if (e.key === 'Enter' && !(t instanceof HTMLButtonElement)) {
+        e.preventDefault();
+        handover.card.ready.click();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        if (handover.mode === 'step-in') handover.card.back?.click();
+        else current?.onEscape?.();
+      }
+      return;
+    }
+    if (!current) return;
     if (current.onKey?.(e) === true) {
       e.preventDefault();
       return;
@@ -305,6 +343,7 @@ export function createUi(root: HTMLElement, options: UiOptions = {}): Ui {
 
   const ui: Ui = {
     hud,
+    standings: hud.standings,
     audio,
     tunables,
     coach,
@@ -318,11 +357,9 @@ export function createUi(root: HTMLElement, options: UiOptions = {}): Ui {
       hud.setPointerMode(pointer);
       const kind = input?.source?.kind;
       const botLike = kind === 'synthetic' || kind === 'replay';
-      cursor.update(
-        current && !current.noCursor && input && !botLike ? input.state : null,
-        dt,
-        nowMs,
-      );
+      // The hand cursor reaches the handover card even when no screen is mounted behind it.
+      const cursorOn = handover !== null || (current !== null && !current.noCursor);
+      cursor.update(cursorOn && input && !botLike ? input.state : null, dt, nowMs);
       // Only once a hand has been read: until the hand model is ready a fist cannot select.
       const hands = input?.state.hands;
       const showTip =
@@ -381,8 +418,52 @@ export function createUi(root: HTMLElement, options: UiOptions = {}): Ui {
       return prompt<string>((resolve) => buildMenu(sports, bests, resolve, notice));
     },
 
-    showHowTo(meta: SportMeta, debugInput: boolean, options?: HowToOptions): Promise<HowToChoice> {
-      return prompt<HowToChoice>((resolve) => buildHowTo(meta, debugInput, resolve, host, options));
+    showHowTo(
+      meta: SportMeta,
+      debugInput: boolean,
+      options?: HowToOptions,
+      players?: PlayersControl,
+    ): Promise<HowToChoice> {
+      return prompt<HowToChoice>((resolve) =>
+        buildHowTo(meta, debugInput, resolve, host, options, players),
+      );
+    },
+
+    showNames(meta: SportMeta, prefill: readonly string[]): Promise<string[] | null> {
+      return prompt<string[] | null>((resolve) => buildNames(meta, prefill, resolve));
+    },
+
+    showHandover(info: HandoverInfo): Promise<'ready' | 'cancel'> {
+      removeHandover();
+      return new Promise<'ready' | 'cancel'>((resolve) => {
+        const card = buildHandoverCard(
+          info,
+          () => resolve('ready'),
+          () => resolve('cancel'),
+        );
+        handover = { card, mode: info.mode };
+        container.dataset.handover = 'true';
+        container.append(card.el);
+        cursor.setRevealNear(false);
+        cursor.setButtons(card.buttons);
+        card.ready.focus({ preventScroll: true });
+        // The card bounces in: measure its buttons again once it has settled.
+        handoverTimer = setTimeout(() => cursor.refresh(), REFRESH_AFTER_ENTRANCE_MS);
+      });
+    },
+
+    hideHandover(): void {
+      removeHandover();
+    },
+
+    showMultiResults(
+      meta: SportMeta,
+      rows: readonly RankedRow[],
+      winner: string,
+    ): Promise<'again' | 'change' | 'menu'> {
+      return prompt<'again' | 'change' | 'menu'>((resolve) =>
+        buildMultiResults(meta, rows, winner, resolve),
+      );
     },
 
     showCalibration(meta: SportMeta): CalibrationScreen {
@@ -465,6 +546,7 @@ export function createUi(root: HTMLElement, options: UiOptions = {}): Ui {
 
     dispose(): void {
       unmount();
+      removeHandover();
       for (const w of watchers) w.cleanup?.();
       watchers.clear();
       document.removeEventListener('keydown', onKey);
