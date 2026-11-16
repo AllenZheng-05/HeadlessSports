@@ -18,6 +18,7 @@ describe('parseFlags', () => {
       seed: 1,
       short: false,
       hand: null,
+      tutorial: false,
     });
   });
 
@@ -40,7 +41,14 @@ describe('parseFlags', () => {
       seed: 7,
       short: false,
       hand: null,
+      tutorial: false,
     });
+  });
+
+  it('reads the tutorial flag', () => {
+    expect(parseFlags('?sport=climbing&tutorial=1').tutorial).toBe(true);
+    expect(parseFlags('?tutorial=0').tutorial).toBe(false);
+    expect(parseFlags('?tutorial=true').tutorial).toBe(false);
   });
 
   it('accepts URLSearchParams and the replay source', () => {

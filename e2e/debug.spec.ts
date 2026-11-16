@@ -92,7 +92,9 @@ async function waitFrames(page: Page, n: number, timeout = 30000): Promise<void>
 test('synthetic wave: tracking, fists and a raised right mitt', async ({ page }) => {
   const problems = watch(page);
   await open(page, '?source=synthetic&script=wave');
-  await waitFrames(page, 90);
+  // Only wait for the script to start: the arm is above the shoulder for frames ~29 to ~90 of ~110,
+  // so waiting for frame 90 first made the sampling loop miss the raised window.
+  await waitFrames(page, 10);
 
   let rightUp = false;
   let leftDownWhileUp = false;

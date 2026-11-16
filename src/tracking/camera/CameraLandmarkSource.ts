@@ -86,6 +86,8 @@ class CameraSource implements LandmarkSource, CameraDebug {
   // Frame pipeline state.
   private busy = false;
   private needsInFlight = 0;
+  /** The needs last applied by start or a finished setNeeds; null when not running. */
+  private appliedNeeds: TrackerNeeds | null = null;
   private lastT = -Infinity;
   private pendingT = 0;
   private spare: Float32Array | null = new Float32Array(PACKED_LEN);
@@ -142,13 +144,17 @@ class CameraSource implements LandmarkSource, CameraDebug {
       if (gen === this.generation) this.stop();
       throw err;
     }
+    this.appliedNeeds = needs;
     this.running = true;
     this.rvfcHandle = this.video.requestVideoFrameCallback(this.onVideoFrame);
   }
 
   async setNeeds(needs: TrackerNeeds): Promise<void> {
+    // Adding or dropping hand crops while pose keeps running does not pause frames: pose results
+    // keep flowing while the hand model loads (the worker handles frames between async steps).
+    const blocks = this.needsBlockFrames(needs);
     this.wantedNeeds = needs;
-    this.needsInFlight++;
+    if (blocks) this.needsInFlight++;
     try {
       // Each queued request applies the latest wanted needs, so queued calls coalesce.
       await this.requests.run(async () => {
@@ -166,9 +172,16 @@ class CameraSource implements LandmarkSource, CameraDebug {
         `Could not load trackers: ${err instanceof Error ? err.message : String(err)}`,
         err,
       );
+      this.appliedNeeds = this.wantedNeeds;
     } finally {
-      if (this.needsInFlight > 0) this.needsInFlight--;
+      if (blocks && this.needsInFlight > 0) this.needsInFlight--;
     }
+  }
+
+  /** Only a change to the pose or full-frame hand trackers needs frames paused. */
+  private needsBlockFrames(next: TrackerNeeds): boolean {
+    const prev = this.appliedNeeds;
+    return prev === null || prev.pose !== next.pose || prev.fullFrameHands !== next.fullFrameHands;
   }
 
   pump(_nowMs: number): void {
@@ -210,6 +223,7 @@ class CameraSource implements LandmarkSource, CameraDebug {
     }
     this.workerReady = false;
     this.needsInFlight = 0;
+    this.appliedNeeds = null;
 
     // A frame that was inside the terminated worker will never come back.
     this.busy = false;

@@ -29,6 +29,8 @@ export interface Flags {
   short: boolean;
   /** `?hand=left|right`: default dominant hand for mouse play. Null when absent. */
   hand: 'left' | 'right' | null;
+  /** `?tutorial=1`: the direct-start sport (`?sport=`) opens in tutorial mode, when it has one. */
+  tutorial: boolean;
 }
 
 export const TIME_SCALE_MIN = 0.1;
@@ -73,6 +75,7 @@ export function parseFlags(search: string | URLSearchParams): Flags {
     seed: Number.isFinite(seedNum) ? seedNum : 1,
     short: params.get('short') === '1',
     hand: handRaw === 'left' || handRaw === 'right' ? handRaw : null,
+    tutorial: params.get('tutorial') === '1',
   };
 }
 

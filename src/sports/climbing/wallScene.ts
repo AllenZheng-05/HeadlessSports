@@ -278,6 +278,31 @@ export class WallScene {
     this.holds.setColorAt(slot, this.c.copy(color));
   }
 
+  /**
+   * Tutorial: a finish band across the wall at height `y` (world metres) and a flag on a pole at
+   * its right end. One merged mesh, so one more draw call. Call at most once.
+   */
+  addFinishFlag(y: number): void {
+    const z = this.cfg.wallZ;
+    const poleX = this.cfg.wallWidth / 2 - 0.9;
+    const band = new BoxGeometry(this.cfg.wallWidth - 0.5, 0.1, 0.03);
+    band.translate(0, y, z + 0.02);
+    const pole = new BoxGeometry(0.07, 1.1, 0.07);
+    pole.translate(poleX, y + 0.6, z + 0.05);
+    const flag = new BoxGeometry(0.5, 0.32, 0.03);
+    flag.translate(poleX + 0.29, y + 1.0, z + 0.05);
+    const geo = mergePainted([
+      paintGeometry(band, PALETTE.chalk),
+      paintGeometry(pole, PALETTE.ink),
+      paintGeometry(flag, PALETTE.whistle),
+    ]);
+    this.geometries.push(geo);
+    const mesh = new Mesh(geo, vertexColorToonMaterial());
+    mesh.name = 'finish-flag';
+    this.scene.add(mesh);
+    this.meshes.push(mesh);
+  }
+
   /** Highlight up to four holds (hover and held, per hand). -1 for none. Cheap when unchanged. */
   setLit(a: number, b: number, c: number, d: number): void {
     const lit = this.lit;

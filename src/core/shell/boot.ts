@@ -26,10 +26,12 @@ import type { SportEntry, SportMeta, Stance } from '../sport';
 import { IdleInput } from './IdleInput';
 import { SportHost } from './SportHost';
 import { createHook } from './hook';
-import { recordRound } from './recordRound';
+import { playRounds } from './playRounds';
 import type { GameHook } from './hook';
 
 const POSE_ONLY: TrackerNeeds = { pose: true, handCrops: false, fullFrameHands: false };
+/** The lobby and calibration: pose plus hand crops, so the hand cursor can read each hand's fist. */
+const POSE_AND_HANDS: TrackerNeeds = { pose: true, handCrops: true, fullFrameHands: false };
 const HANDS_ONLY: TrackerNeeds = { pose: false, handCrops: false, fullFrameHands: true };
 const BRIGHTNESS_EVERY_MS = 500;
 /** How long the calibration screen keeps showing "All set". */
@@ -41,8 +43,9 @@ function message(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/** Hand-only stances swap the trackers; the rest keep pose and add hands in the background. */
 function calibrationNeeds(stance: Stance): TrackerNeeds {
-  return stance === 'hands-close' ? HANDS_ONLY : POSE_ONLY;
+  return stance === 'hands-close' ? HANDS_ONLY : POSE_AND_HANDS;
 }
 
 const GATE_WARNED_KEY = 'hs-gate-warned';
@@ -159,7 +162,12 @@ class Shell {
       if (entry === null) throw new Error(`Unknown sport "${flags.sport}".`);
       await this.attachInput(await this.makeInput());
       const epoch = this.epoch;
-      await this.playSport(entry, defaultCalibration(entry.meta.stance, this.hand), epoch);
+      await this.playSport(
+        entry,
+        defaultCalibration(entry.meta.stance, this.hand),
+        epoch,
+        flags.tutorial,
+      );
       if (epoch === this.epoch) await this.menuLoop(epoch);
       return;
     }
@@ -220,6 +228,7 @@ class Shell {
             await this.ui.showCameraIntro();
           }
         }
+        // Pose only: the menu must not wait for the hand model. Hand crops are requested after.
         await input.start(POSE_ONLY);
         return input;
       } catch (err) {
@@ -287,7 +296,13 @@ class Shell {
     return bests;
   }
 
+  /** Ask for hand crops without waiting: the cursor can select by fist once the model is ready. */
+  private requestHands(input: InputProvider): void {
+    input.setNeeds(POSE_AND_HANDS).catch(() => undefined);
+  }
+
   private async menuLoop(epoch: number): Promise<void> {
+    this.requestHands(this.input);
     for (;;) {
       if (epoch !== this.epoch) return;
       let entries: readonly SportEntry[] = SPORTS;
@@ -322,9 +337,10 @@ class Shell {
       if (epoch !== this.epoch) return;
       if (choice === 'back') continue;
 
+      // Tutorial goes through the same pre-round path as a normal round (calibration included).
       const calibration = await this.calibrate(entry.meta, epoch);
       if (epoch !== this.epoch) return;
-      await this.playSport(entry, calibration, epoch);
+      await this.playSport(entry, calibration, epoch, choice === 'tutorial');
     }
   }
 
@@ -334,7 +350,10 @@ class Shell {
     const video = input.source?.kind === 'camera' ? input.source.video : null;
     if (input.source?.kind !== 'camera') return defaultCalibration(meta.stance, this.hand);
 
-    await input.setNeeds(calibrationNeeds(meta.stance));
+    const needs = calibrationNeeds(meta.stance);
+    // Only a tracker swap is awaited; adding hand crops to a running pose never delays calibration.
+    if (needs.pose) this.requestHands(input);
+    else await input.setNeeds(needs);
     if (epoch !== this.epoch) return defaultCalibration(meta.stance);
     this.hook.phase = 'calibration';
     const usesHandedness = meta.usesHandedness !== false;
@@ -388,37 +407,42 @@ class Shell {
     return calibration;
   }
 
-  /** Play rounds of one sport until the player goes back to the menu. */
+  /**
+   * Play rounds of one sport until the player goes back to the menu. After a tutorial, "Play now"
+   * starts a normal round with the calibration measured for this visit (no second calibration).
+   */
   private async playSport(
     entry: SportEntry,
     calibration: Calibration | null,
     epoch: number,
+    tutorial: boolean,
   ): Promise<void> {
     const meta = entry.meta;
-    const hook = this.hook;
     this.input.setCalibration(calibration);
-    hook.sportId = meta.id;
-    for (;;) {
-      hook.phase = 'loading';
-      hook.result = null;
-      hook.isBest = null;
-      const result = await this.host.play(entry, calibration);
-      if (epoch !== this.epoch) return;
-      if (result === null) {
-        if (this.host.lastRoundFailed) this.notice = ROUND_BROKE_NOTICE;
-        break;
-      }
-      const { isBest, best } = await recordRound(this.scores, meta, result);
-      hook.result = result;
-      hook.isBest = isBest;
-      hook.phase = 'results';
-      const next = await this.ui.showResults(meta, result, { isBest, best });
-      if (epoch !== this.epoch) return;
-      if (next === 'menu') break;
-    }
+    this.hook.sportId = meta.id;
+    const end = await playRounds(
+      {
+        host: this.host,
+        ui: this.ui,
+        scores: this.scores,
+        hook: this.hook,
+        isCurrent: () => epoch === this.epoch,
+      },
+      entry,
+      calibration,
+      tutorial,
+    );
+    if (end === 'stale') return;
+    if (end === 'failed') this.notice = ROUND_BROKE_NOTICE;
     this.host.release();
     this.hook.sportId = null;
-    await this.input.setNeeds(POSE_ONLY);
+    this.hook.tutorial = false;
+    // Back in the lobby. A sport that ran without pose needs it back (awaited); hand crops follow
+    // in the background so the menu is never held up by the hand model.
+    if (!meta.requiredTrackers.pose || meta.requiredTrackers.fullFrameHands) {
+      await this.input.setNeeds(POSE_ONLY);
+    }
+    this.requestHands(this.input);
   }
 }
 

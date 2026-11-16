@@ -1,4 +1,5 @@
 import type { Calibration, InputProvider } from '../../input/types';
+import type { TrackerNeeds } from '../../tracking/types';
 import { disposeObjectTree } from '../../render/dispose';
 import { AvatarRig } from '../../render/avatar/AvatarRig';
 import type { RendererHandle } from '../../render/renderer';
@@ -13,6 +14,8 @@ import type { GameLoop } from '../loop';
 import { mulberry32 } from '../random';
 import type { ScoreStore } from '../scores';
 import { scoreKeyOf } from '../sport';
+import { NO_COACH } from '../tutorial/noCoach';
+import { TUTORIAL_DONE } from '../tutorial/result';
 import type { RoundResult, Sport, SportContext, SportEntry } from '../sport';
 import { Lobby } from './Lobby';
 
@@ -32,7 +35,19 @@ export const PAUSE_AFTER_MS = 700;
 /** The problem has to stay gone this long before the round resumes. */
 export const RESUME_AFTER_MS = 300;
 
+export interface PlayOptions {
+  /** Run the sport's tutorial instead of a scored round. Ignored unless `meta.hasTutorial`. */
+  tutorial?: boolean;
+}
+
+/** The same trackers plus hand crops, for overlays the hand cursor operates (fist select). */
+export function withHandCrops(needs: TrackerNeeds): TrackerNeeds {
+  if (needs.handCrops || needs.fullFrameHands) return needs;
+  return { pose: needs.pose, handCrops: true, fullFrameHands: false };
+}
+
 interface Round {
+  tutorial: boolean;
   resolve(result: RoundResult | null): void;
   finished: boolean;
   settled: boolean;
@@ -67,6 +82,10 @@ export class SportHost {
   private inputErrorLogged = false;
   /** The how-to overlay is open: the round stays paused whatever the camera says. */
   private manualPause = false;
+  /** The sport's own tracker needs while a round is live, else null. */
+  private needs: TrackerNeeds | null = null;
+  /** Hand crops are on for an overlay (pause, how-to, results, tutorial done). */
+  private overlayNeeds = false;
   private readonly onResize = (): void => this.resize();
 
   constructor(deps: SportHostDeps) {
@@ -80,6 +99,7 @@ export class SportHost {
     this.resize();
     this.ui.onQuit(() => this.quit());
     this.ui.onHowToPlay((open) => this.setManualPause(open));
+    this.ui.onTutorialEnd(() => this.endTutorial());
   }
 
   /** Swap the input provider between rounds (camera switched off, camera error fallback). */
@@ -90,12 +110,21 @@ export class SportHost {
   /**
    * Load the sport module, build a fresh stage + avatar + blob shadow, set tracker needs, wire the
    * bot when the source is synthetic, start the round. Resolves when the round finishes (with the
-   * result) or is quit or broken (null).
+   * result) or is quit or broken (null). A tutorial resolves with `TUTORIAL_DONE`.
    */
-  play(entry: SportEntry, calibration: Calibration | null): Promise<RoundResult | null> {
+  play(
+    entry: SportEntry,
+    calibration: Calibration | null,
+    options: PlayOptions = {},
+  ): Promise<RoundResult | null> {
     this.teardown();
     const gen = this.generation;
-    const round: Round = { resolve: () => undefined, finished: false, settled: false };
+    const round: Round = {
+      tutorial: options.tutorial === true && entry.meta.hasTutorial === true,
+      resolve: () => undefined,
+      finished: false,
+      settled: false,
+    };
     const done = new Promise<RoundResult | null>((resolve) => {
       round.resolve = resolve;
     });
@@ -195,9 +224,39 @@ export class SportHost {
       if (this.phase !== 'playing') return;
       this.phase = 'paused';
       this.loop.paused = true;
+      this.syncOverlayNeeds();
       return;
     }
     if (this.phase === 'paused' && this.problemSinceMs < 0) this.resume();
+  }
+
+  /**
+   * The hand cursor selects by fist, which needs hand state. A sport that runs pose-only (batting,
+   * javelin) has none, so while an overlay the cursor operates is up (pause, how-to, results,
+   * tutorial done) hand crops are requested too, and the sport's own needs come back after.
+   */
+  private syncOverlayNeeds(): void {
+    const needs = this.needs;
+    if (needs === null) return;
+    const up = this.phase === 'paused' || this.phase === 'finished';
+    if (up === this.overlayNeeds) return;
+    this.overlayNeeds = up;
+    const wanted = withHandCrops(needs);
+    // Coming back, only a sport whose own needs lack hand crops has anything to undo.
+    if (!up && wanted === needs) return;
+    this.input.setNeeds(up ? wanted : needs).catch(() => undefined);
+  }
+
+  /** "End tutorial": the same as finishing the last step. */
+  private endTutorial(): void {
+    const round = this.round;
+    if (round !== null && round.tutorial) this.finishTutorialRound(round);
+  }
+
+  private finishTutorialRound(round: Round): void {
+    if (!round.tutorial || round.finished) return;
+    this.finishRound(round, TUTORIAL_DONE);
+    this.ui.coach.hide();
   }
 
   private checkPause(nowMs: number): void {
@@ -217,6 +276,7 @@ export class SportHost {
       this.phase = 'paused';
       this.loop.paused = true;
       this.ui.showPause(state.problem);
+      this.syncOverlayNeeds();
     }
   }
 
@@ -226,6 +286,7 @@ export class SportHost {
     this.clearSinceMs = -1;
     this.problemSinceMs = -1;
     this.ui.showPause(null);
+    this.syncOverlayNeeds();
   }
 
   private async bestScore(entry: SportEntry): Promise<number | null> {
@@ -261,6 +322,8 @@ export class SportHost {
       const best = await this.bestScore(entry);
       await this.input.setNeeds(meta.requiredTrackers);
       if (gen !== this.generation) return;
+      this.needs = meta.requiredTrackers;
+      this.overlayNeeds = false;
       const ctx: SportContext = {
         stage,
         avatar,
@@ -276,7 +339,12 @@ export class SportHost {
         get paused(): boolean {
           return isPaused();
         },
-        finish: (result) => this.finishRound(round, result),
+        // A tutorial never produces a result: a stray finish() ends the tutorial instead.
+        finish: (result) =>
+          round.tutorial ? this.finishTutorialRound(round) : this.finishRound(round, result),
+        tutorial: round.tutorial,
+        coach: round.tutorial ? this.ui.coach : NO_COACH,
+        finishTutorial: () => this.finishTutorialRound(round),
       };
       const sport = await factory(ctx);
       if (gen !== this.generation) {
@@ -286,7 +354,7 @@ export class SportHost {
       }
       this.sport = sport;
       this.wireBot(sport);
-      this.ui.showPlaying(meta);
+      this.ui.showPlaying(meta, { tutorial: round.tutorial });
       this.problemSinceMs = -1;
       this.clearSinceMs = -1;
       if (!round.finished) this.phase = 'playing';
@@ -317,6 +385,7 @@ export class SportHost {
     this.phase = 'finished';
     this.loop.paused = false;
     this.ui.showPause(null);
+    this.syncOverlayNeeds();
     this.settle(round, result);
   }
 
@@ -375,6 +444,8 @@ export class SportHost {
     this.loop.paused = false;
     this.phase = 'idle';
     this.manualPause = false;
+    this.needs = null;
+    this.overlayNeeds = false;
     this.problemSinceMs = -1;
     this.clearSinceMs = -1;
     if (round !== null) this.settle(round, null);

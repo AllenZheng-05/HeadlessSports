@@ -44,6 +44,22 @@ export const climbingConfig = {
   finishDelayS: 1.2,
   milestoneEveryM: 10,
 
+  // Tutorial (no timer, stamina never empties, a low flag at the top).
+  /** Feet height of the flag the tutorial ends at, metres. */
+  tutorialTopM: 3,
+  /** The "pull down" step needs the climber to rise this much, metres. */
+  tutorialPullGainM: 0.6,
+  /** The "regrab" step needs a new grab this much above the highest hold held when it began, metres. */
+  tutorialRegrabRiseM: 0.12,
+  /** How long to hang on for the stamina step, ms. */
+  tutorialRestMs: 2200,
+  /** How long both hands must stay in view for the first step, ms. */
+  tutorialHandsMs: 600,
+  /** Stamina never drops below this in the tutorial. */
+  tutorialStaminaFloor: 0.3,
+  /** A step waits this long before it says why it has not counted yet, ms. */
+  tutorialHintDelayMs: 2500,
+
   // Layout.
   rowStepM: 0.29,
   rowJitterM: 0.06,
@@ -98,6 +114,10 @@ export const climbingRanges: Record<string, TunableRange> = {
   restRefillPerSecond: { min: 0, max: 0.2, step: 0.005 },
   roundSeconds: { min: 10, max: 300, step: 5 },
   shortRoundSeconds: { min: 5, max: 120, step: 1 },
+  tutorialTopM: { min: 1, max: 10, step: 0.5 },
+  tutorialPullGainM: { min: 0.2, max: 2, step: 0.1 },
+  tutorialRestMs: { min: 500, max: 8000, step: 100 },
+  tutorialStaminaFloor: { min: 0.05, max: 1, step: 0.05 },
   avatarScale: { min: 1, max: 2.5, step: 0.05 },
   cameraBelowM: { min: 1, max: 5, step: 0.1 },
   cameraAboveM: { min: 1, max: 5, step: 0.1 },

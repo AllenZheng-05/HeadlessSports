@@ -60,6 +60,8 @@ export interface SportMeta {
    * the score's unit or meaning changes, so old saved bests are not misread.
    */
   scoreKey?: string;
+  /** True when the sport implements tutorial mode (ctx.tutorial). Shows the Tutorial button. */
+  hasTutorial?: boolean;
 }
 
 export interface RoundResult {
@@ -152,6 +154,19 @@ export interface SportBot {
   next(enqueue: (steps: ScriptStep[]) => void, nowMs: number): void;
 }
 
+/** The tutorial panel. All calls are cheap; show() may be called every frame with the same values. */
+export interface Coach {
+  /** Show step `index` (0-based) of `total` with its instruction and optional smaller detail line. */
+  show(index: number, total: number, text: string, detail?: string | null): void;
+  /** One line saying why the action has not counted yet. Null clears it. */
+  setFeedback(text: string | null): void;
+  /** Brief positive confirmation shown before the next step (default 'Nice'). */
+  confirm(text?: string): void;
+  /** Register the handler for the player's "Skip step". Returns an unregister function. */
+  onSkip(handler: () => void): () => void;
+  hide(): void;
+}
+
 export interface SportContext {
   /** A fresh Field Day scene and camera for this sport to fill. The shell renders it. */
   stage: FieldDayScene;
@@ -180,6 +195,15 @@ export interface SportContext {
   readonly paused: boolean;
   /** Call once when the round is over. The shell saves the score and shows the results screen. */
   finish(result: RoundResult): void;
+  /**
+   * True when the player chose Tutorial on the start screen. The sport runs its guided steps
+   * instead of a scored round and ends by calling finishTutorial().
+   */
+  tutorial: boolean;
+  /** The tutorial panel. A no-op object when `tutorial` is false. */
+  coach: Coach;
+  /** Call once when the tutorial's last step is done. Nothing is saved. */
+  finishTutorial(): void;
 }
 
 export interface Sport {

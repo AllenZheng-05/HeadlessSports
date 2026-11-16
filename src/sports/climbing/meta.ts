@@ -12,6 +12,7 @@ export const meta: SportMeta = {
   seatedOk: true,
   usesHandedness: false,
   needsSpace: false,
+  hasTutorial: true,
   score: { label: 'Height', unit: 'm', decimals: 1, higherIsBetter: true },
   howTo: [
     'Hold both hands up close to the camera.',

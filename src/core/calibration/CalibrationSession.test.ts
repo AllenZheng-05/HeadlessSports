@@ -73,7 +73,7 @@ describe('CalibrationSession full body', () => {
     rig.run(1200);
     expect(rig.session.done).toBe(false);
     expect(view.step).toBe('handedness');
-    expect(view.message).toBe('Raise the hand you throw with');
+    expect(view.message).toBe('Raise your dominant hand');
     rig.set(RIGHT_UP);
     rig.run(1200);
     expect(view.step).toBe('hold-still');
@@ -203,7 +203,7 @@ describe('CalibrationSession full body', () => {
     rig.set({ bodyVisible: 0 });
     rig.run(1500);
     expect(view.step).toBe('hold-still');
-    expect(view.message).toBe("We can't see you. Step into view.");
+    expect(view.message).toBe('We cannot see you. Step into view.');
     expect(view.ok).toBe(false);
     rig.set({ bodyVisible: 1, ...T_POSE });
     rig.run(3000);

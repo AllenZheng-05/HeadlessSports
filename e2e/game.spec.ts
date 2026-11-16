@@ -151,6 +151,7 @@ test.describe('game shell', () => {
   });
 
   test('camera path: title, intro, continue, menu', async ({ page }) => {
+    test.setTimeout(100_000); // pose model load under a software renderer takes 25 to 50 s
     const problems = watch(page);
     await page.goto('/?skipGate=1');
     await waitPhase(page, 'title');
@@ -175,7 +176,7 @@ test.describe('game shell', () => {
     ]) {
       await page.mouse.move(p.x, p.y);
       await page.waitForTimeout(200);
-      const box = await page.locator('.hand-cursor').boundingBox();
+      const box = await page.locator('.hc-right').boundingBox();
       expect(box).not.toBeNull();
       expect(Math.abs((box?.x ?? 0) + (box?.width ?? 0) / 2 - p.x)).toBeLessThanOrEqual(1);
       expect(Math.abs((box?.y ?? 0) + (box?.height ?? 0) / 2 - p.y)).toBeLessThanOrEqual(1);

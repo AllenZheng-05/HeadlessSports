@@ -87,7 +87,7 @@ export interface PitchingSport extends Sport {
 
 /** Static strings for the bubble's second line, so nothing is built per frame. */
 const READING_SUB: Record<'none' | PitchKind, string> = {
-  none: 'Show your throwing hand and hold it still',
+  none: 'Show your dominant hand and hold it still',
   fastball: 'Fist: fastball',
   curve: 'Open hand: curve',
 };

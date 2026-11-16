@@ -11,7 +11,7 @@ const ALL_LABELS: readonly string[] = ['Position', 'Light', 'Hand', 'Hold still'
 const RING_R = 52;
 const RING_LEN = 2 * Math.PI * RING_R;
 
-interface Shape {
+export interface Shape {
   tag: 'rect';
   attrs: Record<string, number | string>;
 }
@@ -22,14 +22,28 @@ function rect(x: number, y: number, w: number, hh: number, rx: number, rot = 0):
   return { tag: 'rect', attrs };
 }
 
-function handShapes(cx: number): Shape[] {
+/**
+ * A hand held up with the palm to the camera, fingers up. The thumb points toward the middle of
+ * the picture: to screen left for the right hand (on screen right), to screen right for the left
+ * hand (on screen left, as the player sees themselves in the mirror).
+ */
+export function handShapes(cx: number, side: Side): Shape[] {
+  const tag = (sh: Shape, part: string): Shape => {
+    sh.attrs['data-hand'] = side;
+    sh.attrs['data-part'] = part;
+    return sh;
+  };
   // palm, four fingers, thumb
-  const out: Shape[] = [rect(cx - 15, 40, 30, 28, 11)];
+  const out: Shape[] = [tag(rect(cx - 15, 40, 30, 28, 11), 'palm')];
   for (let i = 0; i < 4; i++) {
     const len = i === 0 || i === 3 ? 18 : 23;
-    out.push(rect(cx - 15 + i * 7.6, 40 - len + 4, 6.6, len, 3.3));
+    out.push(tag(rect(cx - 15 + i * 7.6, 40 - len + 4, 6.6, len, 3.3), 'finger'));
   }
-  out.push(rect(cx - 25, 50, 18, 7, 3.5, -35));
+  out.push(
+    side === 'right'
+      ? tag(rect(cx - 25, 50, 18, 7, 3.5, -35), 'thumb')
+      : tag(rect(cx + 7, 50, 18, 7, 3.5, 35), 'thumb'),
+  );
   return out;
 }
 
@@ -66,7 +80,7 @@ function bodyShapes(stance: Stance): Shape[] {
     case 'upper-body':
       return [rect(50, 22, 60, 66, 24)];
     case 'hands-close':
-      return [...handShapes(52), ...handShapes(108)];
+      return [...handShapes(52, 'left'), ...handShapes(108, 'right')];
   }
 }
 

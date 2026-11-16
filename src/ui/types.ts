@@ -7,7 +7,7 @@
  */
 
 import type { GateReport } from '../core/gate/types';
-import type { AudioKit, Hud, RoundResult, SportMeta, Tunables } from '../core/sport';
+import type { AudioKit, Coach, Hud, RoundResult, SportMeta, Tunables } from '../core/sport';
 import type { FrameProblem, InputProvider, Side } from '../input/types';
 import type { TrackingErrorCode } from '../tracking/types';
 
@@ -51,8 +51,24 @@ export interface ResultsOutcome {
   best: number | null;
 }
 
+/** What the player chose on the how-to card. */
+export type HowToChoice = 'start' | 'tutorial' | 'back';
+
+/** What the player chose on the "Tutorial done" screen. */
+export type TutorialDoneChoice = 'play' | 'menu';
+
+export interface PlayingOptions {
+  /** The round is the sport's tutorial: shows the coach panel and the Skip step / End tutorial controls. */
+  tutorial?: boolean;
+}
+
 export interface Ui {
   readonly hud: Hud;
+  /**
+   * The tutorial panel. Only shows while a tutorial round is on screen (`showPlaying` with
+   * `tutorial: true`); calls made at other times do nothing visible.
+   */
+  readonly coach: Coach;
   readonly audio: AudioKit;
   readonly tunables: Tunables;
 
@@ -107,19 +123,21 @@ export interface Ui {
 
   /**
    * How-to card for a sport, with the safety reminder when `meta.needsSpace`. With `options`
-   * (non-camera input) the card shows a "Dominant hand: Right / Left" toggle.
+   * (non-camera input) the card shows a "Dominant hand: Right / Left" toggle. A "Tutorial" button
+   * sits beside Start when `meta.hasTutorial` is true; it resolves 'tutorial'.
    */
-  showHowTo(
-    meta: SportMeta,
-    debugInput: boolean,
-    options?: HowToOptions,
-  ): Promise<'start' | 'back'>;
+  showHowTo(meta: SportMeta, debugInput: boolean, options?: HowToOptions): Promise<HowToChoice>;
 
   /** Calibration guide (silhouette for the sport's stance) over the mirrored camera view. */
   showCalibration(meta: SportMeta): CalibrationScreen;
 
-  /** Hide every screen; show the HUD and the corner mirror. The camera indicator shows on every screen while the camera is active. */
-  showPlaying(meta: SportMeta): void;
+  /**
+   * Hide every screen; show the HUD and the corner mirror. The camera indicator shows on every
+   * screen while the camera is active. With `tutorial: true` the coach panel is live, the HUD
+   * hint is hidden (the coach is the instruction line), and "Skip step" / "End tutorial" are
+   * offered (panel, how-to overlay, S key).
+   */
+  showPlaying(meta: SportMeta, options?: PlayingOptions): void;
 
   /** Pause overlay with a large arrow or message for the given problem. Null hides it. */
   showPause(problem: FrameProblem | null): void;
@@ -129,6 +147,15 @@ export interface Ui {
     result: RoundResult,
     outcome: ResultsOutcome,
   ): Promise<'again' | 'menu'>;
+
+  /**
+   * "Tutorial done": Play now starts a normal round of the same sport, Back to menu leaves.
+   * Resolves with the choice.
+   */
+  showTutorialDone(meta: SportMeta): Promise<TutorialDoneChoice>;
+
+  /** The player chose "End tutorial" (the panel button, or the how-to overlay while paused). */
+  onTutorialEnd(handler: () => void): void;
 
   /** The one-click camera-off control was used. */
   onCameraOff(handler: () => void): void;

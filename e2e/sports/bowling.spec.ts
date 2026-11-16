@@ -117,6 +117,7 @@ test.describe('bowling', () => {
   });
 
   test('the mouse can bowl a ball: aim, hold to wind up, let go', async ({ page }) => {
+    test.setTimeout(75_000); // real-time mouse roll, about 28 s alone
     const problems = watch(page);
     await page.goto('/?sport=bowling&input=debug&skipGate=1&short=1');
     await waitPhase(page, 'playing');
@@ -180,6 +181,7 @@ test.describe('bowling', () => {
   test('the mouse plays a whole short game with taps and ignores presses mid-roll', async ({
     page,
   }) => {
+    test.setTimeout(120_000); // a whole short game in real time, about 47 s alone
     const problems = watch(page);
     await page.goto('/?sport=bowling&input=debug&skipGate=1&short=1');
     await waitPhase(page, 'playing');

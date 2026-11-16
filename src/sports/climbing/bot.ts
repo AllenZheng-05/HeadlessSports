@@ -17,6 +17,12 @@ const PULL_FLOOR = -0.4;
 
 type Side = 'left' | 'right';
 
+/** Set by the tutorial so the bot can do what the current step asks. */
+export interface TutorialProbe {
+  /** The step wants both hands to stay on their holds for a while. */
+  rest: boolean;
+}
+
 function fistStep(side: Side, value: number, ms: number, label: string): ScriptStep {
   return { dur: ms, to: side === 'left' ? { leftFist: value } : { rightFist: value }, label };
 }
@@ -31,7 +37,12 @@ function posTo(side: Side, x: number | null, y: number): Partial<BodyControls> {
  * the next hold chosen from the live layout and closes on it; then the roles swap. A missed
  * grab is noticed (the hand is not holding when the bot is asked again) and re-aimed.
  */
-export function createClimbBot(cfg: ClimbingConfig, state: ClimbState, layout: Layout): SportBot {
+export function createClimbBot(
+  cfg: ClimbingConfig,
+  state: ClimbState,
+  layout: Layout,
+  probe?: TutorialProbe,
+): SportBot {
   let started = false;
   let lastGrabs = 0;
   let reachSide: 0 | 1 = 1;
@@ -51,6 +62,11 @@ export function createClimbBot(cfg: ClimbingConfig, state: ClimbState, layout: L
         return;
       }
       const [l, r] = slots() as [HandSlot, HandSlot];
+      if (probe !== undefined && probe.rest && l.holding && r.holding) {
+        // The tutorial asks for a rest: hang on with both hands and wait.
+        enqueue(idle(250));
+        return;
+      }
       let pull: 0 | 1 | -1 = -1;
       if (l.holding && r.holding) {
         pull = layout.holdY(l.hold) >= layout.holdY(r.hold) ? 0 : 1;

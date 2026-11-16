@@ -2,6 +2,7 @@ import type { Sport, SportContext, SportFactory } from '../../core/sport';
 import { AvatarAnimator } from '../../render/avatar/AvatarAnimator';
 import { Group, Vector3 } from 'three/webgpu';
 import { createClimbBot } from './bot';
+import type { TutorialProbe } from './bot';
 import { climbingConfig, climbingRanges } from './config';
 import { Layout, mulberry32 } from './layout';
 import { chooseHold } from './plan';
@@ -25,6 +26,8 @@ import {
   step,
 } from './rules';
 import type { HandSlot } from './rules';
+import { createClimbTutorial, keepSafe } from './tutorial';
+import type { ClimbTutorial } from './tutorial';
 import { WallScene } from './wallScene';
 
 /** What the browser tests and the debugging overlay read from `__game.sport`. */
@@ -51,6 +54,10 @@ export interface ClimbingSport extends Sport {
   holdScreen(index: number): { x: number; y: number };
   /** The hold a bot would take next with this hand, or -1. */
   nextHold(side: 'left' | 'right'): number;
+  /** Tutorial rounds: the current step (0-based), or -1 in a normal round. */
+  readonly tutorialStep: number;
+  /** Tutorial rounds: the number of steps, or 0 in a normal round. */
+  readonly tutorialSteps: number;
 }
 
 const SHOULDER_X = 0.2;
@@ -77,7 +84,13 @@ export const createClimbing: SportFactory = (ctx: SportContext): ClimbingSport =
   const cfg = climbingConfig;
   const rng = mulberry32(Math.floor(ctx.random() * 4294967296));
   const layout = new Layout(rng, cfg);
-  const roundSeconds = ctx.short ? cfg.shortRoundSeconds : cfg.roundSeconds;
+  const tut = ctx.tutorial;
+  // A tutorial has no timer.
+  const roundSeconds = tut
+    ? Number.POSITIVE_INFINITY
+    : ctx.short
+      ? cfg.shortRoundSeconds
+      : cfg.roundSeconds;
   const state = createClimbState(cfg, roundSeconds);
   const input = createStepInput();
   const animator = new AvatarAnimator(ctx.avatar);
@@ -86,6 +99,8 @@ export const createClimbing: SportFactory = (ctx: SportContext): ClimbingSport =
 
   const wall = new WallScene(ctx.stage.scene, cfg, layout);
   const drop = shoulderDrop(cfg);
+  // The tutorial ends at a low flag a few metres up.
+  if (tut) wall.addFinishFlag(cfg.tutorialTopM + drop + 0.55);
   const group = new Group();
   group.name = 'climber';
   group.scale.setScalar(cfg.avatarScale);
@@ -152,6 +167,9 @@ export const createClimbing: SportFactory = (ctx: SportContext): ClimbingSport =
   let shownSecs = -1;
   let shownStamina = -1;
   let shownTone = '';
+  let meterShown = !tut;
+  const probe: TutorialProbe = { rest: false };
+  let tutorial: ClimbTutorial | null = null;
 
   const refreshHud = (): void => {
     const h = Math.max(0, heightOf(state, cfg));
@@ -161,11 +179,17 @@ export const createClimbing: SportFactory = (ctx: SportContext): ClimbingSport =
       ctx.hud.setScore(`${(tenths / 10).toFixed(1)} m`);
     }
     const secs = Math.max(0, Math.ceil(state.roundSeconds - state.elapsed));
-    if (secs !== shownSecs) {
+    if (!tut && secs !== shownSecs) {
       shownSecs = secs;
       ctx.hud.setSubScore(
         ctx.best === null ? `${secs} s left` : `${secs} s left · Best ${ctx.best.toFixed(1)} m`,
       );
+    }
+    // In a tutorial the stamina bar appears with the step that explains it.
+    if (tut && !meterShown) {
+      if (tutorial === null || !tutorial.showStamina) return;
+      meterShown = true;
+      shownStamina = -1;
     }
     const pct = Math.round(state.stamina * 100);
     const tone =
@@ -182,7 +206,7 @@ export const createClimbing: SportFactory = (ctx: SportContext): ClimbingSport =
       seenGrab = state.grabSeq;
       ctx.audio.play('grab');
       ctx.avatar.squash(0.9);
-      if (!started) return;
+      if (!started || tut) return;
       if (state.grabs === 1) {
         ctx.hud.setBanner(null);
         if (!ptr) ctx.hud.setHint('Pull the closed hand down. Reach up with the other.');
@@ -192,6 +216,7 @@ export const createClimbing: SportFactory = (ctx: SportContext): ClimbingSport =
       seenRelease = state.releaseSeq;
       ctx.audio.play('release');
     }
+    if (tut) return;
     const best = state.best;
     const m = Math.floor(best / cfg.milestoneEveryM);
     if (m > milestone) {
@@ -361,10 +386,45 @@ export const createClimbing: SportFactory = (ctx: SportContext): ClimbingSport =
       return chooseHold(layout, cfg, state.x, state.y, idx, other.hold);
     },
 
+    get tutorialStep(): number {
+      return tutorial === null ? -1 : tutorial.step;
+    },
+
+    get tutorialSteps(): number {
+      return tutorial === null ? 0 : tutorial.stepCount;
+    },
+
     start(): void {
       started = true;
-      ctx.hud.setBanner(ptr ? 'Press and hold a hold to start' : 'Close a hand on a hold to start');
-      if (!ptr) ctx.hud.setHint('Grab, pull down, reach with the other hand');
+      if (tut) {
+        // The coach panel gives the instructions; no banner, hint, timer or best.
+        ctx.hud.setSubScore(null);
+        tutorial = createClimbTutorial({
+          cfg,
+          state,
+          field: layout,
+          coach: ctx.coach,
+          hands: () => ctx.input.state.hands,
+          mouse: ptr
+            ? {
+                dragging: () => pointer.dragging,
+                aimable: () =>
+                  pointerTarget(pointer, state, cfg, layout, ptr.pointerX, ptr.pointerY) >= 0,
+              }
+            : null,
+          probe,
+          onFinished: () => {
+            ctx.audio.play('cheer');
+            ctx.hud.flash('great');
+            ctx.finishTutorial();
+          },
+        });
+      } else {
+        ctx.hud.setBanner(
+          ptr ? 'Press and hold a hold to start' : 'Close a hand on a hold to start',
+        );
+        if (!ptr) ctx.hud.setHint('Grab, pull down, reach with the other hand');
+      }
       wall.update(camY);
       refreshHud();
     },
@@ -415,6 +475,7 @@ export const createClimbing: SportFactory = (ctx: SportContext): ClimbingSport =
         pointerStep(pointer, state, cfg, layout, input, ptr.pointerX, ptr.pointerY, dt);
       }
       step(state, cfg, layout, input, dt);
+      if (tut) keepSafe(state, cfg);
       handleEvents();
       handleEnd();
       if (finishIn > 0) {
@@ -423,7 +484,8 @@ export const createClimbing: SportFactory = (ctx: SportContext): ClimbingSport =
       }
     },
 
-    frame(dt: number): void {
+    frame(dt: number, nowMs: number): void {
+      if (tutorial !== null && !ctx.paused) tutorial.update(nowMs);
       // Camera follows the climber's shoulders, critically damped; frozen once they fall.
       if (state.status !== 'fell') camAnchor = state.y;
       const target = camAnchor + (cfg.cameraAboveM - cfg.cameraBelowM) / 2;
@@ -450,7 +512,7 @@ export const createClimbing: SportFactory = (ctx: SportContext): ClimbingSport =
         if (pointer.active === 0) wall.setLit(t, -1, l.hold, r.hold);
         else wall.setLit(-1, t, l.hold, r.hold);
         ctx.hud.setCursor('pointer', ptr.pointerX, ptr.pointerY, pointer.dragging);
-        if (shownActive !== pointer.active || shownDragging !== pointer.dragging) {
+        if (!tut && (shownActive !== pointer.active || shownDragging !== pointer.dragging)) {
           shownActive = pointer.active;
           shownDragging = pointer.dragging;
           const who = pointer.active === 0 ? 'Left' : 'Right';
@@ -488,10 +550,11 @@ export const createClimbing: SportFactory = (ctx: SportContext): ClimbingSport =
     },
 
     createBot() {
-      return createClimbBot(cfg, state, layout);
+      return createClimbBot(cfg, state, layout, tut ? probe : undefined);
     },
 
     dispose(): void {
+      tutorial?.dispose();
       unregister();
       if (ptr) {
         ptr.setManualMode(false);

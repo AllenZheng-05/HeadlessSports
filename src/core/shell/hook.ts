@@ -16,6 +16,7 @@ export type GamePhase =
   | 'playing'
   | 'paused'
   | 'results'
+  | 'tutorial-done'
   | 'error';
 
 /** `window.__game`: always on, read by Playwright. One object, fields assigned in place. */
@@ -24,6 +25,8 @@ export interface GameHook {
   sportId: string | null;
   result: RoundResult | null;
   isBest: boolean | null;
+  /** The current round is the sport's tutorial. */
+  tutorial: boolean;
   /** Rendered frames since boot. */
   frames: number;
   inputKind: 'camera' | 'synthetic' | 'replay' | 'debug' | null;
@@ -50,6 +53,7 @@ export function createHook(flags: Flags): GameHook {
     sportId: null,
     result: null,
     isBest: null,
+    tutorial: false,
     frames: 0,
     inputKind: null,
     drawCalls: 0,

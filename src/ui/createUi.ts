@@ -23,12 +23,21 @@ import {
   buildTitle,
 } from './screens/basic';
 import { buildCalibration } from './screens/calibration';
-import { buildHowTo, buildMenu } from './screens/menu';
+import { buildHowTo, buildMenu, buildTutorialDone } from './screens/menu';
 import { buildHowToOverlay, buildPlaying, buildResults, createPause } from './screens/playing';
 import type { HowToOverlay } from './screens/playing';
 import type { ScreenHost, ScreenSpec } from './screens/shared';
+import { createCoach } from './coach';
 import { createTunables } from './tunablesPanel';
-import type { CalibrationScreen, HowToOptions, ResultsOutcome, Ui } from './types';
+import type {
+  CalibrationScreen,
+  HowToChoice,
+  HowToOptions,
+  PlayingOptions,
+  ResultsOutcome,
+  TutorialDoneChoice,
+  Ui,
+} from './types';
 
 export interface UiOptions {
   /** Show the tunables panel. */
@@ -61,11 +70,14 @@ export function createUi(root: HTMLElement, options: UiOptions = {}): Ui {
   let offHandler: (() => void) | null = null;
   let quitHandler: (() => void) | null = null;
   let howToPlayHandler: ((open: boolean) => void) | null = null;
+  let tutorialEndHandler: (() => void) | null = null;
   let onHandler: (() => void) | null = null;
   let onAvailable = false;
   /** The pause overlay is showing (the round is paused for a frame problem). */
   let pauseShown = false;
   let overlay: HowToOverlay | null = null;
+  /** The current screen is one of the lobby screens (title, menu, how-to, results). */
+  let lobbyScreen = false;
   let playButtons: HTMLElement[] = [];
   const camera = new CameraIndicator(() => offHandler?.());
   const cameraOn = h('button', 'camera-on btn btn-small btn-secondary', 'Turn camera on');
@@ -76,7 +88,13 @@ export function createUi(root: HTMLElement, options: UiOptions = {}): Ui {
   if (options.debug === true) cameraOn.classList.add('with-tunables');
   container.append(cameraOn);
   container.append(camera.el);
+  const tip = h('p', 'cursor-tip', 'Point at a button and make a fist to choose it.');
+  tip.hidden = true;
+  container.append(tip);
   const pause = createPause(container);
+  const coach = createCoach(container, () => tutorialEndHandler?.());
+  /** The round on screen is a sport's tutorial. */
+  let tutorialPlaying = false;
   const layer = h('div', 'screen-layer');
   container.append(layer);
   const cursor = new HandCursor(container);
@@ -117,18 +135,37 @@ export function createUi(root: HTMLElement, options: UiOptions = {}): Ui {
 
   function openOverlay(meta: SportMeta): void {
     if (overlay) return;
-    const o = buildHowToOverlay(meta, input?.source === null, closeOverlay);
+    const o = buildHowToOverlay(
+      meta,
+      input?.source === null,
+      closeOverlay,
+      tutorialPlaying
+        ? {
+            skip: () => {
+              closeOverlay();
+              coach.requestSkip();
+            },
+            end: () => {
+              closeOverlay();
+              coach.requestEnd();
+            },
+          }
+        : undefined,
+    );
     overlay = o;
     container.append(o.el);
     playButtons = current?.cursorButtons ?? [];
     cursor.setRevealNear(false);
-    cursor.setButtons([o.resume]);
+    cursor.setButtons([o.resume, ...o.extras]);
     o.resume.focus({ preventScroll: true });
     howToPlayHandler?.(true);
   }
 
   function unmount(): void {
     closeOverlay();
+    tutorialPlaying = false;
+    coach.setActive(false);
+    container.dataset.tutorial = 'false';
     if (refreshTimer !== null) {
       clearTimeout(refreshTimer);
       refreshTimer = null;
@@ -164,12 +201,19 @@ export function createUi(root: HTMLElement, options: UiOptions = {}): Ui {
     camera.setVisible(own || (current !== null && camera.isActive));
   }
 
-  const LOBBY = ['screen-title', 'screen-menu', 'screen-howto', 'screen-results'];
+  const LOBBY = [
+    'screen-title',
+    'screen-menu',
+    'screen-howto',
+    'screen-results',
+    'screen-tutorialdone',
+  ];
 
   /** "Turn camera on" shows in mouse mode on the lobby screens only, never during a round. */
   function syncCameraOn(): void {
     let lobby = false;
     if (current) for (const c of LOBBY) if (current.el.classList.contains(c)) lobby = true;
+    lobbyScreen = lobby;
     cameraOn.hidden = !(onAvailable && lobby);
   }
 
@@ -263,6 +307,7 @@ export function createUi(root: HTMLElement, options: UiOptions = {}): Ui {
     hud,
     audio,
     tunables,
+    coach,
 
     update(dt: number, nowMs: number): void {
       // Bots and recordings do not navigate menus; the mouse still works.
@@ -278,6 +323,14 @@ export function createUi(root: HTMLElement, options: UiOptions = {}): Ui {
         dt,
         nowMs,
       );
+      // Only once a hand has been read: until the hand model is ready a fist cannot select.
+      const hands = input?.state.hands;
+      const showTip =
+        lobbyScreen &&
+        kind === 'camera' &&
+        hands !== undefined &&
+        (hands.left.known || hands.right.known);
+      if (tip.hidden === showTip) tip.hidden = !showTip;
       mirror.update(nowMs);
     },
 
@@ -328,14 +381,8 @@ export function createUi(root: HTMLElement, options: UiOptions = {}): Ui {
       return prompt<string>((resolve) => buildMenu(sports, bests, resolve, notice));
     },
 
-    showHowTo(
-      meta: SportMeta,
-      debugInput: boolean,
-      options?: HowToOptions,
-    ): Promise<'start' | 'back'> {
-      return prompt<'start' | 'back'>((resolve) =>
-        buildHowTo(meta, debugInput, resolve, host, options),
-      );
+    showHowTo(meta: SportMeta, debugInput: boolean, options?: HowToOptions): Promise<HowToChoice> {
+      return prompt<HowToChoice>((resolve) => buildHowTo(meta, debugInput, resolve, host, options));
     },
 
     showCalibration(meta: SportMeta): CalibrationScreen {
@@ -348,16 +395,23 @@ export function createUi(root: HTMLElement, options: UiOptions = {}): Ui {
       return build.screen;
     },
 
-    showPlaying(meta: SportMeta): void {
+    showPlaying(meta: SportMeta, options?: PlayingOptions): void {
+      const tutorial = options?.tutorial === true;
       const spec = buildPlaying({
         onQuit: () => quitHandler?.(),
         onHowTo: () => openOverlay(meta),
         isOverlayOpen: () => overlay !== null,
         closeOverlay,
+        tutorial: tutorial
+          ? { skip: () => coach.requestSkip(), buttons: coach.buttons }
+          : undefined,
       });
       spec.onMount = () => {
         hud.setVisible(true);
         mirror.setMode('corner');
+        tutorialPlaying = tutorial;
+        container.dataset.tutorial = String(tutorial);
+        coach.setActive(tutorial);
       };
       mount(spec);
     },
@@ -373,6 +427,14 @@ export function createUi(root: HTMLElement, options: UiOptions = {}): Ui {
       outcome: ResultsOutcome,
     ): Promise<'again' | 'menu'> {
       return prompt<'again' | 'menu'>((resolve) => buildResults(meta, result, outcome, resolve));
+    },
+
+    showTutorialDone(meta: SportMeta): Promise<TutorialDoneChoice> {
+      return prompt<TutorialDoneChoice>((resolve) => buildTutorialDone(meta, resolve));
+    },
+
+    onTutorialEnd(handler: () => void): void {
+      tutorialEndHandler = handler;
     },
 
     onCameraOff(handler: () => void): void {
@@ -411,6 +473,7 @@ export function createUi(root: HTMLElement, options: UiOptions = {}): Ui {
       mirror.dispose();
       audio.dispose();
       tunables.dispose();
+      coach.el.remove();
       hud.clear();
       container.remove();
     },

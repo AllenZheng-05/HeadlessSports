@@ -4,7 +4,7 @@ import { h, selectButton } from '../dom';
 import { formatScore, hexColor } from '../format';
 import type { ScreenHost, ScreenSpec } from './shared';
 import { screenShell } from './shared';
-import type { HowToOptions } from '../types';
+import type { HowToChoice, HowToOptions, TutorialDoneChoice } from '../types';
 
 /** How long the menu notice stays up. */
 export const NOTICE_MS = 6000;
@@ -131,10 +131,30 @@ export function howToBody(
   return body;
 }
 
+/** "Tutorial done": the choices after a sport's tutorial. */
+export function buildTutorialDone(
+  meta: SportMeta,
+  resolve: (choice: TutorialDoneChoice) => void,
+): ScreenSpec {
+  const { el, card } = screenShell('tutorialdone', 'card-results card-tutorialdone');
+  el.style.setProperty('--accent', hexColor(meta.accent));
+  card.append(h('p', 'results-sport', meta.title));
+  card.append(h('h1', 'results-headline', 'Tutorial done'));
+  card.append(h('p', 'body', 'Nothing was saved. Ready for a real round?'));
+  const actions = h('div', 'actions');
+  const play = selectButton('Play now', 'btn btn-big');
+  const menu = selectButton('Back to menu', 'btn btn-secondary');
+  play.addEventListener('click', () => resolve('play'));
+  menu.addEventListener('click', () => resolve('menu'));
+  actions.append(play, menu);
+  card.append(actions);
+  return { el, primary: play, cameraInCard: true, onEscape: () => resolve('menu') };
+}
+
 export function buildHowTo(
   meta: SportMeta,
   debugInput: boolean,
-  resolve: (choice: 'start' | 'back') => void,
+  resolve: (choice: HowToChoice) => void,
   host: ScreenHost,
   options?: HowToOptions,
 ): ScreenSpec {
@@ -153,7 +173,14 @@ export function buildHowTo(
   const back = selectButton('Back', 'btn btn-secondary');
   start.addEventListener('click', () => resolve('start'));
   back.addEventListener('click', () => resolve('back'));
-  actions.append(start, back);
+  actions.append(start);
+  // Optional: a sport with a tutorial offers it beside Start. Never opened on its own.
+  if (meta.hasTutorial === true) {
+    const tutorial = selectButton('Tutorial', 'btn btn-secondary howto-tutorial');
+    tutorial.addEventListener('click', () => resolve('tutorial'));
+    actions.append(tutorial);
+  }
+  actions.append(back);
   card.append(actions);
   // Mouse players have no fist to raise.
   if (!debugInput) card.append(h('p', 'fist-hint', 'Raise a fist to start'));

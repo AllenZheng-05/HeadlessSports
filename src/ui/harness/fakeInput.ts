@@ -6,6 +6,7 @@ import type {
   HandState,
   InputProvider,
   InputState,
+  Side,
 } from '../../input/types';
 import type { LandmarkSource } from '../../tracking/types';
 
@@ -15,6 +16,12 @@ import type { LandmarkSource } from '../../tracking/types';
  */
 export interface FakeInput extends InputProvider {
   setMouse(nx: number, ny: number, down: boolean): void;
+  /** Put one hand at a screen point (0..1), as the cursor will map it. */
+  setHand(side: Side, nx: number, ny: number, down: boolean): void;
+  /** Whether the fist classifier is confident about the hand (false: state unknown). */
+  setKnown(side: Side, known: boolean): void;
+  /** The hand is no longer tracked. */
+  clearHand(side: Side): void;
   emit(event: GameEvent): void;
 }
 
@@ -77,6 +84,22 @@ export function createFakeInput(
     cadence: { stepsPerSecond: 0, amplitude: 0 },
   };
 
+  const setHand = (side: Side, nx: number, ny: number, down: boolean): void => {
+    const hand = state.hands[side];
+    hand.present = true;
+    hand.known = true;
+    hand.closed = down;
+    if (mode === 'pose') {
+      // inverse of the reach box, so the cursor lands exactly on the given point
+      hand.x = smx + ((nx - 0.5) * SW * 3) / ASPECT;
+      hand.y = smy - SW * (0.2 + (0.5 - ny) * 2.2);
+      put(side === 'left' ? 15 : 16, hand.x, hand.y);
+    } else {
+      hand.x = Math.max(0, Math.min(1, 0.5 + (nx - 0.5) / 1.3));
+      hand.y = Math.max(0, Math.min(1, 0.5 + (ny - 0.5) / 1.3));
+    }
+  };
+
   const handlers = new Map<string, Set<(e: GameEvent) => void>>();
   const any = new Set<(e: GameEvent) => void>();
 
@@ -115,19 +138,17 @@ export function createFakeInput(
       for (const fn of any) fn(event);
     },
     setMouse(nx: number, ny: number, down: boolean): void {
-      const right = state.hands.right;
-      right.present = true;
-      right.known = true;
-      right.closed = down;
-      if (mode === 'pose') {
-        // inverse of the reach box, so the cursor lands exactly on the mouse
-        right.x = smx + ((nx - 0.5) * SW * 3) / ASPECT;
-        right.y = smy - SW * (0.2 + (0.5 - ny) * 2.2);
-        put(16, right.x, right.y);
-      } else {
-        right.x = Math.max(0, Math.min(1, 0.5 + (nx - 0.5) / 1.3));
-        right.y = Math.max(0, Math.min(1, 0.5 + (ny - 0.5) / 1.3));
-      }
+      setHand('right', nx, ny, down);
+    },
+    setHand,
+    setKnown(side: Side, known: boolean): void {
+      state.hands[side].known = known;
+    },
+    clearHand(side: Side): void {
+      const hand = state.hands[side];
+      hand.present = false;
+      hand.closed = false;
+      if (mode === 'pose') pose[(side === 'left' ? 15 : 16) * 4 + 3] = 0;
     },
   };
 }

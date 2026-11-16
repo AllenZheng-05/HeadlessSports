@@ -3,15 +3,11 @@ import { PoseIndex, POSE_STRIDE } from '../tracking/types';
 import { clamp, h, svgEl, uiScale } from './dom';
 import { pctTenth } from './format';
 
-/** Hold time over a button before it is chosen, ms. */
-export const DWELL_MS = 1100;
+/** A fist must stay closed over the button this long before it selects, ms. Rides out a misread frame. */
+export const FIST_CONFIRM_MS = 250;
 /** After a selection nothing else can be chosen for this long, ms. */
 export const LOCKOUT_MS = 600;
-/** The other hand must be higher by this many shoulder widths... */
-export const SWITCH_MARGIN_SW = 0.15;
-/** ...for this long before it takes over, ms. */
-export const SWITCH_HOLD_MS = 300;
-/** After a new screen appears the cursor cannot begin a dwell for this long, ms. */
+/** After a new screen appears the cursor cannot select for this long, ms. */
 export const SCREEN_GUARD_MS = 1200;
 /** Extra hit area around each button, px. */
 export const FORGIVENESS_PX = 12;
@@ -49,99 +45,75 @@ export function mapReach(
   }
 }
 
-/** Picks the controlling hand: the higher one, with hysteresis so it does not flip-flop. */
-export class HandChooser {
-  current: Side | null = null;
-  private challengeSince = -1;
+/** What the classifier says about one hand this frame. */
+export type FistState = 'open' | 'closed' | 'unknown';
 
-  reset(): void {
-    this.current = null;
-    this.challengeSince = -1;
-  }
-
-  /** `leftY` and `rightY` are screen y (smaller is higher); `swUnit` is the shoulder width. */
-  update(
-    leftOk: boolean,
-    leftY: number,
-    rightOk: boolean,
-    rightY: number,
-    swUnit: number,
-    nowMs: number,
-  ): Side | null {
-    if (!leftOk && !rightOk) {
-      this.reset();
-      return null;
-    }
-    if (!leftOk || !rightOk) {
-      this.current = leftOk ? 'left' : 'right';
-      this.challengeSince = -1;
-      return this.current;
-    }
-    if (this.current === null) {
-      this.current = leftY <= rightY ? 'left' : 'right';
-      this.challengeSince = -1;
-      return this.current;
-    }
-    const curY = this.current === 'left' ? leftY : rightY;
-    const otherY = this.current === 'left' ? rightY : leftY;
-    const margin = (swUnit > 0 ? swUnit : 0.25) * SWITCH_MARGIN_SW;
-    if (curY - otherY >= margin) {
-      if (this.challengeSince < 0) this.challengeSince = nowMs;
-      else if (nowMs - this.challengeSince >= SWITCH_HOLD_MS) {
-        this.current = this.current === 'left' ? 'right' : 'left';
-        this.challengeSince = -1;
-      }
-    } else {
-      this.challengeSince = -1;
-    }
-    return this.current;
-  }
-}
-
-/** Hold-to-select timing over a list of targets. Pure: feed it the hovered index each frame. */
-export class DwellTracker {
-  /** 0..1 progress of the current hold. */
-  progress = 0;
-  /** Index being held, or -1. */
+/**
+ * Fist-to-select over a list of targets. Pure: feed it the hovered index (-1 when none or not
+ * armed) and the hand's fist state each frame. A selection needs the hand seen open over a
+ * button, then closed over that same button for FIST_CONFIRM_MS. It fires once; the hand must
+ * open over a button again before the next one. A fist that arrives already closed, or an
+ * unknown state, never selects.
+ */
+export class FistTracker {
+  /** Button index being hovered, or -1. */
   target = -1;
-  private since = 0;
+  /** 0..1 progress of the fist confirm. */
+  progress = 0;
+  /** The button the hand was last seen open over, or -1. */
+  private openOn = -1;
+  private closedSince = -1;
   private lockedUntil = -Infinity;
 
   constructor(
-    readonly dwellMs = DWELL_MS,
+    readonly confirmMs = FIST_CONFIRM_MS,
     readonly lockoutMs = LOCKOUT_MS,
   ) {}
 
   reset(): void {
     this.target = -1;
     this.progress = 0;
+    this.openOn = -1;
+    this.closedSince = -1;
   }
 
-  /** Returns the index that was just completed, or -1. */
-  update(hovered: number, nowMs: number): number {
-    if (nowMs < this.lockedUntil) {
-      this.target = -1;
-      this.progress = 0;
-      return -1;
-    }
-    if (hovered < 0) {
+  /** Drop everything, and ignore the buttons for the lockout time (a selection just happened). */
+  lock(nowMs: number): void {
+    this.reset();
+    this.lockedUntil = nowMs + this.lockoutMs;
+  }
+
+  /** Returns the index that was just selected, or -1. */
+  update(hovered: number, fist: FistState, nowMs: number): number {
+    if (nowMs < this.lockedUntil || hovered < 0) {
       this.reset();
       return -1;
     }
-    if (hovered !== this.target) {
-      this.target = hovered;
-      this.since = nowMs;
+    this.target = hovered;
+    if (fist === 'open') {
+      this.openOn = hovered;
+      this.closedSince = -1;
       this.progress = 0;
       return -1;
     }
-    this.progress = Math.min(1, (nowMs - this.since) / this.dwellMs);
-    if (this.progress >= 1) {
-      this.lockedUntil = nowMs + this.lockoutMs;
-      const done = this.target;
-      this.reset();
-      return done;
+    if (fist === 'unknown') {
+      this.openOn = -1;
+      this.closedSince = -1;
+      this.progress = 0;
+      return -1;
     }
-    return -1;
+    // closed
+    if (this.openOn !== hovered) {
+      this.closedSince = -1;
+      this.progress = 0;
+      return -1;
+    }
+    if (this.closedSince < 0) this.closedSince = nowMs;
+    this.progress = Math.min(1, (nowMs - this.closedSince) / this.confirmMs);
+    if (this.progress < 1) return -1;
+    this.lockedUntil = nowMs + this.lockoutMs;
+    this.reset();
+    return hovered;
   }
 }
 
@@ -201,52 +173,51 @@ const RING_OFFSETS: readonly string[] = Array.from({ length: 101 }, (_, i) =>
   (RING_LEN * (1 - i / 100)).toFixed(1),
 );
 
-/** The on-screen mitt that follows the player's hand and selects buttons by holding over them. */
-export class HandCursor {
+/** What a cursor needs to know about the screen and the player each frame. */
+interface SlotFrame {
+  rects: Float32Array;
+  count: number;
+  revealNear: boolean;
+  guardOver: boolean;
+  usePose: boolean;
+  shoulderX: number;
+  shoulderY: number;
+  dt: number;
+}
+
+/**
+ * One cursor: it follows exactly one hand (left or right), with its own smoothing, hover and
+ * fist-select state and its own ring. Everything it needs is allocated up front.
+ */
+class CursorSlot {
   readonly el: HTMLElement;
+  readonly fist = new FistTracker();
+  /** Button index this cursor is hovering (the fist tracker's target), or -1. */
+  hovered = -1;
+  /** The hand is tracked and the mitt is on screen (not hidden by reveal-near). */
+  active = false;
+  /** The hand's fist state this frame. */
+  fistState: FistState = 'unknown';
+  /** Button index under the mitt this frame, or -1. */
+  hit = -1;
+  /** The hand has been outside every button (or absent for the guard time) on this screen. */
+  seenOutside = false;
   private readonly ring: SVGCircleElement;
-  private buttons: HTMLElement[] = [];
-  private rects = new Float32Array(0);
-  private count = 0;
-  private enabled = true;
-  /** Active play: the hand cursor is off (camera mode only; the mouse pointer is unaffected). */
-  private suspended = false;
   private shown = false;
   private closed = false;
-  private hovered = -1;
-  /** Time the current screen was first seen by update(), or -1 before that. */
-  private screenSince = -1;
-  /** The hand has been outside every button (or absent for the guard time) on this screen. */
-  private seenOutside = false;
   private lastRing = -1;
   private lastX = -1;
   private lastY = -1;
-  private readonly chooser = new HandChooser();
-  private readonly dwell = new DwellTracker();
-  private readonly target: Point2 = { x: 0.5, y: 0.5 };
-  private readonly smooth = new SmoothPoint();
-  private readonly resize = (): void => this.refresh();
-  /** Mouse input: the mitt sits exactly on the pointer and nothing is held to select. */
-  private pointerMode = false;
-  private hasPointer = false;
-  private pointerX = 0;
-  private pointerY = 0;
-  private pointerDown = false;
-  private lastPx = -1;
-  private lastPy = -1;
-  /** Only show the mitt while the hand is near a button (play screen). */
-  private revealNear = false;
   /** The smoothed position has been seeded since the hand last went away. */
   private tracking = false;
-  private readonly onPointerMove = (e: PointerEvent): void => {
-    this.pointerX = e.clientX;
-    this.pointerY = e.clientY;
-    this.pointerDown = e.buttons !== 0;
-    this.hasPointer = true;
-  };
+  private readonly target: Point2 = { x: 0.5, y: 0.5 };
+  private readonly smooth = new SmoothPoint();
 
-  constructor(parent: HTMLElement) {
-    this.el = h('div', 'hand-cursor');
+  constructor(
+    parent: HTMLElement,
+    readonly side: Side,
+  ) {
+    this.el = h('div', `hand-cursor hc-${side}`);
     this.el.setAttribute('aria-hidden', 'true');
     this.el.hidden = true;
     const svg = svgEl('svg', { viewBox: '0 0 100 100', width: 84, height: 84 });
@@ -274,21 +245,239 @@ export class HandCursor {
     });
     svg.append(this.ring);
     const mitt = h('div', 'hc-mitt');
-    this.el.append(svg, mitt);
+    const tag = h('span', 'hc-tag', side === 'left' ? 'L' : 'R');
+    this.el.append(svg, mitt, tag);
     parent.append(this.el);
+  }
+
+  get isShown(): boolean {
+    return this.shown;
+  }
+
+  showEl(): void {
+    if (!this.shown) {
+      this.shown = true;
+      this.el.hidden = false;
+    }
+  }
+
+  hideEl(): void {
+    if (this.shown) {
+      this.shown = false;
+      this.el.hidden = true;
+    }
+  }
+
+  /** Fully off: hidden, forgotten position, no hold. */
+  hide(): void {
+    this.tracking = false;
+    this.active = false;
+    this.hit = -1;
+    this.lastX = -1;
+    this.lastY = -1;
+    this.hideEl();
+    this.fist.reset();
+    this.setRing(0);
+  }
+
+  /** A new screen, resume from play or reveal-near change: nothing is held, the guard restarts. */
+  rearm(): void {
+    this.fist.reset();
+    this.seenOutside = false;
+  }
+
+  setRing(progress: number): void {
+    const i = Math.round(progress * 100);
+    if (i === this.lastRing) return;
+    this.lastRing = i;
+    this.ring.setAttribute('stroke-dashoffset', RING_OFFSETS[i] as string);
+  }
+
+  /** Another cursor selected: drop this one's hold and apply the post-selection lockout. */
+  cancel(nowMs: number): void {
+    this.fist.lock(nowMs);
+    this.setRing(0);
+  }
+
+  /** Move to this slot's hand for one frame. Allocation free. */
+  place(state: InputState, f: SlotFrame): void {
+    const hand = this.side === 'left' ? state.hands.left : state.hands.right;
+    this.fistState = hand.present && hand.known ? (hand.closed ? 'closed' : 'open') : 'unknown';
+    let ok = false;
+    let hx = 0;
+    let hy = 0;
+    if (hand.present) {
+      ok = true;
+      hx = hand.x;
+      hy = hand.y;
+    } else if (state.hasPose) {
+      const o = (this.side === 'left' ? PoseIndex.LEFT_WRIST : PoseIndex.RIGHT_WRIST) * POSE_STRIDE;
+      if ((state.pose[o + 3] as number) >= VISIBILITY_MIN) {
+        ok = true;
+        hx = state.pose[o] as number;
+        hy = state.pose[o + 1] as number;
+      }
+    }
+    if (!ok) {
+      if (f.guardOver) this.seenOutside = true; // hand lowered or out of view for the whole guard
+      this.hide();
+      return;
+    }
+    mapReach(
+      this.target,
+      f.usePose,
+      state.aspect,
+      state.shoulderWidth,
+      f.shoulderX,
+      f.shoulderY,
+      hx,
+      hy,
+    );
+    if (!this.tracking) {
+      this.tracking = true;
+      this.smooth.snap(this.target.x, this.target.y);
+    } else {
+      this.smooth.step(this.target.x, this.target.y, f.dt > 0 ? f.dt : 1 / 60);
+    }
+    const sx = this.smooth.x;
+    const sy = this.smooth.y;
+    if (f.revealNear) {
+      const near = hitTest(
+        f.rects,
+        f.count,
+        sx * window.innerWidth,
+        sy * window.innerHeight,
+        REVEAL_PX * uiScale(),
+      );
+      if (near < 0) {
+        this.hideEl();
+        this.active = false;
+        this.hit = -1;
+        this.fist.reset();
+        this.setRing(0);
+        return;
+      }
+    }
+    this.showEl();
+    const qx = Math.round(sx * 1000);
+    const qy = Math.round(sy * 1000);
+    if (qx !== this.lastX) {
+      this.lastX = qx;
+      this.el.style.left = pctTenth(sx);
+    }
+    if (qy !== this.lastY) {
+      this.lastY = qy;
+      this.el.style.top = pctTenth(sy);
+    }
+    this.setClosed(hand.present && hand.known && hand.closed);
+    this.hit = hitTest(
+      f.rects,
+      f.count,
+      sx * window.innerWidth,
+      sy * window.innerHeight,
+      FORGIVENESS_PX * uiScale(),
+    );
+    if (this.hit < 0) this.seenOutside = true;
+    this.active = true;
+  }
+
+  /** Advance the fist select. Returns the selected button index, or -1. */
+  fistStep(guardOver: boolean, nowMs: number): number {
+    // A hand resting where a button appears must not select it.
+    const done = this.fist.update(
+      this.active && guardOver && this.seenOutside ? this.hit : -1,
+      this.fistState,
+      nowMs,
+    );
+    this.setRing(this.fist.progress);
+    return done;
+  }
+
+  setClosed(closed: boolean): void {
+    if (closed === this.closed) return;
+    this.closed = closed;
+    this.el.classList.toggle('closed', closed);
+  }
+
+  dispose(): void {
+    this.el.remove();
+  }
+}
+
+/**
+ * The on-screen mitts that follow the player's hands and select buttons with a fist.
+ * In camera mode each tracked hand has its own cursor (left and right, equal, never swapping).
+ * In mouse mode there is one cursor, on the pointer (the right element).
+ */
+export class HandCursor {
+  private readonly left: CursorSlot;
+  private readonly right: CursorSlot;
+  private buttons: HTMLElement[] = [];
+  private rects = new Float32Array(0);
+  private count = 0;
+  private enabled = true;
+  /** Active play: the hand cursors are off (camera mode only; the mouse pointer is unaffected). */
+  private suspended = false;
+  /** Time the current screen was first seen by update(), or -1 before that. */
+  private screenSince = -1;
+  private readonly frame: SlotFrame = {
+    rects: this.rects,
+    count: 0,
+    revealNear: false,
+    guardOver: false,
+    usePose: false,
+    shoulderX: 0,
+    shoulderY: 0,
+    dt: 0,
+  };
+  private readonly resize = (): void => this.refresh();
+  /** Mouse input: the mitt sits exactly on the pointer and nothing is held to select. */
+  private pointerMode = false;
+  private hasPointer = false;
+  private pointerX = 0;
+  private pointerY = 0;
+  private pointerDown = false;
+  private lastPx = -1;
+  private lastPy = -1;
+  /** Only show the mitts while a hand is near a button (play screen). */
+  private revealNear = false;
+  private readonly onPointerMove = (e: PointerEvent): void => {
+    this.pointerX = e.clientX;
+    this.pointerY = e.clientY;
+    this.pointerDown = e.buttons !== 0;
+    this.hasPointer = true;
+  };
+
+  constructor(parent: HTMLElement) {
+    this.left = new CursorSlot(parent, 'left');
+    this.right = new CursorSlot(parent, 'right');
     window.addEventListener('resize', this.resize);
   }
 
-  /** The buttons the cursor may select on the current screen. */
+  /** The pointer's element (mouse mode); in camera mode it is the right hand's cursor. */
+  get el(): HTMLElement {
+    return this.right.el;
+  }
+
+  /** The two hand cursors' elements. */
+  get elements(): { readonly left: HTMLElement; readonly right: HTMLElement } {
+    return { left: this.left.el, right: this.right.el };
+  }
+
+  /** The buttons the cursors may select on the current screen. */
   setButtons(buttons: HTMLElement[]): void {
     this.clearHover();
     this.buttons = buttons;
     this.rects = new Float32Array(buttons.length * 4);
     this.count = buttons.length;
-    this.dwell.reset();
-    this.screenSince = -1;
-    this.seenOutside = false;
+    this.rearm();
     this.refresh();
+  }
+
+  private rearm(): void {
+    this.left.rearm();
+    this.right.rearm();
+    this.screenSince = -1;
   }
 
   /** Re-measure the buttons (screen change, resize, end of the entrance animation). */
@@ -305,11 +494,12 @@ export class HandCursor {
 
   /**
    * Mouse input: follow the real pointer (clientX/clientY) with no smoothing, mapping
-   * or hold-to-select. Clicks do the pressing.
+   * or fist-to-select. Clicks do the pressing.
    */
   setPointerMode(on: boolean): void {
     if (on === this.pointerMode) return;
     this.pointerMode = on;
+    this.right.el.classList.toggle('hc-pointer', on);
     if (on) {
       window.addEventListener('pointermove', this.onPointerMove, true);
       window.addEventListener('pointerdown', this.onPointerMove, true);
@@ -320,16 +510,14 @@ export class HandCursor {
       window.removeEventListener('pointerup', this.onPointerMove, true);
     }
     this.hasPointer = false;
-    this.hide();
+    this.hideAll();
   }
 
-  /** Show the mitt only while the hand is within REVEAL_PX of a button. */
+  /** Show the mitts only while a hand is within REVEAL_PX of a button. */
   setRevealNear(on: boolean): void {
     if (on === this.revealNear) return;
     this.revealNear = on;
-    this.dwell.reset();
-    this.screenSince = -1;
-    this.seenOutside = false;
+    this.rearm();
   }
 
   /** The pointer position used in pointer mode, or null before the pointer has moved. For tests. */
@@ -339,54 +527,61 @@ export class HandCursor {
 
   setEnabled(enabled: boolean): void {
     this.enabled = enabled;
-    if (!enabled) this.hide();
+    if (!enabled) this.hideAll();
   }
 
   /**
-   * Switch the hand cursor off while a round is being played, so a hand that wanders over a
+   * Switch the hand cursors off while a round is being played, so a hand that wanders over a
    * button cannot press it. Pointer mode (mouse) ignores this. Coming back starts a fresh
    * screen guard so a hand resting on a button cannot select it at once.
    */
   setSuspended(on: boolean): void {
     if (on === this.suspended) return;
     this.suspended = on;
-    if (on) this.hide();
-    this.dwell.reset();
-    this.screenSince = -1;
-    this.seenOutside = false;
+    if (on) this.hideAll();
+    this.rearm();
   }
 
   get isSuspended(): boolean {
     return this.suspended;
   }
 
+  /** Remove the hover class from every button either cursor was holding over. */
   private clearHover(): void {
-    if (this.hovered >= 0)
-      (this.buttons[this.hovered] as HTMLElement | undefined)?.classList.remove('hovered');
-    this.hovered = -1;
+    this.clearSlotHover(this.left);
+    this.clearSlotHover(this.right);
   }
 
-  private hide(): void {
-    this.tracking = false;
+  private clearSlotHover(s: CursorSlot): void {
+    if (s.hovered >= 0) {
+      (this.buttons[s.hovered] as HTMLElement | undefined)?.classList.remove('hovered');
+    }
+    s.hovered = -1;
+  }
+
+  private hideAll(): void {
     this.lastPx = -1;
     this.lastPy = -1;
-    this.lastX = -1;
-    this.lastY = -1;
-    if (this.shown) {
-      this.shown = false;
-      this.el.hidden = true;
-    }
-    this.clearHover();
-    this.dwell.reset();
-    this.setRing(0);
-    this.chooser.reset();
+    this.left.hide();
+    this.right.hide();
+    this.syncHover();
   }
 
-  private setRing(progress: number): void {
-    const i = Math.round(progress * 100);
-    if (i === this.lastRing) return;
-    this.lastRing = i;
-    this.ring.setAttribute('stroke-dashoffset', RING_OFFSETS[i] as string);
+  /** Mirror each cursor's hover target into the buttons' hover class (shared buttons stay lit). */
+  private syncHover(): void {
+    this.syncSlot(this.left, this.right);
+    this.syncSlot(this.right, this.left);
+  }
+
+  private syncSlot(s: CursorSlot, other: CursorSlot): void {
+    const want = s.fist.target;
+    if (want === s.hovered) return;
+    const old = s.hovered;
+    s.hovered = want;
+    if (old >= 0 && old !== other.hovered) {
+      (this.buttons[old] as HTMLElement | undefined)?.classList.remove('hovered');
+    }
+    if (want >= 0) (this.buttons[want] as HTMLElement).classList.add('hovered');
   }
 
   /** Once per frame. Allocation free. */
@@ -396,172 +591,78 @@ export class HandCursor {
       return;
     }
     if (this.suspended || !this.enabled || !state || this.count === 0) {
-      this.hide();
+      this.hideAll();
       return;
     }
     if (this.screenSince < 0) this.screenSince = nowMs;
     const guardOver = nowMs - this.screenSince >= SCREEN_GUARD_MS;
-    const pose = state.pose;
-    const left = state.hands.left;
-    const right = state.hands.right;
-    let lOk = false;
-    let rOk = false;
-    let lx = 0;
-    let ly = 0;
-    let rx = 0;
-    let ry = 0;
-    if (left.present) {
-      lOk = true;
-      lx = left.x;
-      ly = left.y;
-    } else if (state.hasPose) {
-      const o = PoseIndex.LEFT_WRIST * POSE_STRIDE;
-      if ((pose[o + 3] as number) >= VISIBILITY_MIN) {
-        lOk = true;
-        lx = pose[o] as number;
-        ly = pose[o + 1] as number;
-      }
-    }
-    if (right.present) {
-      rOk = true;
-      rx = right.x;
-      ry = right.y;
-    } else if (state.hasPose) {
-      const o = PoseIndex.RIGHT_WRIST * POSE_STRIDE;
-      if ((pose[o + 3] as number) >= VISIBILITY_MIN) {
-        rOk = true;
-        rx = pose[o] as number;
-        ry = pose[o + 1] as number;
-      }
-    }
-    const side = this.chooser.update(lOk, ly, rOk, ry, state.shoulderWidth, nowMs);
-    if (side === null) {
-      if (guardOver) this.seenOutside = true; // hand lowered or out of view for the whole guard
-      this.hide();
-      return;
-    }
-    const hx = side === 'left' ? lx : rx;
-    const hy = side === 'left' ? ly : ry;
-    const hand = side === 'left' ? left : right;
-
-    let usePose = false;
-    let smx = 0;
-    let smy = 0;
+    const f = this.frame;
+    f.rects = this.rects;
+    f.count = this.count;
+    f.revealNear = this.revealNear;
+    f.guardOver = guardOver;
+    f.dt = dt;
+    f.usePose = false;
+    f.shoulderX = 0;
+    f.shoulderY = 0;
     if (state.hasPose) {
+      const pose = state.pose;
       const ls = PoseIndex.LEFT_SHOULDER * POSE_STRIDE;
       const rs = PoseIndex.RIGHT_SHOULDER * POSE_STRIDE;
       if (
         (pose[ls + 3] as number) >= VISIBILITY_MIN &&
         (pose[rs + 3] as number) >= VISIBILITY_MIN
       ) {
-        usePose = true;
-        smx = ((pose[ls] as number) + (pose[rs] as number)) * 0.5;
-        smy = ((pose[ls + 1] as number) + (pose[rs + 1] as number)) * 0.5;
+        f.usePose = true;
+        f.shoulderX = ((pose[ls] as number) + (pose[rs] as number)) * 0.5;
+        f.shoulderY = ((pose[ls + 1] as number) + (pose[rs + 1] as number)) * 0.5;
       }
     }
-    mapReach(this.target, usePose, state.aspect, state.shoulderWidth, smx, smy, hx, hy);
+    this.left.place(state, f);
+    this.right.place(state, f);
 
-    if (!this.tracking) {
-      this.tracking = true;
-      this.smooth.snap(this.target.x, this.target.y);
-    } else {
-      this.smooth.step(this.target.x, this.target.y, dt > 0 ? dt : 1 / 60);
-    }
-    const sx = this.smooth.x;
-    const sy = this.smooth.y;
-    if (this.revealNear) {
-      const near = hitTest(
-        this.rects,
-        this.count,
-        sx * window.innerWidth,
-        sy * window.innerHeight,
-        REVEAL_PX * uiScale(),
-      );
-      if (near < 0) {
-        if (this.shown) {
-          this.shown = false;
-          this.el.hidden = true;
-        }
-        this.clearHover();
-        this.dwell.reset();
-        this.setRing(0);
-        return;
-      }
-    }
-    if (!this.shown) {
-      this.shown = true;
-      this.el.hidden = false;
-    }
-    const qx = Math.round(sx * 1000);
-    const qy = Math.round(sy * 1000);
-    if (qx !== this.lastX) {
-      this.lastX = qx;
-      this.el.style.left = pctTenth(sx);
-    }
-    if (qy !== this.lastY) {
-      this.lastY = qy;
-      this.el.style.top = pctTenth(sy);
-    }
-    const closed = hand.known && hand.closed;
-    if (closed !== this.closed) {
-      this.closed = closed;
-      this.el.classList.toggle('closed', closed);
-    }
-
-    const hit = hitTest(
-      this.rects,
-      this.count,
-      sx * window.innerWidth,
-      sy * window.innerHeight,
-      FORGIVENESS_PX * uiScale(),
-    );
-    if (hit < 0) this.seenOutside = true;
-    // A hand resting where a button appears must not select it.
-    const done = this.dwell.update(guardOver && this.seenOutside ? hit : -1, nowMs);
-    const shownHover = this.dwell.target;
-    if (shownHover !== this.hovered) {
-      this.clearHover();
-      if (shownHover >= 0) {
-        this.hovered = shownHover;
-        (this.buttons[shownHover] as HTMLElement).classList.add('hovered');
-      }
-    }
-    this.setRing(this.dwell.progress);
+    // One activation at most: the first cursor to finish its fist wins, and the other one's
+    // press is cancelled and locked out like after any selection.
+    let done = this.left.fistStep(guardOver, nowMs);
     if (done >= 0) {
-      this.setRing(0);
+      this.right.cancel(nowMs);
+    } else {
+      done = this.right.fistStep(guardOver, nowMs);
+      if (done >= 0) this.left.cancel(nowMs);
+    }
+    this.syncHover();
+    if (done >= 0) {
+      this.left.setRing(0);
+      this.right.setRing(0);
       (this.buttons[done] as HTMLElement).click();
     }
   }
 
   /** Pointer mode, once per frame. Allocation free except when the pointer has moved. */
   private updatePointer(): void {
+    const p = this.right;
     if (!this.enabled || this.count === 0 || !this.hasPointer || this.revealNear) {
-      if (this.shown) this.hide();
+      if (p.isShown) this.hideAll();
       return;
     }
-    if (!this.shown) {
-      this.shown = true;
-      this.el.hidden = false;
-    }
+    p.showEl();
     const x = Math.round(this.pointerX);
     const y = Math.round(this.pointerY);
     if (x !== this.lastPx) {
       this.lastPx = x;
-      this.el.style.left = `${x}px`;
+      p.el.style.left = `${x}px`;
     }
     if (y !== this.lastPy) {
       this.lastPy = y;
-      this.el.style.top = `${y}px`;
+      p.el.style.top = `${y}px`;
     }
-    if (this.pointerDown !== this.closed) {
-      this.closed = this.pointerDown;
-      this.el.classList.toggle('closed', this.closed);
-    }
+    p.setClosed(this.pointerDown);
   }
 
   dispose(): void {
     this.setPointerMode(false);
     window.removeEventListener('resize', this.resize);
-    this.el.remove();
+    this.left.dispose();
+    this.right.dispose();
   }
 }

@@ -9,6 +9,7 @@ import {
   FAKE_SPORTS,
 } from './harness/fakeData';
 import { createFakeInput } from './harness/fakeInput';
+import type { FakeInput } from './harness/fakeInput';
 import { meta as archeryMeta } from '../sports/archery/meta';
 import { meta as battingMeta } from '../sports/batting/meta';
 import { meta as bowlingMeta } from '../sports/bowling/meta';
@@ -22,7 +23,7 @@ import type { CalibrationView, Ui } from './types';
 
 declare global {
   interface Window {
-    __ui: { ui: Ui; resolved: string | null; paused: boolean };
+    __ui: { ui: Ui; resolved: string | null; paused: boolean; fake: FakeInput | null };
   }
 }
 
@@ -47,7 +48,7 @@ const ui = createUi(root, {
   debug: params.has('debug'),
   reducedMotion: params.get('rm') === '1' ? true : undefined,
 });
-const hub: Window['__ui'] = { ui, resolved: null, paused: false };
+const hub: Window['__ui'] = { ui, resolved: null, paused: false, fake: null };
 ui.onHowToPlay((open) => {
   hub.paused = open;
 });
@@ -71,6 +72,7 @@ const wantsInput =
 const fake = wantsInput
   ? createFakeInput(handParam === '1' ? 'hands' : 'pose', debugInput ? 'debug' : 'camera')
   : null;
+hub.fake = fake;
 if (fake) {
   ui.setInput(fake);
   const move = (e: MouseEvent): void =>
@@ -186,7 +188,8 @@ switch (screen) {
   }
   case 'playing':
   case 'pause': {
-    ui.showPlaying(meta);
+    const tutorial = params.has('tutorial');
+    ui.showPlaying(meta, { tutorial });
     ui.setCameraActive(true);
     const hud = ui.hud;
     hud.setScore('187');
@@ -208,8 +211,33 @@ switch (screen) {
     ui.onQuit(() => {
       hub.resolved = 'quit';
     });
+    if (tutorial) {
+      // ?tutorial=1 shows the coach panel; ?step=<n> picks the step, ?confirm=1 the confirmation.
+      const step = Number(params.get('step') ?? 1);
+      ui.coach.onSkip(() => {
+        hub.resolved = 'skip';
+      });
+      ui.onTutorialEnd(() => {
+        hub.resolved = 'end';
+      });
+      if (params.has('confirm')) {
+        ui.coach.show(step, 7, 'Reach for a hold and make a fist to grab it');
+        ui.coach.confirm();
+      } else {
+        ui.coach.show(
+          step,
+          7,
+          params.get('text') ?? 'Reach for a hold and make a fist to grab it',
+          params.has('nodetail') ? null : 'Use either hand.',
+        );
+        if (!params.has('nofeedback')) ui.coach.setFeedback('Move closer to a hold');
+      }
+    }
     break;
   }
+  case 'tutorialdone':
+    track(ui.showTutorialDone(meta));
+    break;
   case 'results':
     track(ui.showResults(meta, FAKE_RESULT, { isBest: params.get('best') !== '0', best: 31.7 }));
     break;

@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createUi } from './createUi';
+import { createGuide } from './screens/calibration';
 import { NOTICE_MS } from './screens/menu';
 import {
   FAKE_BESTS,
@@ -350,6 +351,41 @@ describe('screen management', () => {
   });
 });
 
+describe('hands-close calibration outline', () => {
+  const part = (svg: SVGElement, side: string, name: string): NodeListOf<SVGElement> =>
+    svg.querySelectorAll<SVGElement>(`.guide-line[data-hand="${side}"][data-part="${name}"]`);
+  const thumb = (side: 'left' | 'right'): SVGElement =>
+    part(createGuide('hands-close').svg, side, 'thumb')[0] as SVGElement;
+
+  it('draws one left and one right hand, not two of the same', () => {
+    const svg = createGuide('hands-close').svg;
+    for (const side of ['left', 'right']) {
+      expect(part(svg, side, 'palm')).toHaveLength(1);
+      expect(part(svg, side, 'finger')).toHaveLength(4);
+      expect(part(svg, side, 'thumb')).toHaveLength(1);
+    }
+    expect(thumb('left').getAttribute('transform')).not.toBe(
+      thumb('right').getAttribute('transform'),
+    );
+  });
+
+  it('mirrors the glyphs: the left hand is on screen left and both thumbs point to the middle', () => {
+    const l = thumb('left');
+    const r = thumb('right');
+    const lx = Number(l.getAttribute('x'));
+    const rx = Number(r.getAttribute('x'));
+    // the left hand is on the left half of the 160-wide outline, the right hand on the right half
+    expect(lx).toBeLessThan(80);
+    expect(rx).toBeGreaterThan(80);
+    // right hand: thumb on its left (toward the middle); left hand: thumb on its right
+    expect(rx).toBeLessThan(108);
+    expect(lx).toBeGreaterThan(52);
+    // rotated in opposite directions
+    expect(l.getAttribute('transform')).toMatch(/^rotate\(35 /);
+    expect(r.getAttribute('transform')).toMatch(/^rotate\(-35 /);
+  });
+});
+
 describe('calibration outline matches the pose being asked for', () => {
   const base = {
     message: 'm',
@@ -633,7 +669,7 @@ describe('hand cursor and the input source', () => {
     void ui.showTitle();
     ui.update(0.016, 0);
     ui.update(0.016, 16);
-    return (root.querySelector('.hand-cursor') as HTMLElement).hidden === true;
+    return (root.querySelector('.hc-right') as HTMLElement).hidden === true;
   }
 
   it('is disabled for synthetic and replay sources, enabled otherwise', () => {
@@ -646,7 +682,7 @@ describe('hand cursor and the input source', () => {
     expect(cursorHidden(null)).toBe(true); // nothing until the pointer has moved
     window.dispatchEvent(new MouseEvent('pointermove', { clientX: 321, clientY: 123 }));
     ui.update(0.016, 32);
-    const el = root.querySelector('.hand-cursor') as HTMLElement;
+    const el = root.querySelector('.hc-right') as HTMLElement;
     expect(el.hidden).toBe(false);
     expect(el.style.left).toBe('321px');
     expect(el.style.top).toBe('123px');
@@ -725,7 +761,7 @@ describe('hand cursor during play (camera mode)', () => {
     input.setMouse(0, 0, false);
     ui.setInput(input);
     ui.showPlaying(bowling);
-    const cursorEl = (): HTMLElement => root.querySelector('.hand-cursor') as HTMLElement;
+    const cursorEl = (): HTMLElement => root.querySelector('.hc-right') as HTMLElement;
     let t = 0;
     const run = (ms: number): void => {
       for (const end = t + ms; t < end; t += 16) ui.update(0.016, t);
@@ -744,5 +780,241 @@ describe('hand cursor during play (camera mode)', () => {
     click('.howto-overlay .btn-big');
     run(100);
     expect(cursorEl().hidden).toBe(true);
+  });
+});
+
+describe('tutorial: the button, the coach panel and the done screen', () => {
+  const climbing = { ...FAKE_SPORTS[0]!, hasTutorial: true };
+  const panel = (): HTMLElement => root.querySelector('.coach') as HTMLElement;
+  const text = (sel: string): string => root.querySelector(sel)?.textContent ?? '';
+
+  it('the Tutorial button is on the how-to card only for a sport with a tutorial', async () => {
+    void ui.showHowTo(bowling, true);
+    expect(root.querySelector('.howto-tutorial')).toBeNull();
+    const p = ui.showHowTo(climbing, true);
+    const button = root.querySelector('.howto-tutorial') as HTMLElement;
+    expect(button.textContent).toBe('Tutorial');
+    expect(button.hasAttribute('data-select')).toBe(true);
+    // Beside Start and Back, secondary styling, never the primary action.
+    expect(button.classList.contains('btn-secondary')).toBe(true);
+    expect(root.querySelector('.screen-howto .actions')?.children.length).toBe(3);
+    button.click();
+    await expect(p).resolves.toBe('tutorial');
+  });
+
+  it('Start and Back still resolve on a card that has the Tutorial button', async () => {
+    const a = ui.showHowTo(climbing, true);
+    click('.screen-howto .btn-big');
+    await expect(a).resolves.toBe('start');
+    const b = ui.showHowTo(climbing, true);
+    key('Escape');
+    await expect(b).resolves.toBe('back');
+  });
+
+  it('the coach panel is hidden until a tutorial round shows it', () => {
+    expect(panel().hidden).toBe(true);
+    ui.coach.show(0, 3, 'Nope');
+    expect(panel().hidden).toBe(true);
+    ui.showPlaying(climbing);
+    ui.coach.show(0, 3, 'Still nope');
+    expect(panel().hidden).toBe(true);
+    ui.showPlaying(climbing, { tutorial: true });
+    expect(panel().hidden).toBe(true);
+    ui.coach.show(1, 5, 'Close your fist on a hold', 'Either hand works.');
+    expect(panel().hidden).toBe(false);
+  });
+
+  it('shows the step counter, the instruction, the detail and one feedback line', () => {
+    ui.showPlaying(climbing, { tutorial: true });
+    ui.coach.show(1, 5, 'Close your fist on a hold', 'Either hand works.');
+    expect(text('.coach-count')).toBe('Step 2 of 5');
+    expect(text('.coach-text')).toBe('Close your fist on a hold');
+    expect(text('.coach-detail')).toBe('Either hand works.');
+    expect((root.querySelector('.coach-detail') as HTMLElement).hidden).toBe(false);
+    expect((root.querySelector('.coach-feedback') as HTMLElement).hidden).toBe(true);
+    ui.coach.setFeedback('Move closer to a hold');
+    expect(text('.coach-feedback')).toBe('Move closer to a hold');
+    expect((root.querySelector('.coach-feedback') as HTMLElement).hidden).toBe(false);
+    ui.coach.setFeedback(null);
+    expect((root.querySelector('.coach-feedback') as HTMLElement).hidden).toBe(true);
+    ui.coach.show(2, 5, 'Pull down');
+    expect(text('.coach-count')).toBe('Step 3 of 5');
+    expect((root.querySelector('.coach-detail') as HTMLElement).hidden).toBe(true);
+  });
+
+  it('writes to the DOM only when something changes', () => {
+    ui.showPlaying(climbing, { tutorial: true });
+    ui.coach.show(0, 2, 'One', 'Two');
+    ui.coach.setFeedback('Hmm');
+    const seen: MutationRecord[] = [];
+    const observer = new MutationObserver((records) => seen.push(...records));
+    observer.observe(panel(), {
+      childList: true,
+      characterData: true,
+      attributes: true,
+      subtree: true,
+    });
+    for (let i = 0; i < 10; i++) {
+      ui.coach.show(0, 2, 'One', 'Two');
+      ui.coach.setFeedback('Hmm');
+    }
+    seen.push(...observer.takeRecords());
+    observer.disconnect();
+    expect(seen).toEqual([]);
+  });
+
+  it('confirm shows the praise, and the next show brings the step back', () => {
+    ui.showPlaying(climbing, { tutorial: true });
+    ui.coach.show(0, 2, 'Grab a hold', 'Either hand.');
+    ui.coach.setFeedback('Move closer');
+    ui.coach.confirm();
+    expect(text('.coach-text')).toBe('Nice');
+    expect(panel().dataset.state).toBe('confirm');
+    expect((root.querySelector('.coach-detail') as HTMLElement).hidden).toBe(true);
+    expect((root.querySelector('.coach-feedback') as HTMLElement).hidden).toBe(true);
+    ui.coach.confirm('Good grip');
+    expect(text('.coach-text')).toBe('Good grip');
+    ui.coach.show(1, 2, 'Pull down', 'Both hands.');
+    expect(panel().dataset.state).toBe('step');
+    expect(text('.coach-text')).toBe('Pull down');
+    expect(text('.coach-detail')).toBe('Both hands.');
+    expect(text('.coach-count')).toBe('Step 2 of 2');
+  });
+
+  it('hide, and leaving the round, take the panel away', () => {
+    ui.showPlaying(climbing, { tutorial: true });
+    ui.coach.show(0, 2, 'One');
+    ui.coach.hide();
+    expect(panel().hidden).toBe(true);
+    ui.coach.show(0, 2, 'One');
+    expect(panel().hidden).toBe(false);
+    void ui.showTutorialDone(climbing);
+    expect(panel().hidden).toBe(true);
+    ui.coach.show(0, 2, 'One');
+    expect(panel().hidden).toBe(true);
+  });
+
+  it('marks the interface as a tutorial so the sport hint steps aside', () => {
+    const container = root.querySelector('.hs-ui') as HTMLElement;
+    ui.showPlaying(climbing);
+    expect(container.dataset.tutorial).toBe('false');
+    ui.showPlaying(climbing, { tutorial: true });
+    expect(container.dataset.tutorial).toBe('true');
+    ui.showPlaying(climbing);
+    expect(container.dataset.tutorial).toBe('false');
+  });
+
+  it('the Skip step button and the S key skip the step; End tutorial ends it', () => {
+    const skip = vi.fn();
+    const end = vi.fn();
+    ui.coach.onSkip(skip);
+    ui.onTutorialEnd(end);
+    ui.showPlaying(climbing, { tutorial: true });
+    ui.coach.show(0, 2, 'One');
+    click('.coach-skip');
+    expect(skip).toHaveBeenCalledTimes(1);
+    key('s');
+    key('S');
+    expect(skip).toHaveBeenCalledTimes(3);
+    expect(end).not.toHaveBeenCalled();
+    click('.coach-end');
+    expect(end).toHaveBeenCalledTimes(1);
+  });
+
+  it('S does nothing outside a tutorial, and the handler can be unregistered', () => {
+    const skip = vi.fn();
+    const off = ui.coach.onSkip(skip);
+    ui.showPlaying(climbing);
+    key('s');
+    expect(skip).not.toHaveBeenCalled();
+    ui.showPlaying(climbing, { tutorial: true });
+    off();
+    key('s');
+    expect(skip).not.toHaveBeenCalled();
+  });
+
+  it('Escape and H behave as in a normal round', () => {
+    const quit = vi.fn();
+    ui.onQuit(quit);
+    ui.showPlaying(climbing, { tutorial: true });
+    key('h');
+    expect(root.querySelector('.howto-overlay')).not.toBeNull();
+    key('Escape');
+    expect(root.querySelector('.howto-overlay')).toBeNull();
+    expect(quit).not.toHaveBeenCalled();
+    key('Escape');
+    expect(quit).toHaveBeenCalledTimes(1);
+  });
+
+  it('the how-to overlay offers Skip step and End tutorial only in a tutorial', () => {
+    ui.showPlaying(climbing);
+    click('.howto-open');
+    expect(root.querySelector('.overlay-skip')).toBeNull();
+    key('Escape');
+    ui.showPlaying(climbing, { tutorial: true });
+    click('.howto-open');
+    expect(root.querySelector('.overlay-skip')?.textContent).toBe('Skip step');
+    expect(root.querySelector('.overlay-end')?.textContent).toBe('End tutorial');
+  });
+
+  it('Skip step in the overlay closes it, resumes and skips; End tutorial closes it and ends', () => {
+    const paused = vi.fn();
+    const skip = vi.fn();
+    const end = vi.fn();
+    ui.onHowToPlay(paused);
+    ui.coach.onSkip(skip);
+    ui.onTutorialEnd(end);
+    ui.showPlaying(climbing, { tutorial: true });
+    click('.howto-open');
+    click('.overlay-skip');
+    expect(root.querySelector('.howto-overlay')).toBeNull();
+    expect(paused).toHaveBeenLastCalledWith(false);
+    expect(skip).toHaveBeenCalledTimes(1);
+    click('.howto-open');
+    click('.overlay-end');
+    expect(root.querySelector('.howto-overlay')).toBeNull();
+    expect(end).toHaveBeenCalledTimes(1);
+  });
+
+  it('the hand cursor is off during active tutorial play and back once the round is paused', () => {
+    const input = createFakeInput('hands');
+    input.setMouse(0, 0, false);
+    ui.setInput(input);
+    ui.showPlaying(climbing, { tutorial: true });
+    ui.coach.show(0, 2, 'One');
+    let t = 0;
+    const run = (ms: number): void => {
+      for (const end = t + ms; t < end; t += 16) ui.update(0.016, t);
+    };
+    const cursorEl = (): HTMLElement => root.querySelector('.hc-right') as HTMLElement;
+    run(600);
+    // Active play: the hand cursor is off, so a fist cannot hit Skip step by accident.
+    expect(cursorEl().hidden).toBe(true);
+    ui.showPause('lost');
+    run(300);
+    expect(cursorEl().hidden).toBe(false);
+  });
+
+  it('the Tutorial done screen resolves Play now, Back to menu and Escape', async () => {
+    const play = ui.showTutorialDone(climbing);
+    expect(text('.results-headline')).toBe('Tutorial done');
+    expect(text('.screen-tutorialdone .btn-big')).toBe('Play now');
+    expect(root.querySelector('.screen-tutorialdone .btn-secondary')?.textContent).toBe(
+      'Back to menu',
+    );
+    click('.screen-tutorialdone .btn-big');
+    await expect(play).resolves.toBe('play');
+    const menu = ui.showTutorialDone(climbing);
+    click('.screen-tutorialdone .btn-secondary');
+    await expect(menu).resolves.toBe('menu');
+    const esc = ui.showTutorialDone(climbing);
+    key('Escape');
+    await expect(esc).resolves.toBe('menu');
+  });
+
+  it('the Tutorial done screen has no personal-best banner or score', () => {
+    void ui.showTutorialDone(climbing);
+    expect(root.querySelector('.best-badge')).toBeNull();
+    expect(root.querySelector('.results-best')).toBeNull();
   });
 });

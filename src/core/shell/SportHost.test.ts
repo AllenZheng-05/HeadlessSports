@@ -10,7 +10,9 @@ import { parseFlags } from '../flags';
 import { GameLoop } from '../loop';
 import { MemoryScoreStore } from '../scores';
 import type { RoundResult, Sport, SportContext, SportEntry, SportMeta } from '../sport';
-import { PAUSE_AFTER_MS, RESUME_AFTER_MS, SportHost } from './SportHost';
+import { NO_COACH } from '../tutorial/noCoach';
+import { TUTORIAL_DONE } from '../tutorial/result';
+import { PAUSE_AFTER_MS, RESUME_AFTER_MS, SportHost, withHandCrops } from './SportHost';
 
 const meta: SportMeta = {
   id: 'fake',
@@ -28,13 +30,27 @@ const meta: SportMeta = {
 
 const RESULT: RoundResult = { score: 3, headline: '3' };
 
-function fakeUi(): Ui & { howTo: (open: boolean) => void } {
+type FakeUi = Ui & { howTo: (open: boolean) => void; endTutorial: () => void };
+
+function fakeUi(): FakeUi {
   const noop = vi.fn();
   let howTo: (open: boolean) => void = () => undefined;
+  let tutorialEnd: () => void = () => undefined;
   return {
     howTo: (open: boolean) => howTo(open),
     onHowToPlay: (handler: (open: boolean) => void) => {
       howTo = handler;
+    },
+    endTutorial: () => tutorialEnd(),
+    onTutorialEnd: (handler: () => void) => {
+      tutorialEnd = handler;
+    },
+    coach: {
+      show: vi.fn(),
+      setFeedback: vi.fn(),
+      confirm: vi.fn(),
+      onSkip: vi.fn(() => () => undefined),
+      hide: vi.fn(),
     },
     hud: { setBanner: vi.fn(), clear: vi.fn() },
     audio: { play: noop, setMuted: noop },
@@ -49,7 +65,7 @@ function fakeUi(): Ui & { howTo: (open: boolean) => void } {
     onCameraOn: noop,
     setCameraOnAvailable: noop,
     setCameraActive: noop,
-  } as unknown as Ui & { howTo: (open: boolean) => void };
+  } as unknown as FakeUi;
 }
 
 function fakeRenderer(): RendererHandle {
@@ -84,7 +100,14 @@ function fakeSport(overrides: Partial<Sport> = {}) {
   return { sport, bot };
 }
 
-function setup(options: { source?: unknown; sport?: Sport; throwInFactory?: boolean } = {}) {
+function setup(
+  options: {
+    source?: unknown;
+    sport?: Sport;
+    throwInFactory?: boolean;
+    meta?: SportMeta;
+  } = {},
+) {
   const ui = fakeUi();
   const input = fakeInput(options.source ?? null);
   const loop = new GameLoop({ begin: vi.fn(), fixed: vi.fn(), frame: vi.fn() });
@@ -92,7 +115,7 @@ function setup(options: { source?: unknown; sport?: Sport; throwInFactory?: bool
   const sport = options.sport ?? made.sport;
   let ctx: SportContext | null = null;
   const entry: SportEntry = {
-    meta,
+    meta: options.meta ?? meta,
     load: () =>
       Promise.resolve({
         default: (c: SportContext): Sport => {
@@ -481,5 +504,180 @@ describe('SportHost', () => {
     expect(loop.paused).toBe(false);
     ui.howTo(false);
     expect(host.phase).toBe('idle');
+  });
+
+  it('a normal round gets tutorial false, a no-op coach and a no-op finishTutorial', async () => {
+    const { host, entry, getCtx } = setup({ meta: { ...meta, hasTutorial: true } });
+    const done = host.play(entry, null);
+    await started(host);
+    const ctx = getCtx();
+    expect(ctx.tutorial).toBe(false);
+    expect(ctx.coach).toBe(NO_COACH);
+    ctx.finishTutorial();
+    expect(host.phase).toBe('playing');
+    ctx.finish(RESULT);
+    await expect(done).resolves.toBe(RESULT);
+  });
+});
+
+describe('SportHost tutorial', () => {
+  const tutorialMeta: SportMeta = { ...meta, hasTutorial: true };
+
+  it('runs in tutorial mode only when the sport has a tutorial', async () => {
+    const plain = setup();
+    void plain.host.play(plain.entry, null, { tutorial: true });
+    await started(plain.host);
+    expect(plain.getCtx().tutorial).toBe(false);
+    expect(plain.getCtx().coach).toBe(NO_COACH);
+
+    const t = setup({ meta: tutorialMeta });
+    void t.host.play(t.entry, null, { tutorial: true });
+    await started(t.host);
+    expect(t.getCtx().tutorial).toBe(true);
+    expect(t.getCtx().coach).toBe(t.ui.coach);
+  });
+
+  it('tells the UI it is a tutorial round', async () => {
+    const t = setup({ meta: tutorialMeta });
+    const showPlaying = vi.fn();
+    t.ui.showPlaying = showPlaying;
+    void t.host.play(t.entry, null, { tutorial: true });
+    await started(t.host);
+    expect(showPlaying).toHaveBeenCalledWith(tutorialMeta, { tutorial: true });
+  });
+
+  it('finishTutorial resolves with the tutorial marker and hides the coach', async () => {
+    const t = setup({ meta: tutorialMeta });
+    const done = t.host.play(t.entry, null, { tutorial: true });
+    await started(t.host);
+    t.getCtx().finishTutorial();
+    t.getCtx().finishTutorial();
+    await expect(done).resolves.toBe(TUTORIAL_DONE);
+    expect(TUTORIAL_DONE.saveScore).toBe(false);
+    expect(t.host.phase).toBe('finished');
+    expect(t.ui.coach.hide).toHaveBeenCalled();
+  });
+
+  it('a stray finish() in a tutorial ends the tutorial and never yields a result', async () => {
+    const t = setup({ meta: tutorialMeta });
+    const done = t.host.play(t.entry, null, { tutorial: true });
+    await started(t.host);
+    t.getCtx().finish({ score: 99, headline: 'oops' });
+    await expect(done).resolves.toBe(TUTORIAL_DONE);
+    expect(t.host.result).toBe(TUTORIAL_DONE);
+  });
+
+  it('End tutorial from the interface ends a tutorial round and does nothing in a normal one', async () => {
+    const normal = setup({ meta: tutorialMeta });
+    void normal.host.play(normal.entry, null);
+    await started(normal.host);
+    normal.ui.endTutorial();
+    expect(normal.host.phase).toBe('playing');
+
+    const t = setup({ meta: tutorialMeta });
+    const done = t.host.play(t.entry, null, { tutorial: true });
+    await started(t.host);
+    t.ui.endTutorial();
+    await expect(done).resolves.toBe(TUTORIAL_DONE);
+    expect(t.host.phase).toBe('finished');
+  });
+
+  it('the out-of-frame pause still applies in a tutorial', async () => {
+    const source = { kind: 'camera' } as unknown as LandmarkSource;
+    const t = setup({ source, meta: tutorialMeta });
+    void t.host.play(t.entry, null, { tutorial: true });
+    await started(t.host);
+    t.input.state.problem = 'lost';
+    t.host.begin(1000, 0);
+    t.host.begin(1000 + PAUSE_AFTER_MS + 1, 0);
+    expect(t.host.phase).toBe('paused');
+    expect(t.getCtx().paused).toBe(true);
+  });
+});
+
+describe('SportHost hand crops for overlays', () => {
+  const poseOnly: SportMeta = {
+    ...meta,
+    requiredTrackers: { pose: true, handCrops: false, fullFrameHands: false },
+  };
+  const POSE_ONLY = poseOnly.requiredTrackers;
+  const WITH_HANDS = { pose: true, handCrops: true, fullFrameHands: false };
+
+  it('withHandCrops adds crops to a pose-only need and leaves the others alone', () => {
+    expect(withHandCrops(POSE_ONLY)).toEqual(WITH_HANDS);
+    const hands = { pose: false, handCrops: false, fullFrameHands: true };
+    expect(withHandCrops(hands)).toBe(hands);
+    const both = { pose: true, handCrops: true, fullFrameHands: false };
+    expect(withHandCrops(both)).toBe(both);
+  });
+
+  it('requests hand crops while the how-to overlay is up and restores the sport needs after', async () => {
+    const { host, ui, input, entry } = setup({ meta: poseOnly });
+    void host.play(entry, null);
+    await started(host);
+    expect(input.setNeeds).toHaveBeenLastCalledWith(POSE_ONLY);
+    input.setNeeds.mockClear();
+    ui.howTo(true);
+    expect(input.setNeeds).toHaveBeenCalledTimes(1);
+    expect(input.setNeeds).toHaveBeenLastCalledWith(WITH_HANDS);
+    ui.howTo(false);
+    expect(input.setNeeds).toHaveBeenCalledTimes(2);
+    expect(input.setNeeds).toHaveBeenLastCalledWith(POSE_ONLY);
+  });
+
+  it('requests hand crops for the out-of-frame pause and restores the needs when play resumes', async () => {
+    const source = { kind: 'camera' } as unknown as LandmarkSource;
+    const { host, input, entry } = setup({ source, meta: poseOnly });
+    void host.play(entry, null);
+    await started(host);
+    input.setNeeds.mockClear();
+    input.state.problem = 'lost';
+    host.begin(1000, 0);
+    host.begin(1000 + PAUSE_AFTER_MS + 1, 0);
+    expect(input.setNeeds).toHaveBeenLastCalledWith(WITH_HANDS);
+    input.state.problem = 'none';
+    host.begin(3000, 0);
+    host.begin(3000 + RESUME_AFTER_MS, 0);
+    expect(host.phase).toBe('playing');
+    expect(input.setNeeds).toHaveBeenLastCalledWith(POSE_ONLY);
+    expect(input.setNeeds).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps hand crops on while the results or the tutorial-done screen is up', async () => {
+    const { host, input, entry, getCtx } = setup({ meta: { ...poseOnly, hasTutorial: true } });
+    const done = host.play(entry, null);
+    await started(host);
+    input.setNeeds.mockClear();
+    getCtx().finish(RESULT);
+    await done;
+    expect(input.setNeeds).toHaveBeenLastCalledWith(WITH_HANDS);
+    host.release();
+
+    const t = setup({ meta: { ...poseOnly, hasTutorial: true } });
+    const tutorialDone = t.host.play(t.entry, null, { tutorial: true });
+    await started(t.host);
+    t.input.setNeeds.mockClear();
+    t.getCtx().finishTutorial();
+    await tutorialDone;
+    expect(t.input.setNeeds).toHaveBeenLastCalledWith(WITH_HANDS);
+  });
+
+  it('a sport that already has hand crops has nothing to restore afterwards', async () => {
+    const { host, ui, input, entry } = setup();
+    void host.play(entry, null);
+    await started(host);
+    input.setNeeds.mockClear();
+    ui.howTo(true);
+    expect(input.setNeeds).toHaveBeenCalledTimes(1);
+    expect(input.setNeeds).toHaveBeenLastCalledWith(meta.requiredTrackers);
+    ui.howTo(false);
+    expect(input.setNeeds).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not touch the trackers when no round is live', () => {
+    const { ui, input } = setup();
+    ui.howTo(true);
+    ui.howTo(false);
+    expect(input.setNeeds).not.toHaveBeenCalled();
   });
 });

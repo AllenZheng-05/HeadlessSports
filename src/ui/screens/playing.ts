@@ -14,6 +14,12 @@ export interface PlayingControls {
   /** True while the how-to overlay is open: Escape then closes it instead of quitting. */
   isOverlayOpen: () => boolean;
   closeOverlay: () => void;
+  /** Tutorial round: S skips the step, and the hand cursor can also reach these buttons while paused. */
+  tutorial?: {
+    skip: () => void;
+    /** The coach panel's Skip step and End tutorial buttons. */
+    buttons: HTMLElement[];
+  };
 }
 
 /** The little "How to play" and "Quit" controls shown while playing. */
@@ -29,16 +35,21 @@ export function buildPlaying(controls: PlayingControls): ScreenSpec {
   return {
     el,
     camera: true,
-    // The hand cursor only reaches the How to play control, and only shows near it.
-    cursorButtons: [howTo],
+    // The hand cursor only reaches the How to play control (and, in a tutorial, the coach
+    // buttons), and only shows near them. It is off during active play and back when paused.
+    cursorButtons: controls.tutorial ? [howTo, ...controls.tutorial.buttons] : [howTo],
     revealNear: true,
     onEscape: () => {
       if (controls.isOverlayOpen()) controls.closeOverlay();
       else controls.onQuit();
     },
     onKey: (e) => {
-      if (e.key !== 'h' && e.key !== 'H') return false;
       if (e.repeat || e.ctrlKey || e.metaKey || e.altKey) return false;
+      if (controls.tutorial && (e.key === 's' || e.key === 'S')) {
+        if (!controls.isOverlayOpen()) controls.tutorial.skip();
+        return true;
+      }
+      if (e.key !== 'h' && e.key !== 'H') return false;
       if (controls.isOverlayOpen()) controls.closeOverlay();
       else controls.onHowTo();
       return true;
@@ -49,6 +60,15 @@ export function buildPlaying(controls: PlayingControls): ScreenSpec {
 export interface HowToOverlay {
   readonly el: HTMLElement;
   readonly resume: HTMLElement;
+  /** Tutorial rounds only: the overlay's own Skip step and End tutorial buttons. */
+  readonly extras: HTMLElement[];
+}
+
+export interface TutorialOverlayActions {
+  /** Close the overlay (resume the round), then skip the step. */
+  skip: () => void;
+  /** End the tutorial. */
+  end: () => void;
 }
 
 /** The sport's how-to content over the paused round, with a Resume button. */
@@ -56,6 +76,7 @@ export function buildHowToOverlay(
   meta: SportMeta,
   debugInput: boolean,
   onResume: () => void,
+  tutorial?: TutorialOverlayActions,
 ): HowToOverlay {
   const el = h('div', 'howto-overlay');
   el.setAttribute('data-ui', '');
@@ -72,9 +93,19 @@ export function buildHowToOverlay(
   const resume = selectButton('Resume', 'btn btn-big');
   resume.addEventListener('click', onResume);
   actions.append(resume);
+  const extras: HTMLElement[] = [];
+  if (tutorial) {
+    // A camera player reaches these with the hand cursor while the round is paused.
+    const skip = selectButton('Skip step', 'btn btn-secondary overlay-skip');
+    const end = selectButton('End tutorial', 'btn btn-secondary overlay-end');
+    skip.addEventListener('click', tutorial.skip);
+    end.addEventListener('click', tutorial.end);
+    actions.append(skip, end);
+    extras.push(skip, end);
+  }
   card.append(head, body, actions);
   el.append(card);
-  return { el, resume };
+  return { el, resume, extras };
 }
 
 const PAUSE_TEXT: Record<Exclude<FrameProblem, 'none'>, string> = {

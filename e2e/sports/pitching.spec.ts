@@ -180,6 +180,7 @@ test.describe('pitching', () => {
   }
 
   test('the slow-motion pitch is visible in the air', async ({ page }) => {
+    test.setTimeout(100_000); // runs at timeScale 0.25 by design, about 35 to 53 s
     const problems = watch(page);
     await page.goto('/?sport=pitching&source=synthetic&skipGate=1&short=1&timeScale=0.25');
     await waitPhase(page, 'playing');
@@ -197,6 +198,7 @@ test.describe('pitching', () => {
   test('mouse: pick the called pitch with a button, hold to aim, release to throw', async ({
     page,
   }) => {
+    test.setTimeout(100_000); // a whole short round with real pointer timing, about 42 s alone
     const problems = watch(page);
     const sportNow = (): Promise<{
       called: string;

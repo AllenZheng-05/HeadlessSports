@@ -22,7 +22,7 @@ function sport(
     seatedOk: false,
     needsSpace: true,
     score: { label: 'Score', unit: 'pts', decimals: 0, higherIsBetter: true },
-    howTo: ['Raise your throwing hand', 'Swing your arm forward', 'Let go with an open hand'],
+    howTo: ['Raise your dominant hand', 'Swing your arm forward', 'Let go with an open hand'],
     debugKeys: ['Move the mouse to aim', 'Hold to wind up, release to throw'],
     ...extra,
   };
