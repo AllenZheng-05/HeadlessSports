@@ -1,6 +1,6 @@
 # Deployment
 
-Target: Cloudflare, at `sports.allenzheng.com`. HTTPS is required for camera access (localhost counts as secure for development). This guide is written for Allen, who runs every step by hand. Nothing in the repo logs in to Cloudflare or deploys on its own.
+Target: Cloudflare, at `headlesssports.allenzheng.com`. HTTPS is required for camera access (localhost counts as secure for development). This guide is written for Allen, who runs every step by hand. Nothing in the repo logs in to Cloudflare or deploys on its own.
 
 ## What gets deployed
 
@@ -36,7 +36,7 @@ Files that Cloudflare reads from `dist/` but does not serve as pages: `_headers`
 
 ### Post-deploy checklist
 
-Do these on the `workers.dev` URL, and again on `https://sports.allenzheng.com` once it is attached.
+Do these on the `workers.dev` URL, and again on `https://headlesssports.allenzheng.com` once it is attached.
 
 1. HTTPS padlock: the address bar shows a padlock and the URL starts with `https://`.
 2. The camera prompt appears only after you press Start (nothing asks for the camera on the title screen).
@@ -46,7 +46,7 @@ Do these on the `workers.dev` URL, and again on `https://sports.allenzheng.com` 
 
 ## The custom domain
 
-The aim is `sports.allenzheng.com`. Where the DNS for `allenzheng.com` is hosted is not known, so first find out.
+The aim is `headlesssports.allenzheng.com`. Where the DNS for `allenzheng.com` is hosted is not known, so first find out.
 
 ### Which case applies
 
@@ -56,8 +56,8 @@ Run `nslookup -type=NS allenzheng.com` (Windows or macOS terminal). If the answe
 
 Either:
 
-- Edit `wrangler.jsonc`: remove the comment marks from the `routes` block (and add a comma after the `assets` block), so it reads `"routes": [{ "pattern": "sports.allenzheng.com", "custom_domain": true }]`, then run `pnpm deploy`; or
-- In the Cloudflare dashboard open the Worker `headless-sports`, then Settings, then Domains & Routes (check the current Cloudflare docs for the menu names), and add the custom domain `sports.allenzheng.com`.
+- Edit `wrangler.jsonc`: remove the comment marks from the `routes` block (and add a comma after the `assets` block), so it reads `"routes": [{ "pattern": "headlesssports.allenzheng.com", "custom_domain": true }]`, then run `pnpm deploy`; or
+- In the Cloudflare dashboard open the Worker `headless-sports`, then Settings, then Domains & Routes (check the current Cloudflare docs for the menu names), and add the custom domain `headlesssports.allenzheng.com`.
 
 Cloudflare creates the DNS record and the HTTPS certificate for you. Certificates can take a few minutes to become active. A custom domain on a Worker needs the zone on the same account as the Worker. If a record for `sports` already exists in the zone, Cloudflare asks you to remove or replace it.
 
@@ -80,7 +80,7 @@ pnpm setup:assets && pnpm build && pnpm check:dist
 pnpm exec wrangler pages deploy dist --project-name headless-sports
 ```
 
-The first run asks to create the project (production branch name: `main`). The result is `https://headless-sports.pages.dev`. Then in the Pages project open Custom domains, add `sports.allenzheng.com`, and at your DNS host create `CNAME sports -> headless-sports.pages.dev` (check the current Cloudflare docs for the exact hostname it shows). The `_headers` file works the same way on Pages, so the security headers and caching are identical. `404.html` is also served on Pages (Pages serves it automatically for unknown paths).
+The first run asks to create the project (production branch name: `main`). The result is `https://headless-sports.pages.dev`. Then in the Pages project open Custom domains, add `headlesssports.allenzheng.com`, and at your DNS host create `CNAME sports -> headless-sports.pages.dev` (check the current Cloudflare docs for the exact hostname it shows). The `_headers` file works the same way on Pages, so the security headers and caching are identical. `404.html` is also served on Pages (Pages serves it automatically for unknown paths).
 
 Trade-off: B2 avoids moving DNS but uses a product Cloudflare is steering new projects away from in favour of Workers (check the current Cloudflare docs for its status), the certificate and DNS validation depend on your DNS host's CNAME handling, and you will have two ways to deploy to keep straight (`wrangler.jsonc` is for Workers and is ignored by `pages deploy`, apart from a warning). B1 is a bigger one-time change but leaves one simple pipeline. Choose B1 unless you have a reason not to touch the zone.
 
@@ -135,7 +135,7 @@ To make models immutable later, move them to a versioned folder the same way the
 - Never cached: other origins, non-GET requests, range requests, and any response that is not a plain 200.
 - Opening the game: the network is tried first (up to 3 seconds), then the cached shell. After one visit the game opens offline.
 - Updates: after a deploy, the new worker installs in the background and waits. The running game is never swapped mid-round. The new version loads the next time the game is opened. The page records this as `window.__sw.waiting` and logs one line to the console. The code and shell caches of the old version are deleted when the new worker activates; the WASM and model cache (`hs-big-v1`) is kept so players do not download them again.
-- Force a clean slate: open the site with `?sw=0` (for example `https://sports.allenzheng.com/?sw=0`). That unregisters the worker and deletes its caches; then load the normal URL again. Use this if a bad deploy seems stuck.
+- Force a clean slate: open the site with `?sw=0` (for example `https://headlesssports.allenzheng.com/?sw=0`). That unregisters the worker and deletes its caches; then load the normal URL again. Use this if a bad deploy seems stuck.
 - Models are not `immutable` yet because their file names carry no version; the worker's background refresh and the one-week `max-age` keep them current without that.
 
 ## Rollback and taking the site down

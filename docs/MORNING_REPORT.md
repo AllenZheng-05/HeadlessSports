@@ -75,6 +75,32 @@ Checks on the branch: typecheck and lint clean, 1327 unit tests, build, UI 77 of
 
 Loose ends: pitching reads pose visibility for the glove wrist straight from `state.pose` (a tracked flag on `ArmState` would be the proper home; contract change not made). The slot constants in `src/tracking/camera/slots.ts` are module constants, not tunables. An orphaned wait loop from a round 2 builder ran for 18 hours before it was noticed and stopped; it did nothing but sleep.
 
+## Playtest round 4 (2026-11-15, branch `playtest-1`)
+
+Fourth set of notes from Allen, plus two new features started (tutorials, and a plan for pass-and-play multiplayer). Where this section disagrees with earlier ones (hand cursor, batting and javelin detection), this section is current.
+
+Checks on the branch: typecheck and lint clean, 1713 unit tests, build, default end-to-end 58 of 58, UI 99 of 99, gate 4 of 4. Soak and deploy suites were not rerun. Nothing verified by hand or with a real camera.
+
+| Area | What changed | Retest |
+|---|---|---|
+| Batting swing detection | Cause of "nothing happens" side-on: speeds are in shoulder widths taken from the live image, which collapses in profile, and a hidden far shoulder made the player count as not tracked. The body scale now comes from torso length and a learned shoulder-to-torso ratio (median of square-on frames, seeded by calibration); a faint far shoulder is accepted; a swing is read from both wrists or the one that is visible. A swing is announced once it holds 4 sw/s for a moment and is mostly sideways; waggles and grip flicks are ignored | **Swing direction.** `forward` comes from the dominant hand (right-handed: toward screen right). Hands moving the other way count only at 7.2 sw/s (`swing.backwardFactor` 1.8). If swings feel ignored, check which way you face first |
+| Javelin throw detection | The throw detector no longer stands down for body movement mid-throw (`maxBodySpeed` 9 for javelin); the wrist only has to have gone over the shoulder at some point (`minThrowTopY`); a weak cocking motion cannot hide the throw after it; a mostly upward motion is refused ("Throw forward, not up") | `minThrowSpeed` went from 3 to 6 so that cocking the arm is not a throw; a gentle throw gets "Throw faster". Lower it first if throws feel hard |
+| Hints | Batting and javelin say why a motion did not count: "Swing faster", "Swing across, not up", "Swing seen too late", "Bring your hand up past your shoulder", "I lost your arm, step back a little". No hints from arm pump while running | Whether the hints match what you did |
+| Hand cursors | One cursor per tracked hand (L and R badges); they never swap. An open hand only highlights. A hand that closes into a fist over a button and holds 250 ms selects, once; it must have been seen open over that button first. New line: "Point at a button and make a fist to choose it." | Fist reliability at distance; whether "seen open over the same button" is too fussy (can relax to "seen open anywhere") |
+| Hand tracking in the lobby | Fist select needs hand state, so hand crops now run on menu screens and whenever a pause, how-to or results overlay is up. They load in the background after the menu appears; pose frames no longer stall while a hand model loads (`CameraLandmarkSource.setNeeds`) | How long after the menu appears a fist starts working |
+| Wording | "Raise the hand you throw with" is now "Raise your dominant hand"; same in pitching and javelin copy. The climbing setup picture shows one left and one right hand | |
+| Tutorials | A "Tutorial" button on the start screen for sports that have one (`SportMeta.hasTutorial`); never opened automatically. Step panel at bottom centre with "Skip step" and "End tutorial" (mouse any time, `S` skips; a camera player steps out of frame to pause and uses a fist). "Tutorial done" offers "Play now" (no recalibration) or "Back to menu". Nothing saved. Climbing has one: 7 camera steps, 6 mouse steps, no timer, cannot fall. `?tutorial=1` starts a sport in tutorial mode | Climbing tutorial on camera. Other five sports: not built yet |
+
+**Recording real clips** (the most useful next input: every new detection threshold is fitted to a harder synthetic player, not a person):
+
+1. `pnpm dev`, open `http://localhost:5173/debug.html`, source camera, tracker "Pose", stand 2 to 3 m back with the whole body in view.
+2. Click Record, face the camera for one second (body proportions are learned then), turn if the clip is side-on, do one move, click "Stop and save".
+3. Make 3 to 5 each of: side-on swing, facing swing, javelin throw while jogging on the spot; left and right if possible. Plus negatives: standing, walking in, raising hands, a bat waggle, jogging with arm pump.
+4. Name them `batting-side-right-1.json`, `batting-facing-left-1.json`, `javelin-jog-right-1.json`, `negative-waggle.json` and so on, and put them in `tests/recordings/`.
+5. `RECORDINGS_VERBOSE=1 pnpm exec vitest run src/input/recognizers/recordings.test.ts` replays them and prints every event with speeds.
+
+Loose ends: fully side-on archery reads a full draw only 6% above `drawFull` 1.65 (unchanged by this round, but worth a try; lowering to about 1.4 is the fix if it is hard). An existing test still requires a swing that started with both hands clearly visible to be dropped if one disappears for 220 ms. Whole-game end-to-end tests now carry explicit time limits (bowling, climbing, pitching mouse rounds, the camera path) because they play in real time; the global 60 s limit is unchanged. No unit test covers the `setNeeds` frame gating (no harness for `CameraLandmarkSource`). Pitching still reads glove-wrist visibility from `state.pose`.
+
 ## How to run
 
 ```

@@ -15,5 +15,5 @@
   // certificate for you. If the zone is elsewhere, read docs/DEPLOY.md, "The custom domain".
   // Uncomment (remove the comment marks and add a comma after the "assets" block above):
   //
-  // "routes": [{ "pattern": "sports.allenzheng.com", "custom_domain": true }]
+  // "routes": [{ "pattern": "headlesssports.allenzheng.com", "custom_domain": true }]
 }

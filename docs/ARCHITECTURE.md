@@ -2,7 +2,7 @@
 
 ## What we are building
 
-Headless Sports is a Wii Sports-style collection of sports mini-games that runs entirely in the browser, with **no controller**. The player stands in front of their computer's webcam, a computer-vision model tracks their body and hands, and their movements control a simple 3D athlete. It will live at `sports.allenzheng.com` (Allen owns `allenzheng.com`; other games may get their own subdomains later, so this repo is only this game).
+Headless Sports is a Wii Sports-style collection of sports mini-games that runs entirely in the browser, with **no controller**. The player stands in front of their computer's webcam, a computer-vision model tracks their body and hands, and their movements control a simple 3D athlete. It will live at `headlesssports.allenzheng.com` (Allen owns `allenzheng.com`; other games may get their own subdomains later, so this repo is only this game).
 
 The sports are ones where the player does one thing at a time: throw, swing, grab, run in place. Each sport is a short, replayable round with a score or high score.
 

@@ -1,6 +1,6 @@
 # Headless Sports
 
-A Wii Sports-style collection of sports mini-games that runs entirely in the browser with no controller. The player stands in front of a webcam; MediaPipe tracks body and hands on-device; movements drive a low-poly **headless** athlete (torso, arms, legs, mitts, feet, no head). Static site, desktop only, target `sports.allenzheng.com`. Owner: Allen.
+A Wii Sports-style collection of sports mini-games that runs entirely in the browser with no controller. The player stands in front of a webcam; MediaPipe tracks body and hands on-device; movements drive a low-poly **headless** athlete (torso, arms, legs, mitts, feet, no head). Static site, desktop only, target `headlesssports.allenzheng.com`. Owner: Allen.
 
 The repo is the source of truth. Start with `docs/ROADMAP.md` (status and next task) and `docs/MORNING_REPORT.md` (state of the build, how to run it, playtest checklists).
 
@@ -19,7 +19,7 @@ pnpm test:e2e         # Playwright, fake camera, against `pnpm preview` (run pnp
 
 `pnpm typecheck`, `pnpm lint` and `pnpm test` must pass before any commit. A milestone is done only when those plus `pnpm build` and `pnpm test:e2e` pass. Never weaken or delete a test to get there.
 
-Query flags: `?input=debug` (camera off, play with the mouse only), `?source=synthetic&script=<name>` / `?source=replay&clip=<name>` (landmark source), `?renderer=webgl`, `?pose=full`, `?skipGate=1`, `?timeScale=<n>` (synthetic and replay only), `?debug=1` (tunables panel), `?hand=left|right` (default dominant hand for mouse play).
+Query flags: `?input=debug` (camera off, play with the mouse only), `?source=synthetic&script=<name>` / `?source=replay&clip=<name>` (landmark source), `?renderer=webgl`, `?pose=full`, `?skipGate=1`, `?timeScale=<n>` (synthetic and replay only), `?debug=1` (tunables panel), `?hand=left|right` (default dominant hand for mouse play), `?tutorial=1` (with `?sport=`, start that sport in tutorial mode).
 
 ## Hard constraints
 
