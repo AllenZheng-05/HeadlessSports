@@ -118,6 +118,35 @@ In every tutorial: no timer, no limits on attempts, nothing that can be lost, no
 
 Loose end: `e2e/game.spec.ts` "the how-to overlay pauses the round and resumes it" has failed twice across many full runs (phase still `paused` after Escape closes the overlay), both times on a heavily loaded machine, and passed every other time. Not yet explained; watch for it.
 
+## Pass-and-play multiplayer (2026-11-16, branch `playtest-1`)
+
+Local multiplayer for all six sports. Allen's decisions: always pass-and-play (one player on camera at a time), up to 4 players, every player types a name, no simultaneous play, no pitcher-against-batter mode. Single player is unchanged (confirmed by two reviews and by the untouched single-player tests).
+
+Checks on the branch: typecheck and lint clean, 1970 unit tests, build, default end-to-end 100 of 100, UI 129 of 129, gate 4 of 4. Verified with the synthetic player and with real mouse events only. **Nothing has been tried with real people**: the step-in, per-player calibration and camera handover are the least tested parts of the game.
+
+How it works:
+
+- **Start screen:** a Players choice, 1 to 4. With 2 or more, Play goes to a names screen: one field per player (12 characters, prefilled with the names last used on this device), and in mouse mode a Left / Right dominant-hand choice per player for sports that use it. Tutorial always starts single player.
+- **Setup on camera:** each player in turn gets "Mia, step in" and then the sport's normal calibration, including the dominant-hand step. Each player's calibration and hand are kept for the session.
+- **Colours:** coral, blue, sunny yellow, lavender, on the athlete's mitts and feet, the name chip and the results row. Names always appear beside the colour; two players with the same name show as "Mia (blue)".
+- **Turns:** see the table. Standings sit in the bottom-left corner with a star on the leader.
+- **Handover:** the round pauses and a "Mia, you're up" card shows the standings. On camera it continues by itself once it has been up 2 s, the frame has been empty for 0.7 s, and someone has then stood still for 1 s. If nobody leaves the frame it waits, and after 6 s says "Swap places, or make a fist on Ready". A fist or click on Ready, or Enter, always works. With the mouse: Ready only. The card reads "Go" for 0.8 s before play resumes. Tracking state (movement in progress, body-size estimate) is reset for each player.
+- **Results:** ranked table, ties share a rank, "Mia wins" or "It's a tie", then Play again (same players, no retyping or recalibrating), Change names, Back to menu. Nothing from multiplayer is saved to scores or bests. Names and dominant hands are remembered on the device.
+- **Flags:** `?players=2..4`, `?names=Mia,Sam`, `?hands=r,l` with `?sport=` start a game directly.
+
+| Sport | A turn is | Notes |
+|---|---|---|
+| Archery | one arrow | Same wind for everyone on the same arrow number; each arrow on the target carries a bead in its shooter's colour |
+| Bowling | one frame | Fresh full rack and reset physics every turn; own scorecard per player, name in the first cell; rack and arm switch sides for a left-hander |
+| Batting | one set of pitches | Everyone faces the same pitches; batter's side of the plate, stance and expected swing direction follow the player's hand |
+| Javelin | one attempt | A pennant in each player's colour marks their best; standings show best so far or "no mark" |
+| Pitching | one set of pitches | Everyone gets the same catcher's calls; glove hand, aim, curve break follow the player's hand; zone dots cleared between players |
+| Climbing | a whole climb | Same wall; lines in earlier players' colours mark their heights; ranked by height shown, then faster time |
+
+Retest with real people, in this order: (1) the camera handover: does the card continue at the right moment when players swap, and never while the same player is still standing there; (2) a fist on Ready from playing distance; (3) a left-hander following a right-hander in batting, pitching, bowling and javelin; (4) whether identical pitches for every batter feel fair or repetitive; (5) the "Go" card and the four colours by eye (never looked at outside the test browser).
+
+Loose ends: the bowling scorecard cannot colour a cell, so the name there is plain text. Climbing's wall lines carry no names. Joined-emoji names count as one character each.
+
 ## How to run
 
 ```
