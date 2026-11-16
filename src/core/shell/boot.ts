@@ -22,10 +22,14 @@ import { GameLoop } from '../loop';
 import {
   clampPlayers,
   defaultName,
+  displayNames,
+  loadLastHands,
   loadLastNames,
   makePlayers,
+  prefillHands,
   prefillNames,
   sanitiseName,
+  saveLastHands,
   saveLastNames,
 } from '../multiplayer/players';
 import { HandoverReadiness, createPresenceSample, samplePresence } from '../multiplayer/readiness';
@@ -187,7 +191,12 @@ class Shell {
       const epoch = this.epoch;
       const seats = this.directSeats(entry.meta);
       if (seats !== null) {
-        await this.runMulti(entry, seats.length, epoch, this.defaultSetup(entry.meta, seats));
+        await this.runMulti(
+          entry,
+          seats.length,
+          epoch,
+          this.defaultSetup(entry.meta, seats, flags.hands ?? undefined),
+        );
       } else {
         await this.playSport(
           entry,
@@ -401,18 +410,33 @@ class Shell {
     return makePlayers(flags.names ?? [], clampPlayers(flags.players, multi.maxPlayers));
   }
 
-  /** Everyone gets the default calibration (mouse play, synthetic and replay sources). */
-  private defaultSetup(meta: SportMeta, players: readonly PlayerInfo[]): MultiplayerSetup {
+  /**
+   * Everyone gets the default calibration (mouse play, synthetic and replay sources), each seat
+   * with its own dominant hand where `hands` says so, else the how-to card's choice.
+   */
+  private defaultSetup(
+    meta: SportMeta,
+    players: readonly PlayerInfo[],
+    hands?: readonly (Side | null)[],
+  ): MultiplayerSetup {
     return {
       players,
-      calibrations: players.map(() => defaultCalibration(meta.stance, this.hand)),
+      calibrations: players.map((_, i) => defaultCalibration(meta.stance, hands?.[i] ?? this.hand)),
     };
   }
 
-  /** The typed names, sanitised and remembered for next time; null for Back. */
-  private async askNames(entry: SportEntry, count: number): Promise<PlayerInfo[] | null> {
+  /**
+   * The typed names, sanitised and remembered for next time, and (mouse play, sports that care)
+   * each seat's dominant hand; null for Back.
+   */
+  private async askNames(
+    entry: SportEntry,
+    count: number,
+  ): Promise<{ players: PlayerInfo[]; hands: Side[] } | null> {
     this.hook.phase = 'names';
-    const typed = await this.ui.showNames(entry.meta, prefillNames(count));
+    const askHands = this.input.source === null && entry.meta.usesHandedness !== false;
+    const options = askHands ? { hands: prefillHands(count, this.hand) } : undefined;
+    const typed = await this.ui.showNames(entry.meta, prefillNames(count), options);
     if (typed === null) return null;
     const names = typed.map((value, i) => sanitiseName(value, defaultName(i)));
     const remembered = loadLastNames();
@@ -420,11 +444,19 @@ class Shell {
       remembered[i] = name;
     });
     saveLastNames(remembered);
-    return makePlayers(names, count);
+    const hands = options?.hands ?? names.map(() => this.hand);
+    if (options !== undefined) {
+      const lastHands = loadLastHands();
+      hands.forEach((side, i) => {
+        lastHands[i] = side;
+      });
+      saveLastHands(lastHands);
+    }
+    return { players: makePlayers(names, count), hands };
   }
 
   /**
-   * Names, per-player setup and the game, again and again for "Change players". `first` is a ready
+   * Names, per-player setup and the game, again and again for "Change names". `first` is a ready
    * setup (direct start) that skips the names the first time. 'back' means the names screen was
    * left with Back (or a step-in was cancelled): the caller shows the how-to card again.
    */
@@ -437,10 +469,10 @@ class Shell {
     let setup: MultiplayerSetup | null | undefined = first;
     for (;;) {
       if (setup === undefined) {
-        const players = await this.askNames(entry, count);
+        const named = await this.askNames(entry, count);
         if (epoch !== this.epoch) return 'done';
-        if (players === null) return 'back';
-        setup = await this.setupSeats(entry.meta, players, epoch);
+        if (named === null) return 'back';
+        setup = await this.setupSeats(entry.meta, named.players, epoch, named.hands);
         if (epoch !== this.epoch) return 'done';
         // Cancelling a step-in returns to the names.
         if (setup === null) {
@@ -469,11 +501,12 @@ class Shell {
     meta: SportMeta,
     players: readonly PlayerInfo[],
     epoch: number,
+    hands?: readonly Side[],
   ): Promise<MultiplayerSetup | null> {
-    if (this.input.source?.kind !== 'camera') return this.defaultSetup(meta, players);
+    if (this.input.source?.kind !== 'camera') return this.defaultSetup(meta, players, hands);
     const calibrations: Calibration[] = [];
     for (const player of players) {
-      const choice = await this.stepIn(player, player.index > 0, epoch);
+      const choice = await this.stepIn(player, players, player.index > 0, epoch);
       if (epoch !== this.epoch) return null;
       if (choice !== 'ready') return null;
       calibrations.push(await this.calibrate(meta, epoch));
@@ -489,6 +522,7 @@ class Shell {
    */
   private async stepIn(
     player: PlayerInfo,
+    players: readonly PlayerInfo[],
     requireChange: boolean,
     epoch: number,
   ): Promise<'ready' | 'cancel' | 'stale'> {
@@ -501,12 +535,20 @@ class Shell {
     const auto = new Promise<'ready' | 'stale'>((resolve) => {
       settle = resolve;
     });
+    const ui = this.ui;
     const tick = (now: number): void => {
       if (epoch !== this.epoch) settle('stale');
       else if (readiness.update(now, samplePresence(input.state, sample))) settle('ready');
+      else ui.setHandoverHint(readiness.hintDue(now));
     };
     this.perFrame = tick;
-    const card = this.ui.showHandover({ player, mode: 'step-in', camera: true, standings: [] });
+    const card = this.ui.showHandover({
+      player,
+      label: displayNames(players)[player.index],
+      mode: 'step-in',
+      camera: true,
+      standings: [],
+    });
     const choice = await Promise.race([card, auto]);
     if (this.perFrame === tick) this.perFrame = null;
     this.ui.hideHandover();
@@ -607,6 +649,9 @@ class Shell {
     if (end === 'failed') this.notice = ROUND_BROKE_NOTICE;
     this.host.release();
     this.hook.sportId = null;
+    // The game is over: nobody stays "in" it, and the next one starts on seat 0.
+    this.hook.players = 1;
+    this.hook.seat = 0;
     this.hook.tutorial = false;
     // Back in the lobby. A sport that ran without pose needs it back (awaited); hand crops follow
     // in the background so the menu is never held up by the hand model.

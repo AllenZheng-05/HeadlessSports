@@ -200,6 +200,14 @@ export interface InputProvider {
   start(needs: TrackerNeeds): Promise<void>;
   setNeeds(needs: TrackerNeeds): Promise<void>;
   setCalibration(calibration: Calibration | null): void;
+  /**
+   * A different person is about to play (pass-and-play handover): forget everything learned about
+   * the last one. Clears filters, kinematics, the learned body-scale ratio, recognizer state and
+   * every gesture event still queued, so nothing half-detected from the previous player can fire.
+   * Calibration is kept; call `setCalibration` for the new person (before or after). Optional:
+   * providers with nothing to forget (mouse input) may leave it out.
+   */
+  resetPlayer?(): void;
   /** Call once per rendered frame before the sport updates. Pumps the source. */
   update(nowMs: number): void;
   on<T extends GameEventType>(type: T, handler: (event: GameEventOf<T>) => void): Unsubscribe;

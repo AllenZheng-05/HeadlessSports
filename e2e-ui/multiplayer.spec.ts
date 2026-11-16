@@ -62,10 +62,18 @@ test.describe('Players control', () => {
     expect(problems).toEqual([]);
   });
 
-  test('is absent for a sport without multiplayer', async ({ page }) => {
+  test('is absent for a sport without multiplayer and present for one with it', async ({
+    page,
+  }) => {
+    // The warm-up and the harness stand-in sports have no `multiplayer`; every real sport does.
+    for (const id of ['warmup', '1']) {
+      await page.goto(`/ui-harness.html?screen=howto&sport=${id}&input=debug&multi=1`);
+      await page.waitForTimeout(500);
+      await expect(page.locator('.players-toggle')).toHaveCount(0);
+    }
     await page.goto('/ui-harness.html?screen=howto&sport=bowling&input=debug&multi=1');
     await page.waitForTimeout(500);
-    await expect(page.locator('.players-toggle')).toHaveCount(0);
+    await expect(page.locator('.players-toggle')).toHaveCount(1);
   });
 
   for (const viewport of VIEWPORTS) {
@@ -124,6 +132,45 @@ test.describe('names screen', () => {
     expect(problems).toEqual([]);
   });
 
+  test('mouse play adds a labelled dominant-hand choice per player, reachable by keyboard', async ({
+    page,
+  }) => {
+    await page.goto('/ui-harness.html?screen=names&seats=3&hands=1&input=debug');
+    await page.waitForTimeout(700);
+    await page.screenshot({ path: 'e2e-ui/screenshots/names-hands.png' });
+    const groups = page.locator('.name-hand');
+    await expect(groups).toHaveCount(3);
+    await expect(groups.nth(1)).toHaveAttribute('aria-label', 'Player 2 dominant hand');
+    await expect(groups.nth(1).locator('[aria-pressed="true"]')).toHaveText('\u2713 Left');
+    // Tab from the first name goes through its hand choice.
+    await page.locator('.name-input').first().focus();
+    await page.keyboard.press('Tab');
+    await expect(groups.nth(0).locator('button').first()).toBeFocused();
+    await page.keyboard.press('Tab');
+    await page.keyboard.press('Enter');
+    await expect(groups.nth(0).locator('[aria-pressed="true"]')).toHaveText('\u2713 Right');
+  });
+
+  for (const viewport of VIEWPORTS) {
+    test(`fits ${viewport.width}x${viewport.height} with four players and the hand choice`, async ({
+      page,
+    }) => {
+      await page.setViewportSize(viewport);
+      await page.goto('/ui-harness.html?screen=names&seats=4&hands=1&input=debug');
+      await page.waitForTimeout(700);
+      expect(inside(await box(page, '.card-names'), viewport)).toBe(true);
+      expect(inside(await box(page, '.card-names .btn-big'), viewport)).toBe(true);
+      for (let i = 0; i < 4; i++) {
+        expect(inside(await box(page, `.name-row:nth-child(${i + 1}) .name-hand`), viewport)).toBe(
+          true,
+        );
+        expect(
+          (await box(page, `.name-row:nth-child(${i + 1}) .name-input`)).width,
+        ).toBeGreaterThan(200);
+      }
+    });
+  }
+
   test('each field carries its player colour, name and a distinct swatch', async ({ page }) => {
     await page.goto('/ui-harness.html?screen=names&seats=3&input=debug');
     await page.waitForTimeout(700);
@@ -173,6 +220,26 @@ test.describe('handover card', () => {
     await page.getByRole('button', { name: 'Ready' }).click();
     await expect.poll(() => resolved(page)).toBe('ready');
     expect(problems).toEqual([]);
+  });
+
+  test('a camera card shows the swap-places line when asked, and the card still fits', async ({
+    page,
+  }) => {
+    for (const viewport of VIEWPORTS) {
+      await page.setViewportSize(viewport);
+      await page.goto(
+        '/ui-harness.html?screen=handover&seats=4&who=3&lead=2&cam=1&hint=1&hand=pose',
+      );
+      await page.waitForTimeout(700);
+      await expect(page.locator('.handover-swap')).toHaveText(
+        'Swap places, or make a fist on Ready',
+      );
+      await expect(page.locator('.handover-swap')).toBeVisible();
+      await expect(page.locator('.handover-row.leading .handover-lead')).toHaveCount(1);
+      expect(inside(await box(page, '.card-handover'), viewport)).toBe(true);
+      expect(inside(await box(page, '.handover-ready'), viewport)).toBe(true);
+      expect(inside(await box(page, '.handover-swap'), viewport)).toBe(true);
+    }
   });
 
   test('Enter is Ready', async ({ page }) => {
@@ -256,9 +323,9 @@ test.describe('results table', () => {
     await expect(page.locator('.rank-num')).toHaveText(['1', '1', '3']);
   });
 
-  test('offers Play again, Change players and Back to menu', async ({ page }) => {
+  test('offers Play again, Change names and Back to menu', async ({ page }) => {
     await page.goto('/ui-harness.html?screen=multiresults&seats=2&input=debug');
-    await page.getByRole('button', { name: 'Change players' }).click();
+    await page.getByRole('button', { name: 'Change names' }).click();
     await expect.poll(() => resolved(page)).toBe('change');
   });
 
@@ -268,7 +335,7 @@ test.describe('results table', () => {
       await page.goto('/ui-harness.html?screen=multiresults&seats=4&input=debug');
       await page.waitForTimeout(700);
       expect(inside(await box(page, '.card-multi-results'), viewport)).toBe(true);
-      for (const name of ['Play again', 'Change players', 'Back to menu']) {
+      for (const name of ['Play again', 'Change names', 'Back to menu']) {
         const b = await page.getByRole('button', { name }).boundingBox();
         expect(b && inside(b, viewport), name).toBe(true);
       }

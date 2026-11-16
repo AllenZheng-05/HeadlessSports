@@ -1,4 +1,5 @@
-import type { Calibration, InputProvider } from '../../input/types';
+import { asMouseControl } from '../../input/debug/mouseControl';
+import type { Calibration, InputProvider, Side } from '../../input/types';
 import type { TrackerNeeds } from '../../tracking/types';
 import { disposeObjectTree } from '../../render/dispose';
 import { AvatarRig } from '../../render/avatar/AvatarRig';
@@ -11,8 +12,8 @@ import type { ScriptStep } from '../../tracking/synthetic/script';
 import type { Ui } from '../../ui/types';
 import { HandoverReadiness, createPresenceSample, samplePresence } from '../multiplayer/readiness';
 import type { PresenceSample } from '../multiplayer/readiness';
-import { PLAYER_COLORS } from '../multiplayer/players';
-import { singleResultFallback } from '../multiplayer/ranking';
+import { PLAYER_COLORS, displayNames } from '../multiplayer/players';
+import { blankResult, singleResultFallback } from '../multiplayer/ranking';
 import { MULTI_DONE } from '../multiplayer/result';
 import type { Flags } from '../flags';
 import type { GameLoop } from '../loop';
@@ -62,10 +63,14 @@ interface Handover {
   index: number;
   onReady: () => void;
   readiness: HandoverReadiness;
+  /** The player is ready and the card reads "Go"; the round resumes when it closes. */
+  going: boolean;
+  /** Game ms the "Go" was first seen by a frame; -1 until then. */
+  goStartMs: number;
 }
 
-/** The "Go" that follows a handover, ms. */
-const GO_BANNER_MS = 800;
+/** How long the handover card reads "Go" before it closes and the round resumes, game ms. */
+export const GO_CARD_MS = 800;
 
 /** The same trackers plus hand crops, for overlays the hand cursor operates (fist select). */
 export function withHandCrops(needs: TrackerNeeds): TrackerNeeds {
@@ -119,7 +124,17 @@ export class SportHost {
   /** Seat in front of the camera. */
   private seatNow = 0;
   private standingText: string[] = [];
+  /** Per seat: the last number reported to `setStanding`, the first one, and whether it has moved. */
+  private standingScore: number[] = [];
+  private standingFirst: (number | null)[] = [];
+  private standingMoved: boolean[] = [];
+  private standingLeading: boolean[] = [];
+  private higherIsBetter = true;
   private handover: Handover | null = null;
+  /** The mouse input's selected hand before a pass-and-play game took it over, to put back after. */
+  private mouseHandBefore: Side | null = null;
+  /** A `handOver` asked for before the round was playing: it runs once the phase is 'playing'. */
+  private queuedHandover: { index: number; onReady: () => void } | null = null;
   /** The sport asked for the seat that is already up: its callback fires on the next frame. */
   private sameSeat: (() => void) | null = null;
   private readonly presence: PresenceSample = createPresenceSample();
@@ -176,6 +191,11 @@ export class SportHost {
     }
     this.seatNow = 0;
     this.standingText = this.players.map(() => '');
+    this.standingScore = this.players.map(() => 0);
+    this.standingFirst = this.players.map(() => null);
+    this.standingMoved = this.players.map(() => false);
+    this.standingLeading = this.players.map(() => false);
+    this.higherIsBetter = entry.meta.score.higherIsBetter;
     this.multiResults = null;
     const round: Round = {
       tutorial,
@@ -212,7 +232,7 @@ export class SportHost {
 
   /** Number of seats in the current round (1 unless pass-and-play). */
   get playerCount(): number {
-    return this.players.length;
+    return Math.max(1, this.players.length);
   }
 
   /** Seat in front of the camera. */
@@ -299,6 +319,9 @@ export class SportHost {
    */
   private setManualPause(open: boolean): void {
     if (open && this.phase !== 'playing' && this.phase !== 'paused') return;
+    // Nothing in a round can be opened from under the handover card. An overlay that was already
+    // open when the card appeared keeps its flag: only its own close clears it.
+    if (open && this.handover !== null) return;
     this.manualPause = open;
     // A handover owns the pause: closing the how-to must not resume the round under the card.
     if (this.handover !== null) return;
@@ -412,7 +435,11 @@ export class SportHost {
       const calibrationOf = (): Calibration | null =>
         multi ? (this.calibrations[this.seatNow] ?? null) : calibration;
       if (multi) {
+        // Whoever calibrated last (or played the last game) is not seat 0: start from a clean slate.
+        this.input.resetPlayer?.();
         this.input.setCalibration(this.calibrations[0] ?? null);
+        this.mouseHandBefore = asMouseControl(this.input)?.selectedHand ?? null;
+        this.selectMouseHand(0);
         avatar.setPlayerColor((players[0] as PlayerInfo).color);
         this.ui.standings.show(players);
         this.ui.standings.setCurrent(0);
@@ -425,6 +452,7 @@ export class SportHost {
         },
         handOver: (index, onReady) => this.handOver(round, index, onReady),
         setStanding: (index, score, text) => this.setStanding(round, index, score, text),
+        handednessOf: (index) => this.calibrations[index]?.handedness ?? 'right',
       };
       const ctx: SportContext = {
         stage,
@@ -471,6 +499,7 @@ export class SportHost {
       this.clearSinceMs = -1;
       if (!round.finished) this.phase = 'playing';
       sport.start();
+      this.runQueuedHandover(round);
     } catch (err) {
       if (gen === this.generation) this.fail(err);
       else console.error('Sport failed after it was dismissed', err);
@@ -510,14 +539,62 @@ export class SportHost {
       if (only !== undefined) this.finishRound(round, only);
       return;
     }
-    this.multiResults = results;
+    let full = results;
+    if (results.length < this.players.length) {
+      console.error(
+        `finishMulti() got ${results.length} results for ${this.players.length} seats; the rest are unranked`,
+      );
+      const padded = results.slice();
+      while (padded.length < this.players.length) padded.push(blankResult());
+      full = padded;
+    }
+    this.multiResults = full;
     this.finishRound(round, MULTI_DONE);
   }
 
-  private setStanding(round: Round, index: number, _score: number, text: string): void {
+  private setStanding(round: Round, index: number, score: number, text: string): void {
     if (!round.multi || round !== this.round || index < 0 || index >= this.players.length) return;
     this.standingText[index] = text;
     this.ui.standings.set(index, text);
+    this.standingScore[index] = score;
+    const first = this.standingFirst[index];
+    if (first === null || first === undefined) this.standingFirst[index] = score;
+    else if (score !== first) this.standingMoved[index] = true;
+    this.updateLeaders();
+  }
+
+  /**
+   * Mark the seat(s) with the best number among the seats that have scored (their number has moved
+   * from the first one reported). Ties are all marked; nobody is marked before anyone has scored.
+   */
+  private updateLeaders(): void {
+    let best: number | null = null;
+    for (let i = 0; i < this.players.length; i++) {
+      if (this.standingMoved[i] !== true) continue;
+      const v = this.standingScore[i] as number;
+      if (best === null || (this.higherIsBetter ? v > best : v < best)) best = v;
+    }
+    for (let i = 0; i < this.players.length; i++) {
+      const lead =
+        best !== null && this.standingMoved[i] === true && this.standingScore[i] === best;
+      if (lead === this.standingLeading[i]) continue;
+      this.standingLeading[i] = lead;
+      this.ui.standings.setLeader(i, lead);
+    }
+  }
+
+  /** Mouse play: a swing or throw with no direction uses the selected hand, so follow the seat. */
+  private selectMouseHand(seat: number): void {
+    asMouseControl(this.input)?.selectHand(this.calibrations[seat]?.handedness ?? 'right');
+  }
+
+  /** Run the handover a sport asked for while the round was still loading. */
+  private runQueuedHandover(round: Round): void {
+    const queued = this.queuedHandover;
+    if (queued === null) return;
+    this.queuedHandover = null;
+    if (round !== this.round || round.finished || this.phase === 'idle') return;
+    this.handOver(round, queued.index, queued.onReady);
   }
 
   /** Ask for seat `index`: pause, show the card, and call `onReady` once the player is in place. */
@@ -529,6 +606,13 @@ export class SportHost {
     }
     if (!round.multi || index < 0 || index >= this.players.length) {
       console.error(`handOver(${index}) is not a seat of this game`);
+      return;
+    }
+    if (this.phase === 'loading') {
+      // Asked for from the factory: the card cannot go up under the loading screen (showPlaying
+      // would take it down again). It runs the moment the round is playing.
+      if (this.queuedHandover !== null) console.error('handOver() while one is already queued');
+      else this.queuedHandover = { index, onReady };
       return;
     }
     if (this.handover !== null) {
@@ -543,6 +627,8 @@ export class SportHost {
         requireChange: true,
         timeOnly: source !== null && source.kind !== 'camera',
       }),
+      going: false,
+      goStartMs: -1,
     };
     this.handover = hv;
     this.phase = 'paused';
@@ -552,10 +638,12 @@ export class SportHost {
     const entries = this.players.map((player) => ({
       player,
       text: this.standingText[player.index] ?? '',
+      leading: this.standingLeading[player.index] === true,
     }));
     void this.ui
       .showHandover({
         player: this.players[index] as PlayerInfo,
+        label: displayNames(this.players)[index],
         mode: 'up',
         camera: source !== null && source.kind === 'camera',
         standings: entries,
@@ -568,23 +656,42 @@ export class SportHost {
   /** Camera input moves on by itself once the next person is in place (see readiness.ts). */
   private checkHandover(nowMs: number): void {
     const hv = this.handover;
+    if (hv !== null && hv.going) {
+      // The card reads "Go": count game time, then close it and let the round run.
+      if (hv.goStartMs < 0) hv.goStartMs = nowMs;
+      else if (nowMs - hv.goStartMs >= GO_CARD_MS) this.finishHandover(hv);
+      return;
+    }
     const source = this.input.source;
     if (hv === null || source === null) return;
     samplePresence(this.input.state, this.presence);
     if (hv.readiness.update(nowMs, this.presence)) this.completeHandover(hv);
+    else if (source.kind === 'camera') this.ui.setHandoverHint(hv.readiness.hintDue(nowMs));
   }
 
+  /** The next player is ready: the card turns to "Go" for a moment before the round resumes. */
   private completeHandover(hv: Handover): void {
+    if (this.handover !== hv || hv.going) return;
+    hv.going = true;
+    this.ui.showHandoverGo();
+  }
+
+  private finishHandover(hv: Handover): void {
     if (this.handover !== hv) return;
     this.handover = null;
     this.ui.hideHandover();
     this.seatNow = hv.index;
     const player = this.players[hv.index] as PlayerInfo;
+    // A different person: drop the last one's filters, recognizer state, learned body scale and
+    // any gesture still queued, then seed from the new seat's calibration.
+    this.input.resetPlayer?.();
     this.input.setCalibration(this.calibrations[hv.index] ?? null);
+    this.selectMouseHand(hv.index);
     this.avatar?.setPlayerColor(player.color);
     this.ui.standings.setCurrent(hv.index);
-    this.ui.hud.setBanner('Go', GO_BANNER_MS);
-    if (this.phase === 'paused' && !this.manualPause) this.resume();
+    // Resume whatever the phase says: the handover is what paused the loop. Only a how-to overlay
+    // that was already open before the card appeared may keep the round held.
+    if (!this.manualPause && this.phase !== 'finished' && this.phase !== 'idle') this.resume();
     hv.onReady();
   }
 
@@ -634,6 +741,19 @@ export class SportHost {
     if (this.handover !== null) this.ui.hideHandover();
     this.handover = null;
     this.sameSeat = null;
+    this.queuedHandover = null;
+    // Back to the single-player setting.
+    if (this.mouseHandBefore !== null) asMouseControl(this.input)?.selectHand(this.mouseHandBefore);
+    this.mouseHandBefore = null;
+    // The next game starts from a clean slate: nobody stays "in the game" after it ends.
+    this.players = [];
+    this.calibrations = [];
+    this.seatNow = 0;
+    this.standingText = [];
+    this.standingScore = [];
+    this.standingFirst = [];
+    this.standingMoved = [];
+    this.standingLeading = [];
     if (this.phase !== 'idle') this.ui.hud.clear();
     if (this.phase === 'paused') this.ui.showPause(null);
     this.shadow?.dispose();

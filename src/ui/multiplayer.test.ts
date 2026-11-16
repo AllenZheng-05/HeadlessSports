@@ -93,10 +93,67 @@ describe('names screen', () => {
     expect(inputs[1]?.getAttribute('aria-label')).toContain('Player 2');
   });
 
-  it('limits a name to 12 characters in the field', () => {
+  it('limits a name to 12 characters (code points) in the field, so an emoji counts once', () => {
     void ui.showNames(archery, ['a', 'b']);
-    const input = root.querySelector<HTMLInputElement>('.name-input');
-    expect(input?.maxLength).toBe(12);
+    const input = root.querySelector<HTMLInputElement>('.name-input') as HTMLInputElement;
+    // No maxLength: it counts UTF-16 units and would cut an emoji name at about six.
+    expect(input.maxLength).toBe(-1);
+    type(input, 'abcdefghijklmnop');
+    expect(input.value).toBe('abcdefghijkl');
+    type(input, '\u{1F600}'.repeat(20));
+    expect(Array.from(input.value)).toHaveLength(12);
+    expect(input.value).toBe('\u{1F600}'.repeat(12));
+  });
+
+  it('never cuts a joined emoji in the middle when clipping', () => {
+    const family = '\u{1F468}‍\u{1F469}‍\u{1F467}‍\u{1F466}';
+    void ui.showNames(archery, ['b', 'c']);
+    const input = root.querySelector<HTMLInputElement>('.name-input') as HTMLInputElement;
+    type(input, 'a'.repeat(12) + family);
+    expect(input.value).toBe('a'.repeat(12));
+    type(input, family.repeat(20));
+    expect(input.value).toBe(family.repeat(12));
+  });
+
+  it('a prefilled name longer than 12 characters is cut the same way', () => {
+    void ui.showNames(archery, ['x'.repeat(30), 'b']);
+    const input = root.querySelector<HTMLInputElement>('.name-input') as HTMLInputElement;
+    expect(input.value).toBe('x'.repeat(12));
+  });
+
+  it('shows no dominant-hand choice without options', () => {
+    void ui.showNames(archery, ['Mia', 'Sam']);
+    expect(root.querySelector('.name-hand')).toBeNull();
+    expect(root.querySelector('.card-names.with-hands')).toBeNull();
+  });
+
+  it('offers a labelled Left / Right choice per player, starting from the given hands', async () => {
+    const hands: ('left' | 'right')[] = ['right', 'left', 'right'];
+    const p = ui.showNames(archery, ['Mia', 'Sam', 'Zoe'], { hands });
+    const groups = [...root.querySelectorAll<HTMLElement>('.name-hand')];
+    expect(groups).toHaveLength(3);
+    expect(groups[1]?.getAttribute('role')).toBe('group');
+    expect(groups[1]?.getAttribute('aria-label')).toBe('Player 2 dominant hand');
+    const on = (g: HTMLElement | undefined): string | null =>
+      g?.querySelector('[aria-pressed="true"]')?.getAttribute('data-hand') ?? null;
+    expect(groups.map(on)).toEqual(['right', 'left', 'right']);
+    // The check mark carries the choice as well as colour.
+    expect(groups[1]?.querySelector('[data-hand="left"]')?.textContent).toBe('\u2713 Left');
+    // Real buttons: keyboard reachable.
+    expect(groups[0]?.querySelector('button')?.tagName).toBe('BUTTON');
+    (groups[0]?.querySelector('[data-hand="left"]') as HTMLElement).click();
+    expect(hands).toEqual(['left', 'left', 'right']);
+    expect(on(groups[0])).toBe('left');
+    click('.screen-names .btn-big');
+    await expect(p).resolves.toEqual(['Mia', 'Sam', 'Zoe']);
+  });
+
+  it('the hand choice is not a name field and does not take Enter or typing away', () => {
+    void ui.showNames(archery, ['Mia', 'Sam'], { hands: ['right', 'right'] });
+    const inputs = [...root.querySelectorAll<HTMLInputElement>('.name-input')];
+    expect(inputs).toHaveLength(2);
+    enter(inputs[0] as HTMLElement);
+    expect(document.activeElement).toBe(inputs[1]);
   });
 
   it('Enter moves to the next field and starts from the last', async () => {
@@ -270,11 +327,203 @@ describe('multiplayer results table', () => {
     const p = ui.showMultiResults(archery, rows, winnerLine(rows));
     expect(root.querySelector('.results-headline')?.textContent).toBe('Sam wins');
     const labels = [...root.querySelectorAll('.actions .btn')].map((b) => b.textContent);
-    expect(labels).toEqual(['Play again', 'Change players', 'Back to menu']);
+    expect(labels).toEqual(['Play again', 'Change names', 'Back to menu']);
     click('.actions .btn:nth-child(2)');
     await expect(p).resolves.toBe('change');
     const q = ui.showMultiResults(archery, rows, 'x');
     click('.actions .btn:nth-child(3)');
     await expect(q).resolves.toBe('menu');
+  });
+});
+
+describe('handover card additions', () => {
+  const players = makePlayers(['Mia', 'Sam', 'Zoe'], 3);
+  const standings = players.map((player, i) => ({ player, text: `${i} pts` }));
+
+  it('starts without the swap-places line and shows it only when told', () => {
+    void ui.showHandover({ player: players[1]!, mode: 'up', camera: true, standings });
+    const hint = root.querySelector<HTMLElement>('.handover-swap');
+    expect(hint?.textContent).toBe('Swap places, or make a fist on Ready');
+    expect(hint?.hidden).toBe(true);
+    ui.setHandoverHint(true);
+    expect(hint?.hidden).toBe(false);
+    ui.setHandoverHint(false);
+    expect(hint?.hidden).toBe(true);
+    ui.hideHandover();
+    expect(() => ui.setHandoverHint(true)).not.toThrow();
+  });
+
+  it('reads "Go" once the player is ready: buttons gone, standings kept, Enter ignored', async () => {
+    const p = ui.showHandover({ player: players[1]!, mode: 'up', camera: true, standings });
+    let settled = false;
+    void p.then(() => (settled = true));
+    ui.showHandoverGo();
+    const el = root.querySelector<HTMLElement>('.handover') as HTMLElement;
+    expect(root.querySelector('.handover h1')?.textContent).toBe('Go');
+    expect(el.dataset.go).toBe('true');
+    expect(el.getAttribute('aria-label')).toBe('Go');
+    expect(root.querySelectorAll('.handover-row').length).toBe(3);
+    // Calling it twice is harmless, and Enter no longer chooses Ready.
+    ui.showHandoverGo();
+    document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    ui.hideHandover();
+    expect(root.querySelector('.handover')).toBeNull();
+    expect(() => ui.showHandoverGo()).not.toThrow();
+  });
+
+  it('a mouse card has no swap-places line at all', () => {
+    void ui.showHandover({ player: players[1]!, mode: 'up', camera: false, standings });
+    expect(root.querySelector('.handover-swap')).toBeNull();
+  });
+
+  it('marks the leading seat with a star and a label, not colour alone', () => {
+    void ui.showHandover({
+      player: players[1]!,
+      mode: 'up',
+      camera: false,
+      standings: standings.map((e, i) => ({ ...e, leading: i === 2 })),
+    });
+    const rows = [...root.querySelectorAll<HTMLElement>('.handover-row')];
+    expect(rows.map((r) => r.classList.contains('leading'))).toEqual([false, false, true]);
+    const star = rows[2]?.querySelector('.handover-lead');
+    expect(star?.textContent).toBe('\u2605');
+    expect(star?.getAttribute('aria-label')).toBe('Leading');
+    expect(rows[0]?.querySelector('.handover-lead')).toBeNull();
+  });
+
+  it('opening the how-to over the card is refused, whichever way it is asked for', () => {
+    const howTo = vi.fn();
+    ui.onHowToPlay(howTo);
+    ui.showPlaying(archery);
+    void ui.showHandover({ player: players[1]!, mode: 'up', camera: false, standings });
+    click('.howto-open');
+    expect(howTo).not.toHaveBeenCalled();
+    expect(root.querySelector('.howto-overlay')).toBeNull();
+  });
+
+  it('disambiguates a shared name with the colour name on the title and the rows', () => {
+    const twins = makePlayers(['Mia', 'Mia', 'Sam'], 3);
+    void ui.showHandover({
+      player: twins[1]!,
+      label: 'Mia (blue)',
+      mode: 'up',
+      camera: false,
+      standings: twins.map((player) => ({ player, text: '' })),
+    });
+    expect(root.querySelector('.handover h1')?.textContent).toBe("Mia (blue), you're up");
+    const names = [...root.querySelectorAll('.handover-name')].map((n) => n.textContent);
+    expect(names).toEqual(['Mia (coral)', 'Mia (blue)', 'Sam']);
+  });
+});
+
+describe('standings strip leader marker', () => {
+  const players = makePlayers(['Mia', 'Sam'], 2);
+
+  it('stars the leading seats, ties included, and keeps seat order', () => {
+    ui.showPlaying(archery);
+    ui.standings.show(players);
+    const chip = (i: number): HTMLElement =>
+      root.querySelectorAll<HTMLElement>('.standing')[i] as HTMLElement;
+    expect(chip(0).querySelector<HTMLElement>('.standing-lead')?.hidden).toBe(true);
+    ui.standings.setLeader(1, true);
+    expect(chip(1).querySelector<HTMLElement>('.standing-lead')?.hidden).toBe(false);
+    expect(chip(1).classList.contains('leading')).toBe(true);
+    ui.standings.setLeader(0, true);
+    expect(chip(0).classList.contains('leading')).toBe(true);
+    ui.standings.setLeader(1, false);
+    expect(chip(1).classList.contains('leading')).toBe(false);
+    expect(chip(1).querySelector<HTMLElement>('.standing-lead')?.hidden).toBe(true);
+    expect([...root.querySelectorAll('.standing-name')].map((n) => n.textContent)).toEqual([
+      'Mia',
+      'Sam',
+    ]);
+    expect(() => ui.standings.setLeader(7, true)).not.toThrow();
+  });
+});
+
+describe('names are text, never markup', () => {
+  const html = '<b>x</b>';
+  const players = makePlayers([html, 'Sam'], 2);
+
+  it('renders as plain text in the names field, the chip, the handover card, the results row and the winner line', async () => {
+    // Names field.
+    void ui.showNames(archery, [html, 'Sam']);
+    expect(root.querySelector<HTMLInputElement>('.name-input')?.value).toBe(html);
+    expect(root.querySelector('.name-input b')).toBeNull();
+
+    // Standings chip.
+    ui.showPlaying(archery);
+    ui.standings.show(players);
+    expect(root.querySelector('.standing-name')?.textContent).toBe(html);
+    expect(root.querySelector('.standing b')).toBeNull();
+
+    // Handover card: title and row.
+    void ui.showHandover({
+      player: players[0]!,
+      label: html,
+      mode: 'up',
+      camera: false,
+      standings: players.map((player) => ({ player, text: '' })),
+    });
+    expect(root.querySelector('.handover h1')?.textContent).toBe(`${html}, you're up`);
+    expect(root.querySelector('.handover-name')?.textContent).toBe(html);
+    expect(root.querySelector('.handover b')).toBeNull();
+    ui.hideHandover();
+
+    // Results row and winner line.
+    const rows = rankResults(
+      players,
+      [
+        { score: 9, headline: '9 pts' },
+        { score: 3, headline: '3 pts' },
+      ],
+      true,
+    );
+    const winner = winnerLine(rows);
+    expect(winner).toBe(`${html} wins`);
+    const choice = ui.showMultiResults(archery, rows, winner);
+    expect(root.querySelector('.rank-name')?.textContent).toBe(html);
+    expect(root.querySelector('.results-headline')?.textContent).toBe(`${html} wins`);
+    expect(root.querySelector('.screen-results b')).toBeNull();
+    click('.screen-results .btn-big');
+    await expect(choice).resolves.toBe('again');
+  });
+
+  it('a name with a shared name carries its colour in the winner line and the results rows', () => {
+    const twins = makePlayers(['Mia', 'Mia'], 2);
+    const rows = rankResults(
+      twins,
+      [
+        { score: 1, headline: '1' },
+        { score: 5, headline: '5' },
+      ],
+      true,
+    );
+    void ui.showMultiResults(archery, rows, winnerLine(rows));
+    expect(root.querySelector('.results-headline')?.textContent).toBe('Mia (blue) wins');
+    expect([...root.querySelectorAll('.rank-name')].map((n) => n.textContent)).toEqual([
+      'Mia (blue)',
+      'Mia (coral)',
+    ]);
+  });
+
+  it('unranked seats show a dash for the rank and are never marked first', () => {
+    const three = makePlayers(['Mia', 'Sam', 'Zoe'], 3);
+    const rows = rankResults(
+      three,
+      [
+        { score: 5, headline: '5 pts' },
+        { score: 0, headline: '-', unranked: true },
+        { score: 0, headline: '-', unranked: true },
+      ],
+      false,
+    );
+    void ui.showMultiResults(archery, rows, winnerLine(rows));
+    const ranks = [...root.querySelectorAll('.rank-num')].map((n) => n.textContent);
+    expect(ranks).toEqual(['1', '\u2013', '\u2013']);
+    expect(root.querySelectorAll('.rank-row.first')).toHaveLength(1);
+    expect(root.querySelector('.results-headline')?.textContent).toBe('Mia wins');
   });
 });

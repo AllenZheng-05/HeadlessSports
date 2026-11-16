@@ -72,3 +72,49 @@ export async function waitTutorialDone(
     await page.waitForTimeout(100);
   }
 }
+
+/**
+ * A per-handover checkpoint for long pass-and-play tests: wait (bounded) until the sport is on
+ * `seat`. On failure the error names the seat and the sport phase, so a hang reads as "stuck
+ * before seat 2 came up, sport phase handover" and not as a bare test timeout.
+ */
+export async function waitSeatUp(
+  page: Page,
+  label: string,
+  seat: number,
+  ms: number,
+): Promise<void> {
+  try {
+    await page.waitForFunction(
+      (want) => {
+        const g = (
+          window as unknown as {
+            __game?: { phase: string; sport: { seat?: number } | null };
+          }
+        ).__game;
+        return g?.sport?.seat === want && g.phase === 'playing';
+      },
+      seat,
+      { timeout: ms, polling: 200 },
+    );
+  } catch (err) {
+    const now = await page
+      .evaluate(() => {
+        const g = (
+          window as unknown as {
+            __game?: {
+              phase: string;
+              error?: string | null;
+              sport: { seat?: number; phase?: string } | null;
+            };
+          }
+        ).__game;
+        if (!g) return 'no __game';
+        return `phase ${g.phase}, sport seat ${g.sport?.seat ?? 'none'}, sport phase ${g.sport?.phase ?? 'none'}, error ${g.error ?? 'none'}`;
+      })
+      .catch((e: unknown) => `page unreadable (${String(e)})`);
+    throw new Error(`${label}: seat ${seat} never came up within ${ms} ms; ${now}`, {
+      cause: err,
+    });
+  }
+}

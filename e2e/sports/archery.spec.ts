@@ -25,6 +25,7 @@ interface ArcheryState {
   rings: number[];
   tutorialStep: number;
   tutorialSteps: number;
+  handedness?: 'left' | 'right';
 }
 
 function watch(page: Page): string[] {
@@ -188,6 +189,28 @@ async function expectSeat(page: Page, seat: number): Promise<void> {
 function aimPoint(page: Page): { x: number; y: number } {
   const vp = page.viewportSize() ?? { width: 1280, height: 720 };
   return { x: vp.width * 0.376, y: vp.height * 0.307 };
+}
+
+/** The mouse hand is the given one, and it follows the cursor (two spots, so it cannot be luck). */
+async function expectMouseAims(page: Page, hand: 'left' | 'right'): Promise<void> {
+  const vp = page.viewportSize() ?? { width: 1280, height: 720 };
+  for (const fx of [0.3, 0.45]) {
+    await page.mouse.move(vp.width * fx, vp.height * 0.3, { steps: 3 });
+    await page.waitForFunction(
+      ([h, want]) => {
+        const input = (
+          window as unknown as {
+            __game: {
+              debugInput: { selectedHand: string; state: { hands: Record<string, { x: number }> } };
+            };
+          }
+        ).__game.debugInput;
+        return input.selectedHand === h && Math.abs((input.state.hands[h]?.x ?? 0) - want) < 0.02;
+      },
+      [hand, fx] as const,
+      { timeout: 3000 },
+    );
+  }
 }
 
 /** One mouse arrow: aim, hold to a full draw, let go, and wait for it to land. */
@@ -457,7 +480,7 @@ test.describe('archery', () => {
   test('three synthetic players take turns, rank in a table and nothing is saved', async ({
     page,
   }) => {
-    test.setTimeout(90_000); // 22 to 37 s measured at three times speed, 2.5x
+    test.setTimeout(115_000); // 46 s alone at three times speed, 2.5x
     const problems = watch(page);
     await recordPhases(page);
     await page.goto(
@@ -470,7 +493,7 @@ test.describe('archery', () => {
     await expect(page.locator('.standing.current .standing-name')).toHaveText('Mia');
     expect((await sportState(page)).arrowsTotal).toBe(2);
 
-    await waitPhase(page, 'results', 130_000);
+    await waitPhase(page, 'results', 60_000);
     await page.waitForTimeout(500);
     await page.screenshot({ path: `${SHOTS}/archery-multi-results.png` });
     const seats = await seatsSeen(page);
@@ -511,7 +534,7 @@ test.describe('archery', () => {
   test('two players with the mouse: names, handovers by Ready, a ranked table, change players', async ({
     page,
   }) => {
-    test.setTimeout(150_000); // 40 to 60 s measured in real time (4 arrows, 3 handovers), 2.5x
+    test.setTimeout(150_000); // 60 s alone in real time (4 arrows, 3 handovers), 2.5x
     const problems = watch(page);
     await page.addInitScript(() => localStorage.clear());
     await page.goto('/?input=debug&skipGate=1&short=1');
@@ -550,8 +573,9 @@ test.describe('archery', () => {
     // The round is paused under the card: still Mia's seat until Sam is ready.
     expect((await multiHook(page)).seat).toBe(0);
     await page.getByRole('button', { name: 'Ready' }).click();
+    // The card itself reads "Go" for a moment, then closes and the round runs.
+    await expect(page.locator('.handover h1')).toHaveText('Go');
     await expect(page.locator('.handover')).toHaveCount(0);
-    await expect(page.locator('.hud-banner')).toHaveText('Go');
     await waitSport(page, 'Sam ready', { phase: 'ready' }, 8000);
     await expectSeat(page, 1);
     expect((await multiHook(page)).phase).toBe('playing');
@@ -578,8 +602,8 @@ test.describe('archery', () => {
     expect(g.result).toBeNull();
     await expect(page.locator('.best-badge')).toHaveCount(0);
 
-    // Change players: the names screen again, with the names just used.
-    await page.getByRole('button', { name: 'Change players' }).click();
+    // Change names: the names screen again, with the names just used.
+    await page.getByRole('button', { name: 'Change names' }).click();
     await waitPhase(page, 'names');
     await expect(inputs.nth(0)).toHaveValue('Mia');
     await expect(inputs.nth(1)).toHaveValue('Sam');
@@ -591,6 +615,53 @@ test.describe('archery', () => {
     await expect(page.locator('.sport-card[data-sport="archery"] .sport-best')).toHaveText(
       'No score yet',
     );
+    expect(problems).toEqual([]);
+  });
+
+  test('mouse play with ?hands=r,l switches the dominant hand with the seat', async ({ page }) => {
+    test.setTimeout(30_000);
+    const problems = watch(page);
+    await page.goto('/?sport=archery&players=2&hands=r,l&input=debug&skipGate=1&short=1');
+    await waitPhase(page, 'playing');
+    await waitSport(page, 'ready to draw', { phase: 'ready' }, 8000);
+    const hands = (): Promise<{ sport: string | undefined; input: string | undefined }> =>
+      page.evaluate(() => {
+        const g = (
+          window as unknown as {
+            __game: {
+              sport: { handedness?: string };
+              debugInput: { selectedHand?: string } | null;
+            };
+          }
+        ).__game;
+        return { sport: g.sport.handedness, input: g.debugInput?.selectedHand };
+      });
+    // The mouse is on the bow hand: the left for a right-handed archer, the right for a lefty.
+    expect(await hands()).toEqual({ sport: 'right', input: 'left' });
+    await expectMouseAims(page, 'left');
+    await shootWithMouse(page, 1);
+    await waitHandover(page, "Player 2, you're up");
+    await page.getByRole('button', { name: 'Ready' }).click();
+    await waitSport(page, 'left-handed seat', { phase: 'ready' }, 8000);
+    expect(await hands()).toEqual({ sport: 'left', input: 'right' });
+    await expectMouseAims(page, 'right');
+    expect(problems).toEqual([]);
+  });
+
+  test('mouse play with two right-handed seats keeps the aim on the cursor after the handover', async ({
+    page,
+  }) => {
+    test.setTimeout(30_000);
+    const problems = watch(page);
+    await page.goto('/?sport=archery&players=2&input=debug&skipGate=1&short=1');
+    await waitPhase(page, 'playing');
+    await waitSport(page, 'ready to draw', { phase: 'ready' }, 8000);
+    await expectMouseAims(page, 'left');
+    await shootWithMouse(page, 1);
+    await waitHandover(page, "Player 2, you're up");
+    await page.getByRole('button', { name: 'Ready' }).click();
+    await waitSport(page, 'the second seat', { phase: 'ready' }, 8000);
+    await expectMouseAims(page, 'left');
     expect(problems).toEqual([]);
   });
 

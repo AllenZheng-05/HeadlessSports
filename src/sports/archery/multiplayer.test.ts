@@ -11,6 +11,7 @@ import { createFieldDayScene } from '../../render/style/scene';
 import { createSyntheticSource } from '../../tracking/synthetic/SyntheticSource';
 import type { SyntheticSource } from '../../tracking/synthetic/SyntheticSource';
 import { idle } from '../../tracking/synthetic/scripts/moves';
+import { DrawMachine } from './draw';
 import type { ArcherySport } from './index';
 import { createArchery } from './index';
 
@@ -308,6 +309,19 @@ describe('archery pass-and-play, closed loop with the real sport and bot', () =>
     expect(beads(mid)).toBe(1);
     mid.dispose();
   }, 120000);
+
+  it('after a handover the fist that pressed Ready counts: the first draw starts from the current hand', async () => {
+    const adopt = vi.spyOn(DrawMachine.prototype, 'adoptHeldFist');
+    try {
+      const g = await play(2, { stopAtHandover: true });
+      expect(adopt).not.toHaveBeenCalled();
+      g.finishHandover();
+      expect(adopt).toHaveBeenCalledOnce();
+      g.dispose();
+    } finally {
+      adopt.mockRestore();
+    }
+  }, 60000);
 
   it('reads the next seat hands at the handover: bow and draw hands swap with the calibration', async () => {
     const g = await play(2, { stopAtHandover: true, handedness: ['right', 'left'] });

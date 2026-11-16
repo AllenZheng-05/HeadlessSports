@@ -6,6 +6,7 @@ import type { Standings } from './types';
 interface Chip {
   el: HTMLElement;
   score: HTMLElement;
+  lead: HTMLElement;
   text: string;
 }
 
@@ -38,10 +39,14 @@ export function createStandings(parent: HTMLElement): Standings {
         li.style.setProperty('--seat', hexColor(p.color));
         li.dataset.seat = String(p.index);
         const name = h('span', 'standing-name', p.name);
+        const lead = h('span', 'standing-lead', '★');
+        lead.setAttribute('role', 'img');
+        lead.setAttribute('aria-label', 'Leading');
+        lead.hidden = true;
         const score = h('span', 'standing-score');
-        li.append(name, score);
+        li.append(lead, name, score);
         el.append(li);
-        chips.push({ el: li, score, text: '' });
+        chips.push({ el: li, score, lead, text: '' });
       }
       el.hidden = chips.length === 0;
     },
@@ -56,6 +61,12 @@ export function createStandings(parent: HTMLElement): Standings {
       chips[current]?.el.classList.remove('current');
       current = index;
       chips[index]?.el.classList.add('current');
+    },
+    setLeader(index: number, leading: boolean): void {
+      const chip = chips[index];
+      if (chip === undefined || chip.lead.hidden === !leading) return;
+      chip.lead.hidden = !leading;
+      chip.el.classList.toggle('leading', leading);
     },
     hide,
   };

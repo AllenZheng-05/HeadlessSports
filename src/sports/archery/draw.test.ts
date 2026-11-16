@@ -100,6 +100,43 @@ describe('nock', () => {
     expect(r.run(100, { closed: true })).toBe(StepEvent.Nock);
   });
 
+  it('a fist already shut when the turn began (the Ready fist) nocks once the hands meet', () => {
+    // Without the adoption an old fist is not a nock.
+    const plain = new Rig();
+    plain.run(100, { closed: true, dist: 2.6 });
+    plain.run(cfg.nockGraceMs + 300, { closed: true, dist: 2.6 });
+    plain.run(100, { dist: 0.7 });
+    expect(plain.m.phase).toBe('ready');
+
+    const r = new Rig();
+    r.m.unlock();
+    r.m.adoptHeldFist();
+    // Held shut, hands apart, for longer than the grace: still waiting.
+    r.run(cfg.nockGraceMs + 300, { closed: true, dist: 2.6 });
+    expect(r.m.phase).toBe('ready');
+    expect(r.run(100, { dist: 0.7 })).toBe(StepEvent.Nock);
+  });
+
+  it('the adopted fist is forgotten once the hand is seen open, and after the nock', () => {
+    const r = new Rig();
+    r.m.unlock();
+    r.m.adoptHeldFist();
+    r.run(100, { closed: false, dist: 2.6 });
+    r.run(cfg.nockGraceMs + 300, { closed: true, dist: 2.6 });
+    r.run(100, { dist: 0.7 });
+    expect(r.m.phase).toBe('ready');
+
+    const n = new Rig();
+    n.m.unlock();
+    n.m.adoptHeldFist();
+    expect(n.run(100, { closed: true, dist: 0.7 })).toBe(StepEvent.Nock);
+    // Back to ready: a plain old fist no longer counts.
+    n.m.unlock();
+    n.run(cfg.nockGraceMs + 300, { closed: true, dist: 2.6 });
+    n.run(100, { dist: 0.7 });
+    expect(n.m.phase).toBe('ready');
+  });
+
   it('does not nock from an unknown fist', () => {
     const r = new Rig();
     r.run(100, { known: false, closed: false });

@@ -182,7 +182,20 @@ switch (screen) {
     );
     break;
   case 'names':
-    track(ui.showNames(multiMeta, ['Mia', 'Player 2', 'Player 3', 'Player 4'].slice(0, seatCount)));
+    // ?hands=1 adds the mouse-play "Dominant hand" choice beside each name.
+    track(
+      ui.showNames(
+        multiMeta,
+        ['Mia', 'Player 2', 'Player 3', 'Player 4'].slice(0, seatCount),
+        params.has('hands')
+          ? {
+              hands: ['right', 'left', 'right', 'right'].slice(0, seatCount) as (
+                'left' | 'right'
+              )[],
+            }
+          : undefined,
+      ),
+    );
     break;
   case 'handover': {
     const players = makePlayers(['Mia', 'Sam', 'Zoe', 'Alexander J'], seatCount);
@@ -194,9 +207,15 @@ switch (screen) {
         camera: params.has('cam'),
         standings: params.has('stepin')
           ? []
-          : players.map((player, i) => ({ player, text: `${i * 7 + 3} pts` })),
+          : players.map((player, i) => ({
+              player,
+              text: `${i * 7 + 3} pts`,
+              leading: params.has('lead') && i === Number(params.get('lead')),
+            })),
       }),
     );
+    // ?hint=1 shows the camera card's second line, "Swap places, or make a fist on Ready".
+    if (params.has('hint')) ui.setHandoverHint(true);
     break;
   }
   case 'multiresults': {

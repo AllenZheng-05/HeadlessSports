@@ -229,6 +229,39 @@ describe('TrackedInput', () => {
     expect(input.frameCount).toBe(frames);
   });
 
+  it('resetPlayer forgets the last person: recognizers, queued events, body state, silently', async () => {
+    const source = new FakeSource();
+    const rec: Recognizer = {
+      name: 'probe',
+      update: (_s, emit) => emit({ type: 'Jump', t: 1, height: 1 }),
+      reset: vi.fn(),
+    };
+    const input = new TrackedInput(source, { recognizers: [rec] });
+    const seen: GameEvent[] = [];
+    input.onAny((e) => seen.push(e));
+    await input.start(NEEDS);
+    source.send(100);
+    input.update(120);
+    seen.length = 0;
+    // A half-detected gesture from the person walking off is still in the queue.
+    source.send(133);
+    expect(input.state.shoulderWidth).toBeGreaterThan(0);
+    const resets = (rec.reset as ReturnType<typeof vi.fn>).mock.calls.length;
+    input.resetPlayer();
+    expect((rec.reset as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(resets);
+    expect(input.state.shoulderWidth).toBe(0);
+    expect(input.state.hasPose).toBe(false);
+    input.update(150);
+    expect(seen).toEqual([]);
+    // The new person's frames flow again, even with an earlier camera clock, and nothing is
+    // announced as lost or found.
+    source.send(10);
+    input.update(160);
+    expect(input.state.tracking).toBe(true);
+    expect(input.state.shoulderWidth).toBeGreaterThan(0);
+    expect(seen.map((e) => e.type)).toEqual(['Jump']);
+  });
+
   it('pumps the source from update', async () => {
     const source = createSyntheticSource({ script: { name: 'i', steps: idle(2000) } });
     const input = new TrackedInput(source);

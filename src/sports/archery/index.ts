@@ -224,14 +224,17 @@ export const createArchery: SportFactory = (ctx: SportContext): ArcherySport => 
       bow.dispose();
       bow = new BowRig(ctx.avatar.mitts[bowHand], ctx.avatar.mitts[drawHand], world.arrowGeometry);
       showPos.x = bowSign * SHOW_SIDE;
-      mouse?.selectHand(bowHand);
     }
+    // The host just put the mouse on this seat's draw hand; the mouse aims with the bow hand.
+    mouse?.selectHand(bowHand);
     // The last player's aim is not this player's.
     frozenYaw = 0;
     frozenPitch = 0;
     yawF.reset(0);
     pitchF.reset(0);
     dm.unlock();
+    // The fist that pressed Ready is still shut: it is the nock once the hands come together.
+    if (mouse === null) machine.adoptHeldFist();
     shownScore = -1;
     shownLeft = -1;
     shownWind = Number.NaN;

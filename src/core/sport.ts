@@ -12,7 +12,7 @@
  */
 
 import type { TrackerNeeds } from '../tracking/types';
-import type { Calibration, InputProvider } from '../input/types';
+import type { Calibration, InputProvider, Side } from '../input/types';
 import type { AvatarRig } from '../render/avatar/AvatarRig';
 import type { FieldDayScene } from '../render/style/scene';
 import type { ScriptStep } from '../tracking/synthetic/script';
@@ -95,6 +95,19 @@ export interface RoundResult {
    * personal best (for example a timed-out round of a lower-is-better sport).
    */
   saveScore?: boolean;
+  /**
+   * Pass-and-play only. Compared only when two seats have equal `score`: the LARGER value ranks
+   * higher, whatever `meta.score.higherIsBetter` says (so a lower-is-better sport passes the
+   * negated or inverted measure it wants to break ties with). Equal tie-breaks share a rank, as
+   * equal scores do. A seat with a tie-break outranks an equal-score seat without one.
+   */
+  tieBreak?: number;
+  /**
+   * Pass-and-play only. True when the seat did not produce a result (it never played, or was cut
+   * short). Unranked seats are always listed last with a dash for rank and can never win,
+   * whatever their `score` says.
+   */
+  unranked?: boolean;
 }
 
 export type MeterTone = 'neutral' | 'good' | 'warn' | 'bad';
@@ -199,8 +212,23 @@ export interface Turns {
    * Calling it for the current seat calls `onReady` on the next frame with no card.
    */
   handOver(index: number, onReady: () => void): void;
-  /** Update a seat's running score text and number on the standings strip (cheap; call on change). */
+  /**
+   * Update a seat's running score text and number on the standings strip (cheap; call on change).
+   * The number marks the current leader (respecting `meta.score.higherIsBetter`) once any seat's
+   * number has moved from its first reported value, so report 0 (or any placeholder) first.
+   */
   setStanding(index: number, score: number, text: string): void;
+  /**
+   * Which hand seat `index` plays with: the seat's calibration in camera mode, the names-screen
+   * choice (or `?hands=`) in mouse mode. Lets a sport pre-stage a stance behind the handover card.
+   * The shell always provides it; it is optional in the type only so test doubles still compile,
+   * so call it as `turns.handednessOf?.(i) ?? 'right'`.
+   *
+   * After `handOver` calls back, read `ctx.calibration` again and re-apply any recognizer
+   * overrides inside `onReady`: the shell has reset the input's filters and recognizers for the
+   * new person by then, so anything configured for the previous seat is gone.
+   */
+  handednessOf?(index: number): Side;
 }
 
 export interface SportContext {

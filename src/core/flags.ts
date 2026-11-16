@@ -1,6 +1,6 @@
 /** The single parser for query flags (see CLAUDE.md). */
 
-import { MAX_PLAYERS, parseNames } from './multiplayer/players';
+import { MAX_PLAYERS, parseHands, parseNames } from './multiplayer/players';
 
 export interface Flags {
   /** `?input=debug`: mouse instead of camera. */
@@ -37,6 +37,8 @@ export interface Flags {
   players: number;
   /** `?names=Mia,Sam`: seat names for `?players=`. Null when absent. */
   names: string[] | null;
+  /** `?hands=r,l,r`: dominant hand per seat for `?players=` (mouse, synthetic, replay). Null when absent. */
+  hands: ('left' | 'right' | null)[] | null;
 }
 
 export const TIME_SCALE_MIN = 0.1;
@@ -90,6 +92,7 @@ export function parseFlags(search: string | URLSearchParams): Flags {
     tutorial: params.get('tutorial') === '1',
     players: playersFlag(params.get('players')),
     names: parseNames(params.get('names')),
+    hands: parseHands(params.get('hands')),
   };
 }
 

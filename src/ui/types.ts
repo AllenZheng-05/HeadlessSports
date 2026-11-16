@@ -61,17 +61,29 @@ export interface PlayersControl {
   onCount(count: number): void;
 }
 
+/**
+ * Names-screen extras for mouse play: a "Dominant hand: Left / Right" choice beside each name. The
+ * screen reads `hands` for the starting choices and writes the player's choices back into it.
+ */
+export interface NamesOptions {
+  hands: Side[];
+}
+
 /** One seat on the standings strip and the handover card. */
 export interface StandingEntry {
   player: PlayerInfo;
   /** The sport's score text for this seat, e.g. '24 pts'. Empty before the first score. */
   text: string;
+  /** This seat is the current leader (ties all lead): a star on the card and the strip. */
+  leading?: boolean;
 }
 
 /** What the handover card shows. */
 export interface HandoverInfo {
   /** Who is stepping in. */
   player: PlayerInfo;
+  /** How to say the name where seats must be told apart ("Mia (blue)"). Default: the name. */
+  label?: string;
   /** 'up': between turns in a round. 'step-in': per-player setup before the round (camera). */
   mode: 'up' | 'step-in';
   /** Camera input: the card says a fist on Ready works and the camera can move on by itself. */
@@ -88,6 +100,8 @@ export interface Standings {
   set(index: number, text: string): void;
   /** Highlight the seat in front of the camera. */
   setCurrent(index: number): void;
+  /** Mark (or unmark) a seat as the current leader. Ties are all marked by the caller. */
+  setLeader(index: number, leading: boolean): void;
   hide(): void;
 }
 
@@ -186,7 +200,11 @@ export interface Ui {
    * Keyboard and mouse only (the hand cursor can press Start and Back, not type). Resolves with
    * the names as typed (the shell sanitises them), or null for Back.
    */
-  showNames(meta: SportMeta, prefill: readonly string[]): Promise<string[] | null>;
+  showNames(
+    meta: SportMeta,
+    prefill: readonly string[],
+    options?: NamesOptions,
+  ): Promise<string[] | null>;
 
   /**
    * The "<name>, you're up" card (or "<name>, step in" before the round), full screen in the
@@ -195,6 +213,16 @@ export interface Ui {
    * mode Escape quits the round as usual. Close it with `hideHandover`.
    */
   showHandover(info: HandoverInfo): Promise<'ready' | 'cancel'>;
+  /**
+   * Show or hide the card's second line, "Swap places, or make a fist on Ready", for a camera
+   * card the camera cannot move on by itself. Cheap; ignores unchanged values.
+   */
+  setHandoverHint(show: boolean): void;
+  /**
+   * The next player is ready: the card reads "Go" with its buttons gone. The shell closes it with
+   * `hideHandover` about 800 ms later.
+   */
+  showHandoverGo(): void;
   /** Remove the handover card if it is showing (the shell decided the player is ready). */
   hideHandover(): void;
 

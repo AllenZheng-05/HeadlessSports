@@ -21,6 +21,7 @@ describe('parseFlags', () => {
       tutorial: false,
       players: 1,
       names: null,
+      hands: null,
     });
   });
 
@@ -46,6 +47,7 @@ describe('parseFlags', () => {
       tutorial: false,
       players: 1,
       names: null,
+      hands: null,
     });
   });
 
@@ -63,6 +65,14 @@ describe('parseFlags', () => {
     expect(parseFlags('?players=2.5').players).toBe(1);
     expect(parseFlags('?players=3&names=Mia,Sam').names).toEqual(['Mia', 'Sam']);
     expect(parseFlags('').names).toBeNull();
+  });
+
+  it('reads ?hands= as one side per seat, unknown entries kept as gaps', () => {
+    expect(parseFlags('?players=3&hands=r,l,r').hands).toEqual(['right', 'left', 'right']);
+    expect(parseFlags('?hands=Left,RIGHT').hands).toEqual(['left', 'right']);
+    expect(parseFlags('?hands=l,,x').hands).toEqual(['left', null, null]);
+    expect(parseFlags('').hands).toBeNull();
+    expect(parseFlags('?hands=').hands).toBeNull();
   });
 
   it('accepts URLSearchParams and the replay source', () => {

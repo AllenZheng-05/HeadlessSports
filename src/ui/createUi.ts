@@ -37,6 +37,7 @@ import type {
   HandoverInfo,
   HowToChoice,
   HowToOptions,
+  NamesOptions,
   PlayersControl,
   PlayingOptions,
   ResultsOutcome,
@@ -82,7 +83,7 @@ export function createUi(root: HTMLElement, options: UiOptions = {}): Ui {
   let pauseShown = false;
   let overlay: HowToOverlay | null = null;
   /** The pass-and-play handover card is up (over a round, or over the screen before one). */
-  let handover: { card: HandoverCard; mode: HandoverInfo['mode'] } | null = null;
+  let handover: { card: HandoverCard; mode: HandoverInfo['mode']; go: boolean } | null = null;
   /** The current screen is one of the lobby screens (title, menu, how-to, results). */
   let lobbyScreen = false;
   let playButtons: HTMLElement[] = [];
@@ -141,7 +142,8 @@ export function createUi(root: HTMLElement, options: UiOptions = {}): Ui {
   }
 
   function openOverlay(meta: SportMeta): void {
-    if (overlay) return;
+    // Nothing in a round can be opened from under the handover card.
+    if (overlay || handover !== null) return;
     const o = buildHowToOverlay(
       meta,
       input?.source === null,
@@ -294,6 +296,7 @@ export function createUi(root: HTMLElement, options: UiOptions = {}): Ui {
       // Enter is Ready (a focused button handles its own Enter); Escape backs out of the step-in
       // or quits the round; nothing else reaches the round while the card is up.
       if (e.key === 'Enter' && !(t instanceof HTMLButtonElement)) {
+        if (handover.go) return;
         e.preventDefault();
         handover.card.ready.click();
       } else if (e.key === 'Escape') {
@@ -429,8 +432,12 @@ export function createUi(root: HTMLElement, options: UiOptions = {}): Ui {
       );
     },
 
-    showNames(meta: SportMeta, prefill: readonly string[]): Promise<string[] | null> {
-      return prompt<string[] | null>((resolve) => buildNames(meta, prefill, resolve));
+    showNames(
+      meta: SportMeta,
+      prefill: readonly string[],
+      options?: NamesOptions,
+    ): Promise<string[] | null> {
+      return prompt<string[] | null>((resolve) => buildNames(meta, prefill, resolve, options));
     },
 
     showHandover(info: HandoverInfo): Promise<'ready' | 'cancel'> {
@@ -441,7 +448,7 @@ export function createUi(root: HTMLElement, options: UiOptions = {}): Ui {
           () => resolve('ready'),
           () => resolve('cancel'),
         );
-        handover = { card, mode: info.mode };
+        handover = { card, mode: info.mode, go: false };
         container.dataset.handover = 'true';
         container.append(card.el);
         cursor.setRevealNear(false);
@@ -450,6 +457,22 @@ export function createUi(root: HTMLElement, options: UiOptions = {}): Ui {
         // The card bounces in: measure its buttons again once it has settled.
         handoverTimer = setTimeout(() => cursor.refresh(), REFRESH_AFTER_ENTRANCE_MS);
       });
+    },
+
+    showHandoverGo(): void {
+      const hv = handover;
+      if (hv === null || hv.go) return;
+      hv.go = true;
+      hv.card.el.dataset.go = 'true';
+      hv.card.heading.textContent = 'Go';
+      hv.card.el.setAttribute('aria-label', 'Go');
+      cursor.setButtons([]);
+    },
+
+    setHandoverHint(show: boolean): void {
+      const hint = handover?.card.hint;
+      if (hint === null || hint === undefined || hint.hidden === !show) return;
+      hint.hidden = !show;
     },
 
     hideHandover(): void {

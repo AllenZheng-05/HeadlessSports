@@ -74,6 +74,15 @@ export class TrackedInput implements InputProvider {
     for (const r of this.recognizers) r.setCalibrated?.(this.calibrated);
   }
 
+  resetPlayer(): void {
+    this.processor.reset();
+    this.resetRecognizers();
+    this.bus.clear();
+    // The body is gone until the next frame; that is not a "tracking lost" event for anyone.
+    this.lastTracking = null;
+    this.lastFrameT = Number.NEGATIVE_INFINITY;
+  }
+
   applyConfig(): void {
     this.processor.applyConfig();
   }

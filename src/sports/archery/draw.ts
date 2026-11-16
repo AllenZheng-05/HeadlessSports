@@ -83,6 +83,8 @@ export class DrawMachine {
   private count = 0;
 
   private pendingClose = false;
+  /** A fist that was already shut when the turn began counts as the nock (see `adoptHeldFist`). */
+  private heldFist = false;
   private pendingOpen = false;
   private openT = 0;
   private prevClosed = false;
@@ -136,6 +138,16 @@ export class DrawMachine {
   noteOpened(t: number): void {
     this.pendingOpen = true;
     this.openT = t;
+  }
+
+  /**
+   * The draw hand may already be a fist that nobody saw close: after a pass-and-play handover the
+   * fist that pressed Ready is still shut, and its close edge went by while the round was paused.
+   * Until the hand is seen open (or a nock happens) a closed hand near the bow hand nocks, with no
+   * fresh close edge needed. Call after `unlock`.
+   */
+  adoptHeldFist(): void {
+    this.heldFist = true;
   }
 
   /** Stop reacting (arrow in flight). */
@@ -279,6 +291,7 @@ export class DrawMachine {
     const openAt = this.pendingOpen ? this.openT : now;
     this.pendingClose = false;
     this.pendingOpen = false;
+    if (openEdge || (s.known && !s.closed)) this.heldFist = false;
     if (s.known) this.prevClosed = s.closed;
     if (closeEdge) this.closedEdgeAt = now;
 
@@ -299,7 +312,14 @@ export class DrawMachine {
     if (now >= this.furtherUntil) this.hint = ready ? 'nock' : 'raise';
     else this.hint = 'further';
 
-    if (near && s.known && s.closed && s.present && now - this.closedEdgeAt <= cfg.nockGraceMs) {
+    if (
+      near &&
+      s.known &&
+      s.closed &&
+      s.present &&
+      (this.heldFist || now - this.closedEdgeAt <= cfg.nockGraceMs)
+    ) {
+      this.heldFist = false;
       this.beginDraw(false, s.dist);
       this.pullNock = false;
       return StepEvent.Nock;
