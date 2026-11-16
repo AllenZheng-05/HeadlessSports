@@ -1,5 +1,6 @@
 import type { Sport, SportBot, SportContext, SportFactory } from '../../core/sport';
 import { asMouseControl } from '../../input/debug/mouseControl';
+import { recognizerConfig } from '../../input/recognizers/config';
 import type { Side } from '../../input/types';
 import { AvatarAnimator } from '../../render/avatar/AvatarAnimator';
 import { AvatarRig } from '../../render/avatar/AvatarRig';
@@ -21,10 +22,12 @@ import { hitWorldPosition } from './flight';
 import { batHeightM } from './judge';
 import type { Judgement, SwingInput } from './judge';
 import { MouseSwinger } from './mouseSwing';
+import { HintLine, rejectionHint } from './notice';
 import { ballPosition } from './pitch';
 import type { Pitch, Vec3 } from './pitch';
+import { applyBattingRecognizer } from './recognizer';
 import { BattingRound } from './round';
-import type { PitchResult, RoundSummary } from './round';
+import type { PitchResult, RoundSummary, SwingFate } from './round';
 import { BatterPose, batterX, batterYaw, batterZ } from './stance';
 import { buildWorld } from './world';
 import { formatFeet } from './units';
@@ -57,6 +60,8 @@ export interface BattingProbe {
   /** The ball mesh: visibility and world position. */
   readonly ball: { visible: boolean; x: number; y: number; z: number };
   readonly pitchIndex: number;
+  /** The last "why nothing happened" hint shown for a swing that was seen but did not count ('' for none). */
+  readonly notice: string;
   readonly phase: string;
   /** Where in the pitch cycle: result, reset, set, windup, flight (or ending, done, waiting). */
   readonly stage: string;
@@ -87,6 +92,8 @@ export const createBatting: SportFactory = (ctx: SportContext): Sport & BattingP
   // ---- props ----
   // Side-on in the box: a right-hander on the screen-left of the plate, chest toward it.
   const hand = handedness();
+  // The swing goes toward the plate; the load (hands going back) does not start it.
+  const restoreRecognizer = applyBattingRecognizer(hand, recognizerConfig);
   const standX = batterX(hand, cfg);
   const stanceYaw = batterYaw(hand);
   ctx.avatar.root.position.set(standX, 0, batterZ(cfg));
@@ -185,6 +192,17 @@ export const createBatting: SportFactory = (ctx: SportContext): Sport & BattingP
   const mouse = asMouseControl(ctx.input);
   mouse?.setManualMode(true);
   const swinger = mouse === null ? null : new MouseSwinger(mouse, cfg);
+  // Why a seen arm motion did not count, said for a moment (a short hint over the usual one).
+  const hint = new HintLine((text) => ctx.hud.setHint(text), cfg.noticeMs);
+  let seenRejected = ctx.input.state.rejected?.seq ?? 0;
+  const checkRejected = (nowMs: number): void => {
+    const r = ctx.input.state.rejected;
+    if (r === undefined || r.seq === seenRejected) return;
+    seenRejected = r.seq;
+    if (ctx.paused || hint.active(nowMs)) return;
+    const text = rejectionHint(r, round, nowMs);
+    if (text !== null) hint.say(text, nowMs);
+  };
   const offStart = ctx.input.on('SwingStarted', (e) => push(0, e.t, e.speed, e.height));
   const offPeak = ctx.input.on('SwingPeak', (e) => push(1, e.t, e.speed, e.height));
 
@@ -203,7 +221,7 @@ export const createBatting: SportFactory = (ctx: SportContext): Sport & BattingP
 
   const onReset = (index: number, total: number): void => {
     ctx.hud.setBanner(null);
-    ctx.hud.setHint(
+    hint.setBase(
       index === 1
         ? mouse === null
           ? 'Get ready. Hold both hands together like a bat.'
@@ -214,7 +232,7 @@ export const createBatting: SportFactory = (ctx: SportContext): Sport & BattingP
 
   const onSet = (p: Pitch): void => {
     pitcherClipPlayed = false;
-    ctx.hud.setHint(`Pitch ${p.index} of ${round?.total ?? cfg.pitches}`);
+    hint.setBase(`Pitch ${p.index} of ${round?.total ?? cfg.pitches}`);
   };
 
   const onWindup = (_p: Pitch): void => {
@@ -444,7 +462,7 @@ export const createBatting: SportFactory = (ctx: SportContext): Sport & BattingP
       started = true;
       ctx.hud.setScore(formatFeet(0));
       ctx.hud.setSubScore(ctx.best === null ? null : `Best ${formatFeet(ctx.best)}`);
-      ctx.hud.setHint(
+      hint.setBase(
         mouse === null
           ? 'Hold both hands together like a bat. Swing as the ball arrives.'
           : 'Click to swing as the ball reaches the plate.',
@@ -458,15 +476,19 @@ export const createBatting: SportFactory = (ctx: SportContext): Sport & BattingP
       swinger?.poll(round, nowMs, ctx.paused);
       for (let i = 0; i < queue.n; i++) {
         if (queue.kind[i] === 0) {
-          round.onSwingStarted(
+          const fate: SwingFate = round.onSwingStarted(
             { t: queue.t[i]!, speed: queue.speed[i]!, height: queue.height[i]! },
             nowMs,
           );
+          if (fate === 'late') hint.say('Swing seen too late', nowMs);
         } else {
           round.onSwingPeak({ speed: queue.speed[i]! }, nowMs);
         }
       }
       queue.n = 0;
+      // After the swing events: a note about a swing the round has just taken is not shown.
+      checkRejected(nowMs);
+      hint.tick(nowMs);
       round.update(nowMs);
     },
 
@@ -503,6 +525,7 @@ export const createBatting: SportFactory = (ctx: SportContext): Sport & BattingP
       return createBattingBot({
         cfg,
         random: ctx.random,
+        direction: sg > 0 ? 1 : -1,
         view: {
           pitch: () =>
             round !== null && round.phase === 'pitch' && !round.resolved && round.swingT < 0
@@ -515,6 +538,7 @@ export const createBatting: SportFactory = (ctx: SportContext): Sport & BattingP
     },
 
     dispose(): void {
+      restoreRecognizer();
       mouse?.setManualMode(false);
       offStart();
       offPeak();
@@ -551,6 +575,9 @@ export const createBatting: SportFactory = (ctx: SportContext): Sport & BattingP
     },
     get ball(): { visible: boolean; x: number; y: number; z: number } {
       return { visible: ball.visible, x: ball.position.x, y: ball.position.y, z: ball.position.z };
+    },
+    get notice(): string {
+      return hint.active(clock) ? hint.notice : '';
     },
     get pitchIndex(): number {
       return round === null ? 0 : round.started;

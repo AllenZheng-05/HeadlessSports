@@ -42,8 +42,20 @@ export interface ThrowInput {
   speed: number;
   /** Wrist vertical velocity, sw/s, positive up. */
   vy: number;
+  /**
+   * Wrist horizontal velocity, sw/s, positive toward screen right (when known). With it a release
+   * that is mostly straight up (an arm lift, not a throw) is refused.
+   */
+  vx?: number;
   style: 'overarm' | 'underarm';
+  /** Distance the wrist covered from the start of the throw to the peak, sw (when known). */
+  travel?: number;
+  /** Highest the wrist was above its shoulder in the 400 ms before the peak, sw (when known). */
+  topY?: number;
 }
+
+/** Why the last `ThrowReleased` was not taken ('' for none). */
+export type ThrowRefusal = '' | 'hand' | 'slow' | 'low' | 'short' | 'up';
 
 export interface GameState {
   phase: Phase;
@@ -89,6 +101,9 @@ export interface GameState {
   nextSeq: number;
   doneSeq: number;
   ignoredThrows: number;
+  /** Why the last refused throw was refused, and a counter that rises with each (for a hint). */
+  refusal: ThrowRefusal;
+  refusalSeq: number;
   /** The current flight is a javelin dropped at the line (crossed without throwing). */
   dropped: boolean;
 }
@@ -123,6 +138,8 @@ export function createGame(attempts: number): GameState {
     nextSeq: 0,
     doneSeq: 0,
     ignoredThrows: 0,
+    refusal: '',
+    refusalSeq: 0,
     dropped: false,
   };
 }
@@ -212,13 +229,29 @@ export function onThrow(
   ev: ThrowInput,
   throwHand: 'left' | 'right',
 ): boolean {
-  if (s.phase !== 'run' || ev.hand !== throwHand) return false;
+  if (s.phase !== 'run') return false;
+  const required = requiredThrowSpeed(s, cfg);
+  if (ev.hand !== throwHand) {
+    // The other arm pumping gives small releases all the time; only a real overarm throw is said.
+    const locked = ev.t < s.lockoutUntilMs || nowMs < s.lockoutUntilMs;
+    if (!locked && ev.speed >= required && ev.style === 'overarm') refuse(s, 'hand');
+    return false;
+  }
   if (ev.t < s.lockoutUntilMs || nowMs < s.lockoutUntilMs) {
     s.ignoredThrows++;
     return false;
   }
-  if (ev.speed < requiredThrowSpeed(s, cfg)) return false;
-  if (!cfg.acceptAnyStyle && ev.style !== 'overarm') return false;
+  // Overarm: the wrist above the shoulder at the peak, or at some moment just before it.
+  const overarm = ev.style === 'overarm' || (ev.topY !== undefined && ev.topY >= cfg.minThrowTopY);
+  if (ev.speed < required) {
+    // Arm pump gives weak releases all the time and is not a throw attempt: only a movement that
+    // went over the shoulder, and was not hopeless, is worth telling the player about.
+    if (overarm && ev.speed >= HINT_FRACTION * required) refuse(s, 'slow');
+    return false;
+  }
+  if (!cfg.acceptAnyStyle && !overarm) return refuse(s, 'low');
+  if (ev.travel !== undefined && ev.travel < cfg.minThrowTravel) return refuse(s, 'short');
+  if (isLift(cfg, ev)) return refuse(s, 'up');
 
   const delay = Math.max(0, Math.min(cfg.maxLatencyS, (nowMs - ev.t) / 1000));
   const x0 = Math.max(0, s.position - s.speed * delay);
@@ -237,6 +270,59 @@ export function onThrow(
   s.phaseT = 0;
   s.releaseSeq++;
   return true;
+}
+
+/**
+ * A brisk arm lift is not a throw: its peak velocity is mostly straight up (image y grows down;
+ * `vy` here is positive up). A throw seen side-on moves along the image x axis and one seen
+ * facing the camera moves down and sideways at its peak, so only the upward component counts.
+ */
+export function isLift(cfg: JavelinConfig, ev: ThrowInput): boolean {
+  if (ev.vx === undefined || !(ev.vy > 0)) return false;
+  return ev.vy > cfg.maxLiftRatio * Math.abs(ev.vx);
+}
+
+/**
+ * Is a motion the recognizer noticed but did not report as a throw worth a hint? Only the
+ * throwing arm, only a real effort (the free arm and the arm pump of running are slower), only
+ * after the get-ready lockout, and never over the "Throw!" prompt. A 'slow' note (too weak, or
+ * accelerating too gently) is what an arm pump looks like, even a sprint's, so it is not said: a
+ * real weak throw is already answered by the rules ("Throw faster") when it is reported.
+ */
+export function showsRejection(
+  s: GameState,
+  cfg: JavelinConfig,
+  nowMs: number,
+  r: { kind: 'swing' | 'throw'; reason: string; hand?: 'left' | 'right'; speed: number },
+  throwHand: 'left' | 'right',
+): boolean {
+  return (
+    s.phase === 'run' &&
+    nowMs >= s.lockoutUntilMs &&
+    r.kind === 'throw' &&
+    r.hand === throwHand &&
+    r.reason !== 'slow' &&
+    r.speed >= cfg.noticeMinSpeed &&
+    distanceToLine(s, cfg) > cfg.throwZone
+  );
+}
+
+/** A too-weak overarm movement is only called out above this fraction of the required speed. */
+const HINT_FRACTION = 0.45;
+
+/**
+ * Should the last refusal be said to the player? "Bring your hand up past your shoulder" is not
+ * while running: running pumps the arms, and a hard pump is as fast as a weak throw and never rises
+ * past the shoulder. The throw is refused either way.
+ */
+export function refusalWorthSaying(s: GameState, cfg: JavelinConfig): boolean {
+  return s.refusal !== 'low' || s.speed < cfg.lowHintMaxRunSpeed;
+}
+
+function refuse(s: GameState, why: ThrowRefusal): false {
+  s.refusal = why;
+  s.refusalSeq++;
+  return false;
 }
 
 /** Mouse play: what the button has done so far this attempt. */

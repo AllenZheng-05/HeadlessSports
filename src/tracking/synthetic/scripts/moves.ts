@@ -48,6 +48,19 @@ export function armUp(hand: Hand, ms = 650): ScriptStep[] {
   return [{ dur: ms, to: wrist(hand, sign(hand) * 0.35, 1.1), label: 'armUp' }];
 }
 
+/**
+ * A brisk lift of the arm straight up from hanging to above the head: one speed peak (2 x 1.65 /
+ * `ms` * 1000 sw/s, 11 at the default) reached with the wrist already above the shoulder, so it
+ * releases like a throw would. It must NOT count as one: its direction is up, not forward.
+ */
+export function armUpFast(hand: Hand, ms = 300): ScriptStep[] {
+  const s = sign(hand);
+  return [
+    { dur: ms, to: wrist(hand, s * 0.3, 0.25), ease: 'in', label: 'armUpFast' },
+    { dur: ms * 0.5, to: wrist(hand, s * 0.35, 1.1), ease: 'out', label: 'armUpFast' },
+  ];
+}
+
 /** Lower the wrist to the hanging position. */
 export function armDown(hand: Hand, ms = 650): ScriptStep[] {
   return [{ dur: ms, to: restWrist(hand), label: 'armDown' }];

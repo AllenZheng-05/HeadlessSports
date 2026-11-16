@@ -433,6 +433,118 @@ describe('FrameProcessor side consistency', () => {
   });
 });
 
+describe('the guard leaves swing- and throw-speed motion alone', () => {
+  /** Run `frames` through the guard (aspect 1); returns the fixes it made and whether any landmark moved. */
+  function run(
+    body: (pose: Float32Array, k: number) => void,
+    frames: number,
+  ): { fixes: number[]; moved: boolean } {
+    const st = createSideGuardState();
+    const prev = new Float32Array(POSE_COUNT * POSE_STRIDE);
+    const pose = new Float32Array(POSE_COUNT * POSE_STRIDE);
+    const fixes: number[] = [];
+    let moved = false;
+    for (let k = 0; k < frames; k++) {
+      body(pose, k);
+      const raw = Float32Array.from(pose);
+      fixes.push(guardSides(pose, prev, k > 0, 1, 0.5, sideGuardConfig, st));
+      for (let i = 0; i < pose.length; i++) if (pose[i] !== raw[i]) moved = true;
+      prev.set(pose);
+    }
+    return { fixes, moved };
+  }
+  const lerp = (a: number, b: number, u: number): number =>
+    a + (b - a) * Math.min(1, Math.max(0, u));
+
+  /** Shoulders `half` either side of x 0.5 at y 0.4, hips below, the near/far arms given. */
+  function body(pose: Float32Array, half: number, a: Arms): void {
+    writeBody(pose, a);
+    setLm(pose, PoseIndex.LEFT_SHOULDER, 0.5 - half, 0.4);
+    setLm(pose, PoseIndex.RIGHT_SHOULDER, 0.5 + half, 0.4);
+    setLm(pose, PoseIndex.LEFT_HIP, 0.5 - half * 0.7, 0.8);
+    setLm(pose, PoseIndex.RIGHT_HIP, 0.5 + half * 0.7, 0.8);
+  }
+
+  it('a javelin throw with the right arm at about 15 sw/s, facing the camera', () => {
+    const r = run((pose, k) => {
+      const u = (k - 8) / 5; // five frames from behind the head to forward and down
+      body(pose, 0.1, {
+        ...overhead(0),
+        lex: 0.36,
+        ley: 0.38,
+        lwx: 0.34,
+        lwy: 0.6,
+        rex: lerp(0.72, 0.66, u),
+        rey: lerp(0.3, 0.45, u),
+        rwx: lerp(0.78, 0.5, u),
+        rwy: lerp(0.18, 0.55, u),
+      });
+    }, 24);
+    expect(r.fixes.every((f) => f === SIDE_NONE)).toBe(true);
+    expect(r.moved).toBe(false);
+  });
+
+  it('the same throw seen side-on (shoulders overlapped, near arm only moving fast)', () => {
+    const r = run((pose, k) => {
+      const u = (k - 8) / 5;
+      body(pose, 0.015, {
+        lex: 0.5,
+        ley: 0.5,
+        lwx: 0.5,
+        lwy: 0.62,
+        rex: lerp(0.45, 0.55, u),
+        rey: lerp(0.3, 0.42, u),
+        rwx: lerp(0.4, 0.62, u),
+        rwy: lerp(0.18, 0.4, u),
+      });
+    }, 24);
+    expect(r.fixes.every((f) => f === SIDE_NONE)).toBe(true);
+    expect(r.moved).toBe(false);
+  });
+
+  it('a two-handed swing across the body in five frames, facing the camera and side-on', () => {
+    for (const half of [0.1, 0.015]) {
+      const r = run((pose, k) => {
+        const u = (k - 8) / 5;
+        const x = lerp(0.36, 0.64, u);
+        body(pose, half, {
+          lex: x - 0.03,
+          ley: 0.55,
+          lwx: x - 0.02,
+          lwy: 0.58,
+          rex: x + 0.03,
+          rey: 0.55,
+          rwx: x + 0.02,
+          rwy: 0.58,
+        });
+      }, 24);
+      expect(
+        r.fixes.every((f) => f === SIDE_NONE),
+        `half ${half}`,
+      ).toBe(true);
+      expect(r.moved, `half ${half}`).toBe(false);
+    }
+  });
+
+  it('a one-handed swing with the other arm still, side-on', () => {
+    const r = run((pose, k) => {
+      const u = (k - 8) / 4;
+      body(pose, 0.015, {
+        lex: 0.5,
+        ley: 0.5,
+        lwx: 0.5,
+        lwy: 0.58,
+        rex: lerp(0.45, 0.56, u),
+        rey: 0.5,
+        rwx: lerp(0.4, 0.66, u),
+        rwy: 0.56,
+      });
+    }, 24);
+    expect(r.fixes.every((f) => f === SIDE_NONE)).toBe(true);
+    expect(r.moved).toBe(false);
+  });
+});
+
 describe('full-frame hands', () => {
   it('are not moved by the guard, since they are assigned by position', () => {
     const r = new Rig();

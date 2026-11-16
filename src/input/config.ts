@@ -23,6 +23,11 @@ export interface InputConfig {
   /** Samples in the least-squares velocity window. */
   velocityWindow: number;
   minVisibility: number;
+  /**
+   * The less visible shoulder only has to reach this for the body to count as tracked (the nearer
+   * one needs `minVisibility`): side-on, the far shoulder hides behind the torso.
+   */
+  farShoulderVisibility: number;
   lostAfterMs: number;
 }
 
@@ -37,5 +42,6 @@ export const inputConfig: InputConfig = {
   sideGuard: { ...sideGuardConfig },
   velocityWindow: 4,
   minVisibility: 0.5,
+  farShoulderVisibility: 0.2,
   lostAfterMs: 400,
 };

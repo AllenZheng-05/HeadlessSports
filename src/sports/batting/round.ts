@@ -66,6 +66,9 @@ export interface RoundHooks {
   shifted?(by: number): void;
 }
 
+/** What became of a SwingStarted: taken for the pitch, or why not. */
+export type SwingFate = 'taken' | 'before' | 'late' | 'ignored';
+
 export type RoundPhase = 'idle' | 'pitch' | 'ending' | 'done';
 /** Where the round is in the pitch cycle. */
 export type RoundStage = 'result' | 'reset' | 'set' | 'windup' | 'flight' | 'ending' | 'done';
@@ -223,15 +226,16 @@ export class BattingRound {
   }
 
   /** A SwingStarted event arrived while the game clock read `clock`. */
-  onSwingStarted(ev: { t: number; speed: number; height: number }, clock: number): void {
-    if (this.phase !== 'pitch' || this.resolved || this.swing !== null) return;
+  onSwingStarted(ev: { t: number; speed: number; height: number }, clock: number): SwingFate {
+    if (this.phase !== 'pitch' || this.resolved || this.swing !== null) return 'ignored';
     const p = this.pitch!;
-    if (!swingInWindow(p, ev.t, this.cfg)) return;
+    if (!swingInWindow(p, ev.t, this.cfg)) return ev.t > p.arrivalMs ? 'late' : 'before';
     this.swing = { t: ev.t, startSpeed: ev.speed, height: ev.height, peakSpeed: null };
     this.swingT = ev.t;
     this.swingPending = true;
     this.swingArrivedClock = clock;
     this.hooks.swing?.(p, this.swing);
+    return 'taken';
   }
 
   /** A SwingPeak event arrived while the game clock read `clock`. */

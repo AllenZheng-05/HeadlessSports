@@ -14,7 +14,7 @@ export const meta: SportMeta = {
   score: { label: 'Distance', unit: 'm', decimals: 2, higherIsBetter: true },
   howTo: [
     'Run on the spot: faster feet, faster athlete',
-    'Swing your throwing arm hard overhead to throw',
+    'Swing your dominant arm hard overhead to throw',
     'Throw before the foul line',
   ],
   debugKeys: ['Hold the button to run', 'Let go just before the line to throw'],

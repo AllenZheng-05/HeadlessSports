@@ -288,14 +288,16 @@ export class SyntheticBody {
     const ry = Math.sin(c.lean);
     const smx = hipX + ux * TORSO * sw;
     const smy = hipY + uy * TORSO * sw;
-    const lsx = smx - 0.5 * sw * rx;
-    const lsy = smy - 0.5 * sw * ry;
-    const rsx = smx + 0.5 * sw * rx;
-    const rsy = smy + 0.5 * sw * ry;
+    // Turning the body shrinks the shoulder and hip lines in the image (side-on they overlap).
+    const turn = Math.cos(c.yaw);
+    const lsx = smx - 0.5 * sw * rx * turn;
+    const lsy = smy - 0.5 * sw * ry * turn;
+    const rsx = smx + 0.5 * sw * rx * turn;
+    const rsy = smy + 0.5 * sw * ry * turn;
     this.setPt(11, lsx, lsy, 0);
     this.setPt(12, rsx, rsy, 0);
-    const lhx = hipX - 0.5 * HIP_WIDTH * sw;
-    const rhx = hipX + 0.5 * HIP_WIDTH * sw;
+    const lhx = hipX - 0.5 * HIP_WIDTH * sw * turn;
+    const rhx = hipX + 0.5 * HIP_WIDTH * sw * turn;
     this.setPt(23, lhx, hipY, 0);
     this.setPt(24, rhx, hipY, 0);
 
@@ -333,9 +335,11 @@ export class SyntheticBody {
       world[o + 2] = pz[i] * wk;
     }
 
-    // Pose output with noise and visibility.
+    // Pose output with noise and visibility. Turned away, the far side hides behind the body.
     const pose = frame.pose;
     const sg = this.sigma;
+    const hide = c.farHide * Math.abs(Math.sin(c.yaw));
+    const farOdd = c.yaw < 0; // odd indices are the left side
     for (let i = 0; i < POSE_COUNT; i++) {
       const o = i * POSE_STRIDE;
       const nxm = px[i] / asp;
@@ -344,7 +348,11 @@ export class SyntheticBody {
       pose[o] = nxm + (sg > 0 ? this.gauss() * sg : 0);
       pose[o + 1] = nym + (sg > 0 ? this.gauss() * sg : 0);
       pose[o + 2] = pz[i] / asp + (sg > 0 ? this.gauss() * sg : 0);
-      pose[o + 3] = inside ? 0.95 : 0.9;
+      let vis = inside ? 0.95 : 0.9;
+      if (i >= 11 && hide > 0 && (i % 2 === 1) === farOdd) vis *= 1 - hide;
+      // Wrist blur: the wrist and its hand points (15..22).
+      if (i >= 15 && i <= 22) vis *= i % 2 === 1 ? c.leftWristVis : c.rightWristVis;
+      pose[o + 3] = vis;
     }
   }
 

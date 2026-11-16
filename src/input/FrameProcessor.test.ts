@@ -249,6 +249,19 @@ describe('FrameProcessor', () => {
     expect(r.state.tracking).toBe(false);
   });
 
+  it('tracks a side-on player whose far shoulder is faint, but not one who is not there', () => {
+    const r = new Rig();
+    // Far shoulder at 0.3: hidden behind the torso, still seen faintly. The player is tracked.
+    r.frame.pose[PoseIndex.LEFT_SHOULDER * POSE_STRIDE + 3] = 0.3;
+    r.step(100);
+    expect(r.state.tracking).toBe(true);
+    expect(r.state.problem).toBe('none');
+    // Both shoulders gone: not tracking.
+    r.frame.pose[PoseIndex.RIGHT_SHOULDER * POSE_STRIDE + 3] = 0.3;
+    r.step(200);
+    expect(r.state.tracking).toBe(false);
+  });
+
   it('gives positioning hints', () => {
     const r = new Rig();
     r.standing(r.frame.pose, 0.9, 0.05);

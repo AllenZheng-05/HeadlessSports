@@ -30,6 +30,20 @@ export interface BodyControls {
   // Legs: 0 standing, 1 thigh lifted to horizontal (knee rises toward hip height, ankle follows).
   leftKnee: number;
   rightKnee: number;
+  // Turning. 0 faces the camera; about 1.5 is side-on (profile). The shoulder and hip lines shrink
+  // to cos(yaw) of their width in the image, and the landmarks of the far side (the right side for
+  // positive yaw, the left for negative) lose visibility as the body hides them. The wrist
+  // targets above stay in image shoulder widths from the same-side shoulder, whatever the yaw.
+  yaw: number;
+  // Extra visibility multipliers for the wrists (1 = normal): motion blur and occlusion at speed.
+  leftWristVis: number;
+  rightWristVis: number;
+  /**
+   * How much of the far side's visibility the turned body hides at full side-on (0.6 by default,
+   * as the pose model behaves). 0 keeps the far shoulder and hip as visible as the near ones, so the
+   * live shoulder width collapses with both shoulders still reported.
+   */
+  farHide: number;
   // Hands: 0 open .. 1 fist; visibility 1 = hand landmarks present this frame.
   leftFist: number;
   rightFist: number;
@@ -63,6 +77,10 @@ export const CONTROL_KEYS: readonly (keyof BodyControls)[] = [
   'rightWristY',
   'leftKnee',
   'rightKnee',
+  'yaw',
+  'leftWristVis',
+  'rightWristVis',
+  'farHide',
   'leftFist',
   'rightFist',
   'leftHandVisible',
@@ -91,6 +109,10 @@ export function defaultControls(): BodyControls {
     rightWristY: -1.4,
     leftKnee: 0,
     rightKnee: 0,
+    yaw: 0,
+    leftWristVis: 1,
+    rightWristVis: 1,
+    farHide: 0.6,
     leftFist: 0,
     rightFist: 0,
     leftHandVisible: 1,

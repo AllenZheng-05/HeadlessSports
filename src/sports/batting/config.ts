@@ -92,6 +92,8 @@ export const battingConfig = {
   lateWindowMs: 250,
   /** Swing events are reported late: a pitch with no swing resolves this long after the window closes. */
   eventDelayAllowanceMs: 250,
+  /** A "why nothing happened" hint (swing too slow, too late, arm lost) stays up this long, ms. */
+  noticeMs: 2000,
   /** A SwingPeak counts for the power only when it arrives within this of the start event. */
   peakWaitMs: 200,
   /** Hand height (sw above the shoulder line) to bat height (m). */
@@ -192,6 +194,7 @@ export type BattingConfig = typeof battingConfig;
 export const battingRanges: Record<string, TunableRange> = {
   batTravelMs: { min: 0, max: 300, step: 5 },
   perfectMs: { min: 10, max: 150, step: 5 },
+  noticeMs: { min: 500, max: 5000, step: 100 },
   goodMs: { min: 20, max: 250, step: 5 },
   okMs: { min: 40, max: 350, step: 5 },
   foulMs: { min: 60, max: 450, step: 5 },

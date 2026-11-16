@@ -90,6 +90,36 @@ export interface InputState {
   /** Hip-midpoint height change from the calibrated standing height, sw; positive is UP. */
   rise: number;
   cadence: Cadence;
+  /**
+   * The last arm motion a recognizer noticed but did not turn into an event, so a sport can say
+   * why nothing happened. Optional: only `TrackedInput` fills it; compare `seq` with the last one
+   * you handled.
+   */
+  rejected?: RejectedMotion;
+}
+
+/** Why a noticed arm motion was not a swing or a throw. */
+export type RejectReason =
+  /** Too slow or too weak. */
+  | 'slow'
+  /** Too short or too abrupt (a jerk, not a swing). */
+  | 'short'
+  /** Mostly straight up or down (raising or dropping the arms). */
+  | 'steep'
+  /** The arm dropped out of sight during the motion. */
+  | 'lost';
+
+export interface RejectedMotion {
+  /** Increases by one for every rejected motion. */
+  seq: number;
+  /** Game ms of the peak of the rejected motion. */
+  t: number;
+  kind: 'swing' | 'throw';
+  reason: RejectReason;
+  /** Peak wrist speed of the motion, sw/s. */
+  speed: number;
+  /** The arm that made a throw motion (unset for a swing, which is made by both wrists). */
+  hand?: Side;
 }
 
 /** Captured during onboarding; used to normalise and to detect drifting out of frame. */
@@ -141,6 +171,13 @@ export type GameEvent =
       loft: number;
       curvature: number;
       style: 'overarm' | 'underarm';
+      /**
+       * Optional extras for sports that judge the shape of a throw. `travel`: straight distance the
+       * wrist covered from the start of the acceleration to the peak, sw. `topY`: highest wrist
+       * above its shoulder in the 400 ms before the peak, sw (positive up).
+       */
+      travel?: number;
+      topY?: number;
     }
   /** Two-handed swing onset. height: wrists relative to shoulder line, sw, positive up. */
   | { type: 'SwingStarted'; t: number; speed: number; height: number; direction: -1 | 1 }

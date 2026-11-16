@@ -88,25 +88,98 @@ export interface RecognizerConfig {
     minAccelMs: number;
     maxAccelMs: number;
     cooldownMs: number;
+    /**
+     * Inside the cooldown a release must peak this many times higher than the last release to
+     * count (the cooldown hides the follow-through, not a real throw behind a weak cocking move).
+     */
+    supersedeFactor: number;
+    /**
+     * ...and only when the last release peaked under this many minPeaks (a cocking movement, not a
+     * throw). A sport whose own floor is higher than that sets it from its own required speed.
+     */
+    supersedeMaxPeak: number;
     curvatureWindowMs: number;
     /** Distance (sw) the wrist must travel away from where it rested to count as a wind-up. */
     windupBack: number;
-    /** While the shoulders move faster than this (sw/s) wind-up tracking is suspended: the wrist
-     * and shoulder filters lag differently, so a fast sidestep looks like an arm movement. */
+    /**
+     * While the shoulders move faster than this (sw/s) the arm is not made ready and a ready arm
+     * stands down: the wrist and shoulder filters lag differently, so a fast sidestep looks like
+     * an arm movement. The wrist is measured against the shoulders already, so only a violent
+     * body movement matters; a throw in progress is never cancelled by it.
+     */
     maxBodySpeed: number;
+    /** The body counts as still again this long after it last moved faster than maxBodySpeed (ms). */
+    bodySettleMs: number;
+    /** A wrist is seen when its visibility reaches this (motion blur and side-on lower it). */
+    wristVisibility: number;
+    /** ...and a wrist already moving fast stays in use down to this (it blurs at the peak). */
+    movingVisibility: number;
+    /** A wrist that drops out of sight is coasted this long (ms); a throw lost at its peak still releases. */
+    coastMs: number;
+    /** A motion that peaked above this fraction of minPeak but failed is reported as rejected. */
+    noticeFraction: number;
   };
+  /**
+   * A swing is the midpoint of the two wrists (or the one wrist that is seen) relative to the
+   * shoulder midpoint: a two-handed swing, or either arm swung alone. Side-on only the near wrist
+   * may be seen.
+   */
   swing: {
-    /** Both wrists closer than this (sw) is a two-handed grip. */
+    /** When both wrists are clearly seen and further apart than this (sw) it is not a bat grip. */
     gripDistance: number;
+    /** The wrists must have been slower than this (sw/s) for `readyMs` before a swing can start. */
     readySpeed: number;
+    readyMs: number;
     startSpeed: number;
     minPeak: number;
     dropRatio: number;
     cooldownMs: number;
     /** Once a swing has started, a lost grip (blurred wrist) is tolerated this long (ms). */
     gripGraceMs: number;
+    /** A wrist is seen when its visibility reaches this; both are needed when both were at the start. */
+    wristVisibility: number;
+    movingVisibility: number;
+    /** A wrist that drops out of sight keeps its last velocity this long (ms). */
+    coastMs: number;
+    /**
+     * Both wrists have to be this visible for the grip-distance rule to apply. It is also what
+     * "clearly seen" means: next to a clearly seen wrist a fainter one (the far arm side-on,
+     * hovering around `wristVisibility`) is left out of the signal, and a swing that began with two
+     * clearly seen wrists needs both to the end.
+     */
+    gripVisibility: number;
+    /** Fastest the onset may reach its peak (ms): slower is raising the arms, not swinging. */
+    maxAccelMs: number;
+    /** Shortest travel of the hands from onset to peak (sw): a jump of one landmark is not a swing. */
+    minTravel: number;
+    /** A motion steeper than this from horizontal (rad) is raising or dropping the arms. */
+    maxPlane: number;
+    /** A motion that peaked above this fraction of minPeak but failed is reported as rejected. */
+    noticeFraction: number;
+    /**
+     * SwingStarted is announced only once the onset is confirmed: on a later frame the speed is
+     * still rising (or holding) and has reached this (sw/s), and, with one wrist tracked, the hand
+     * has moved `minStartTravel` from where it began. The event keeps the true onset's timestamp.
+     * A flick of the hand never gets there; the swing gets there one or two frames after the onset.
+     */
+    confirmSpeed: number;
+    /** An onset that is not confirmed this long after its first frame is dropped (ms). */
+    confirmMs: number;
+    /** Distance (sw) the single wrist must have covered since the onset to confirm it. */
+    minStartTravel: number;
+    /**
+     * Forward direction of the swing in the image: 1 toward screen right, -1 toward screen left, 0
+     * either. A sport sets it from the batter's handedness. Hands moving the other way (the load)
+     * only start a swing at `backwardFactor` times `confirmSpeed`.
+     */
+    forward: -1 | 0 | 1;
+    backwardFactor: number;
+    /** After the signal changes from two wrists to one (or back) the velocity step is faded out over this long (ms). */
+    switchBlendMs: number;
   };
   punch: {
+    /** Both wrists closer than this (sw) is a bat grip, not a punch. */
+    gripDistance: number;
     minPeak: number;
     /** Elbow extension rate (rad/s) needed at some point during the acceleration. */
     minElbowRate: number;
@@ -156,20 +229,49 @@ export const recognizerConfig: RecognizerConfig = {
     minAccelMs: 50,
     maxAccelMs: 300,
     cooldownMs: 450,
+    supersedeFactor: 1.6,
+    supersedeMaxPeak: 2,
     curvatureWindowMs: 150,
     windupBack: 0.25,
-    maxBodySpeed: 3,
+    maxBodySpeed: 5,
+    bodySettleMs: 150,
+    wristVisibility: 0.25,
+    movingVisibility: 0.1,
+    coastMs: 120,
+    noticeFraction: 0.6,
   },
   swing: {
-    gripDistance: 0.7,
-    readySpeed: 1.5,
+    gripDistance: 1.4,
+    readySpeed: 2.0,
+    readyMs: 60,
     startSpeed: 3.0,
-    minPeak: 4.5,
+    minPeak: 4.0,
     dropRatio: 0.85,
     cooldownMs: 500,
     gripGraceMs: 120,
+    wristVisibility: 0.3,
+    movingVisibility: 0.25,
+    coastMs: 100,
+    gripVisibility: 0.5,
+    maxAccelMs: 320,
+    minTravel: 0.2,
+    maxPlane: 0.75,
+    noticeFraction: 0.6,
+    confirmSpeed: 4.0,
+    confirmMs: 100,
+    minStartTravel: 0.12,
+    forward: 0,
+    backwardFactor: 1.8,
+    switchBlendMs: 150,
   },
-  punch: { minPeak: 4.0, minElbowRate: 4, cooldownMs: 350, maxWristY: 0.7, minWristY: -0.6 },
+  punch: {
+    gripDistance: 0.7,
+    minPeak: 4.0,
+    minElbowRate: 4,
+    cooldownMs: 350,
+    maxWristY: 0.7,
+    minWristY: -0.6,
+  },
   squat: { depth: 0.35, dwellMs: 150 },
   jump: { height: 0.22, cooldownMs: 400 },
 };

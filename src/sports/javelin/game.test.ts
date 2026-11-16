@@ -132,6 +132,57 @@ describe('throw guard', () => {
     const t = run(s, now, 1, 4);
     expect(onThrow(s, cfg, t, throwAt(t, { style: 'underarm' }), 'right')).toBe(false);
   });
+  it('a hand only level with the shoulder at the peak counts when it went over it just before', () => {
+    const { s, now } = started();
+    const t = run(s, now, 1, 4);
+    const side = { style: 'underarm' as const, travel: 1.2 };
+    expect(onThrow(s, cfg, t, throwAt(t, { ...side, topY: -0.4 }), 'right')).toBe(false);
+    expect(s.refusal).toBe('low');
+    expect(
+      onThrow(s, cfg, t, throwAt(t, { ...side, topY: cfg.minThrowTopY + 0.05 }), 'right'),
+    ).toBe(true);
+  });
+  it('says why a throw was refused: slow, low, short, wrong hand', () => {
+    const { s, now } = started();
+    const t = run(s, now, 1, 4);
+    const need = requiredThrowSpeed(s, cfg);
+    let before = s.refusalSeq;
+    expect(onThrow(s, cfg, t, throwAt(t, { speed: need - 0.5 }), 'right')).toBe(false);
+    expect([s.refusal, s.refusalSeq - before]).toEqual(['slow', 1]);
+    before = s.refusalSeq;
+    expect(onThrow(s, cfg, t, throwAt(t, { style: 'underarm' }), 'right')).toBe(false);
+    expect([s.refusal, s.refusalSeq - before]).toEqual(['low', 1]);
+    before = s.refusalSeq;
+    expect(onThrow(s, cfg, t, throwAt(t, { travel: cfg.minThrowTravel - 0.2 }), 'right')).toBe(
+      false,
+    );
+    expect([s.refusal, s.refusalSeq - before]).toEqual(['short', 1]);
+    before = s.refusalSeq;
+    expect(onThrow(s, cfg, t, throwAt(t, { hand: 'left' }), 'right')).toBe(false);
+    expect([s.refusal, s.refusalSeq - before]).toEqual(['hand', 1]);
+    // Arm pump (weak, below the shoulder) is not a throw attempt and is never called out.
+    before = s.refusalSeq;
+    expect(
+      onThrow(s, cfg, t, throwAt(t, { speed: need - 0.5, style: 'underarm', topY: -0.4 }), 'right'),
+    ).toBe(false);
+    expect(s.refusalSeq - before).toBe(0);
+    // The other arm pumping (weak, or below the shoulder) is not worth a hint.
+    before = s.refusalSeq;
+    expect(onThrow(s, cfg, t, throwAt(t, { hand: 'left', speed: 2 }), 'right')).toBe(false);
+    expect(onThrow(s, cfg, t, throwAt(t, { hand: 'left', style: 'underarm' }), 'right')).toBe(
+      false,
+    );
+    expect(s.refusalSeq - before).toBe(0);
+    expect(s.phase).toBe('run');
+  });
+  it('raising the javelin arm to cock it (about 3 sw/s) is far below the speed floor', () => {
+    const { s, now } = started();
+    const t = run(s, now, 0.8, 0);
+    expect(requiredThrowSpeed(s, cfg)).toBeGreaterThan(4.5);
+    expect(onThrow(s, cfg, t, throwAt(t, { speed: 3.5, travel: 1.4, topY: 1.1 }), 'right')).toBe(
+      false,
+    );
+  });
   it('needs no pose first: a throw is accepted whenever the run is on', () => {
     const { s, now } = started();
     const t = run(s, now, 0.6, 0);

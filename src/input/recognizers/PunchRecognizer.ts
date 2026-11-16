@@ -68,7 +68,7 @@ export class PunchRecognizer implements Recognizer {
       this.peakElbowRate >= c.minElbowRate * PEAK_ELBOW_FRACTION &&
       this.peakWristY >= c.minWristY &&
       this.peakWristY <= c.maxWristY &&
-      !(wristDistance(state) < this.config.swing.gripDistance)
+      !(wristDistance(state) < this.config.punch.gripDistance)
     ) {
       emit({
         type: 'Punch',

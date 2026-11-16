@@ -45,6 +45,7 @@ export class TrackedInput implements InputProvider {
 
   constructor(source: LandmarkSource, options: TrackedInputOptions = {}) {
     this.source = source;
+    this.state.rejected = { seq: 0, t: 0, kind: 'swing', reason: 'slow', speed: 0 };
     this.processor = new FrameProcessor(this.state, options.inputConfig ?? inputConfig);
     this.recognizers =
       options.recognizers ?? createDefaultRecognizers(options.recognizerConfig ?? recognizerConfig);

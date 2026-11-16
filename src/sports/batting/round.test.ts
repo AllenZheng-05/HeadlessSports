@@ -180,6 +180,23 @@ describe('swing handling', () => {
     expect(rig.results[0]!.judgement!.timingError).toBe(30);
   });
 
+  it('says what became of each swing: taken, before the wind-up, too late, or no pitch', () => {
+    const rig = makeRound();
+    expect(rig.round.onSwingStarted({ t: 100, speed: 6, height: 0 }, 110)).toBe('ignored');
+    let t = runTo(rig, 0, cfg.firstPitchDelayMs + 10);
+    const p = rig.round.pitch!;
+    expect(rig.round.onSwingStarted({ t: p.windupStartMs - 200, speed: 6, height: 0 }, t)).toBe(
+      'before',
+    );
+    expect(
+      rig.round.onSwingStarted({ t: p.arrivalMs + cfg.lateWindowMs + 50, speed: 6, height: 0 }, t),
+    ).toBe('late');
+    t = runTo(rig, t, p.releaseMs + 50);
+    const ok = { t: p.arrivalMs - cfg.batTravelMs, speed: 6, height: levelHeight(p.ty) };
+    expect(rig.round.onSwingStarted(ok, t)).toBe('taken');
+    expect(rig.round.onSwingStarted(ok, t)).toBe('ignored');
+  });
+
   it('ignores swings outside any pitch window', () => {
     const rig = makeRound();
     // Before the first wind-up begins.

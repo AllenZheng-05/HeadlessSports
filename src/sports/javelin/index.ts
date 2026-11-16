@@ -11,6 +11,7 @@ import type { Fog } from 'three/webgpu';
 import { createJavelinBot } from './bot';
 import { javelinConfig, javelinRanges } from './config';
 import { flightPitch } from './distance';
+import { applyJavelinRecognizer } from './recognizer';
 import {
   attemptLine,
   attemptsFor,
@@ -20,6 +21,8 @@ import {
   stepMouseRun,
   onStep,
   onThrow,
+  refusalWorthSaying,
+  showsRejection,
   stepGame,
 } from './game';
 import type { AttemptRecord, Phase } from './game';
@@ -40,6 +43,8 @@ export interface JavelinSport extends Sport {
   readonly ignoredThrows: number;
   /** The last gesture events the sport saw and what it did with them (for debugging). */
   readonly log: readonly string[];
+  /** The last "why nothing happened" hint shown for a refused or missed throw ('' for none). */
+  readonly notice: string;
 }
 
 /** Pitch of the javelin when held, radians (nose up). */
@@ -48,6 +53,17 @@ const HOLD_PITCH = 0.22;
 const OFFSET_FADE = 7;
 /** The javelin is drawn a little oversized in the air and in the turf so it reads at distance. */
 const FLIGHT_SCALE = 1.5;
+
+const THROW_PROMPT = 'Throw!';
+const LOST_TEXT = 'I lost your arm, step back a little';
+/** What to say when the rules refuse a throw the recognizer did report. */
+const REFUSAL_TEXT: Record<string, string> = {
+  hand: 'Throw with your dominant hand',
+  slow: 'Throw faster',
+  low: 'Bring your hand up past your shoulder',
+  short: 'Make a bigger throwing motion',
+  up: 'Throw forward, not up',
+};
 
 /** `?botRun=slow|fast` picks a fixed step rate for the bot (to compare approach speeds). */
 function botVariant(): 'slow' | 'fast' | null {
@@ -70,12 +86,7 @@ export const createJavelin: SportFactory = (ctx: SportContext): JavelinSport => 
 
   // Running bobs the shoulders and pumps the arms: let the throw recognizer tolerate that for the
   // length of the sport (the speed guard in the rules keeps pumping from throwing).
-  const savedBodySpeed = recognizerConfig.throw.maxBodySpeed;
-  const savedArmSpeed = recognizerConfig.throw.armSpeed;
-  const savedArmMs = recognizerConfig.throw.armMs;
-  if (cfg.maxBodySpeedOverride > 0) recognizerConfig.throw.maxBodySpeed = cfg.maxBodySpeedOverride;
-  if (cfg.recognizerArmSpeed > 0) recognizerConfig.throw.armSpeed = cfg.recognizerArmSpeed;
-  if (cfg.recognizerArmMs > 0) recognizerConfig.throw.armMs = cfg.recognizerArmMs;
+  const restoreRecognizer = applyJavelinRecognizer(cfg, recognizerConfig);
 
   // World.
   const stage = ctx.stage;
@@ -174,16 +185,29 @@ export const createJavelin: SportFactory = (ctx: SportContext): JavelinSport => 
       if (e.type === 'Step') {
         onStep(game, cfg, e.t);
       } else if (e.type === 'ThrowReleased') {
+        const seq = game.refusalSeq;
         const taken = onThrow(
           game,
           cfg,
           nowMs,
-          { t: e.t, hand: e.hand, speed: e.speed, vy: e.vy, style: e.style },
+          {
+            t: e.t,
+            hand: e.hand,
+            speed: e.speed,
+            vy: e.vy,
+            vx: e.vx,
+            style: e.style,
+            travel: e.travel,
+            topY: e.topY,
+          },
           hand,
         );
         note(
-          `throw t=${e.t.toFixed(0)} now=${nowMs.toFixed(0)} speed=${e.speed.toFixed(1)} vy=${e.vy.toFixed(1)} ${e.style} ${game.phase} pos=${game.position.toFixed(1)} v=${game.speed.toFixed(1)} taken=${taken}`,
+          `throw t=${e.t.toFixed(0)} now=${nowMs.toFixed(0)} speed=${e.speed.toFixed(1)} vy=${e.vy.toFixed(1)} ${e.style} top=${e.topY?.toFixed(2)} travel=${e.travel?.toFixed(2)} ${game.phase} pos=${game.position.toFixed(1)} v=${game.speed.toFixed(1)} taken=${taken}`,
         );
+        if (!taken && game.refusalSeq !== seq && refusalWorthSaying(game, cfg)) {
+          showNotice(REFUSAL_TEXT[game.refusal] ?? '', nowMs);
+        }
       }
     }
     pending.length = 0;
@@ -203,10 +227,40 @@ export const createJavelin: SportFactory = (ctx: SportContext): JavelinSport => 
   let speedShown = false;
   let shownHint: string | null = '';
 
+  // A short "why nothing happened" line (refused throw, arm lost) that stays over the usual hint.
+  let noticeText = '';
+  let noticeUntil = 0;
+  let noticeYields = false;
+  let seenRejected = ctx.input.state.rejected?.seq ?? 0;
+  let hudNow = 0;
   const setHint = (text: string | null): void => {
-    if (text === shownHint) return;
-    shownHint = text;
-    ctx.hud.setHint(text);
+    // The usual hints do not override a notice while it is up; clearing (null) always works.
+    // A "noticed but not a throw" note gives way to the throw prompt.
+    const yields = noticeYields && text === THROW_PROMPT;
+    const shown = text !== null && hudNow < noticeUntil && !yields ? noticeText : text;
+    if (shown === shownHint) return;
+    shownHint = shown;
+    ctx.hud.setHint(shown);
+  };
+  const showNotice = (text: string, nowMs: number, yieldsToPrompt = false): void => {
+    if (text === '') return;
+    noticeYields = yieldsToPrompt;
+    noticeText = text;
+    noticeUntil = nowMs + cfg.noticeMs;
+    note(`notice: ${text}`);
+    setHint(text);
+  };
+  // What the recognizer says about an arm motion it saw but did not make a throw of.
+  const checkRejected = (nowMs: number): void => {
+    const r = ctx.input.state.rejected;
+    if (r === undefined || r.seq === seenRejected) return;
+    seenRejected = r.seq;
+    if (ctx.paused || !showsRejection(game, cfg, nowMs, r, hand)) return;
+    showNotice(
+      r.reason === 'lost' ? LOST_TEXT : r.reason === 'short' ? 'Throw smoother' : 'Throw faster',
+      nowMs,
+      true,
+    );
   };
 
   const refreshHud = (): void => {
@@ -243,7 +297,7 @@ export const createJavelin: SportFactory = (ctx: SportContext): JavelinSport => 
         else if (game.speed < 0.5) setHint('Hold the button to run');
         else setHint('Let go just before the line');
       } else if (game.idleHint) setHint('Run on the spot: pump your arms and lift your knees');
-      else if (distanceToLine(game, cfg) <= cfg.throwZone) setHint('Throw!');
+      else if (distanceToLine(game, cfg) <= cfg.throwZone) setHint(THROW_PROMPT);
       else setHint('Run on the spot: faster is farther');
       // Speed meter: fills with the run speed, so quicker feet are seen at once.
       const sf = Math.max(0, Math.min(1, game.speed / cfg.maxRunSpeed));
@@ -464,6 +518,9 @@ export const createJavelin: SportFactory = (ctx: SportContext): JavelinSport => 
     get ignoredThrows(): number {
       return game.ignoredThrows;
     },
+    get notice(): string {
+      return hudNow < noticeUntil ? noticeText : '';
+    },
 
     start(): void {
       started = true;
@@ -474,7 +531,9 @@ export const createJavelin: SportFactory = (ctx: SportContext): JavelinSport => 
 
     fixedUpdate(dt: number, nowMs: number): void {
       if (finished) return;
+      hudNow = nowMs;
       drain(nowMs);
+      checkRejected(nowMs);
       let runTarget = -1;
       if (mouse) {
         runTarget = stepMouseRun(
@@ -499,6 +558,7 @@ export const createJavelin: SportFactory = (ctx: SportContext): JavelinSport => 
     },
 
     frame(dt: number, nowMs: number): void {
+      hudNow = nowMs;
       const phase = game.phase;
       // Athlete: the rig runs down the runway, the camera follows.
       ctx.avatar.root.position.set(0, 0, -game.position);
@@ -551,9 +611,7 @@ export const createJavelin: SportFactory = (ctx: SportContext): JavelinSport => 
         mouse.setManualMode(false);
       }
       unregister();
-      recognizerConfig.throw.maxBodySpeed = savedBodySpeed;
-      recognizerConfig.throw.armSpeed = savedArmSpeed;
-      recognizerConfig.throw.armMs = savedArmMs;
+      restoreRecognizer();
       world.dispose();
       javelin.removeFromParent();
       marker.removeFromParent();

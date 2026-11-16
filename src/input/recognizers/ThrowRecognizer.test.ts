@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { collector, drive, ofType } from '../testing/collect';
 import { createTestState, setWrist } from '../testing/frames';
-import type { GameEvent, Side } from '../types';
+import { POSE_STRIDE, PoseIndex } from '../../tracking/types';
+import type { GameEvent, InputState, Side } from '../types';
 import { recognizerConfig } from './config';
 import { ThrowRecognizer } from './ThrowRecognizer';
 import { signedCurvature } from './util';
@@ -220,5 +221,174 @@ describe('ThrowRecognizer', () => {
     rec.reset();
     drive(rec, state, emit, 1080, 2500, (t) => setWrist(state, 'right', ...pos(t)));
     expect(released(events)).toHaveLength(0);
+  });
+
+  describe('real arms: blur, cocking, lunging', () => {
+    /** Run a wrist path with a hook to edit the state each frame (visibility, shoulders). */
+    function runWith(
+      pos: Pos,
+      toMs: number,
+      edit: (state: InputState, t: number) => void,
+      withNote = true,
+    ) {
+      const rec = new ThrowRecognizer('right', recognizerConfig);
+      const state = createTestState();
+      if (withNote) state.rejected = { seq: 0, t: 0, kind: 'swing', reason: 'slow', speed: 0 };
+      const { events, emit } = collector();
+      drive(rec, state, emit, 0, toMs, (t) => {
+        const [x, y] = pos(t);
+        setWrist(state, 'right', x, y);
+        edit(state, t);
+      });
+      return { events, state };
+    }
+    const wristVis = (state: InputState, v: number): void => {
+      state.pose[PoseIndex.RIGHT_WRIST * POSE_STRIDE + 3] = v;
+    };
+
+    it('a wrist that blurs out of sight at the speed peak still releases at the peak', () => {
+      const pos = straight(0.3, -1.0, 45, 1000, 140, 1.0);
+      // Lost from the peak (1140) on, for good: the release comes when the coast runs out.
+      const { events } = runWith(pos, 2500, (state, t) => {
+        if (t > 1130) wristVis(state, 0);
+      });
+      const r = released(events);
+      expect(r).toHaveLength(1);
+      expect(Math.abs(r[0].t - 1140)).toBeLessThan(60);
+      expect(r[0].speed).toBeGreaterThan(c.minPeak);
+    });
+
+    it('a wrist that is lost before it got fast is no release and not worth a note', () => {
+      const pos = straight(0.3, -1.0, 45, 1000, 300, 0.9); // slow: peak 3 sw/s at 1300
+      const { events, state } = runWith(pos, 2500, (s, t) => {
+        if (t > 1100) wristVis(s, 0);
+      });
+      expect(released(events)).toHaveLength(0);
+      expect(state.rejected!.seq).toBe(0);
+    });
+
+    it('a wrist lost on a real but too gentle effort is a lost arm, noted with its hand', () => {
+      const pos = straight(0.3, -1.0, 45, 1000, 300, 0.9);
+      const { events, state } = runWith(pos, 2500, (s, t) => {
+        if (t > 1300) wristVis(s, 0);
+      });
+      expect(released(events)).toHaveLength(0);
+      expect(state.rejected!.seq).toBe(1);
+      expect(state.rejected!.kind).toBe('throw');
+      expect(state.rejected!.reason).toBe('lost');
+      expect(state.rejected!.hand).toBe('right');
+      expect(state.rejected!.speed).toBeGreaterThan(c.minPeak * c.noticeFraction);
+    });
+
+    it('the note carries the hand of the recognizer that made it', () => {
+      for (const hand of ['left', 'right'] as const) {
+        const rec = new ThrowRecognizer(hand, recognizerConfig);
+        const state = createTestState();
+        state.rejected = { seq: 0, t: 0, kind: 'swing', reason: 'slow', speed: 0 };
+        const { emit } = collector();
+        const pos = straight(0.3, -1, 45, 1000, 140, 0.36); // too weak: peak about 2.6
+        drive(rec, state, emit, 0, 2500, (t) => setWrist(state, hand, ...pos(t)));
+        expect(state.rejected!.seq).toBe(1);
+        expect(state.rejected!.hand).toBe(hand);
+      }
+    });
+
+    it('a wrist lost at or just after its speed peak is stamped within one lag of the true peak', () => {
+      // True peak at 1140. The estimate lags, so the last frames seen are within about 60 ms of it
+      // whether the wrist went just before the peak or just after. Moving the stamp back by the
+      // full lag (as for a release found after the peak) would put the earliest of these 100 ms
+      // early: when the blur takes the wrist it IS the peak.
+      const pos = straight(0.3, -1.0, 45, 1000, 140, 1.0);
+      for (const lostAfter of [1133, 1166, 1200]) {
+        const { events } = runWith(pos, 2500, (state, t) => {
+          if (t > lostAfter) wristVis(state, 0);
+        });
+        const r = released(events);
+        expect(r, `lost after ${lostAfter}`).toHaveLength(1);
+        expect(Math.abs(r[0].t - 1140), `lost after ${lostAfter}`).toBeLessThan(65);
+      }
+    });
+
+    it('a short loss inside the coast does not matter', () => {
+      const pos = straight(0.3, -1.0, 45, 1000, 140, 1.0);
+      const { events } = runWith(pos, 2500, (state, t) => {
+        if (t > 1100 && t < 1170) wristVis(state, 0.05);
+      });
+      expect(released(events)).toHaveLength(1);
+    });
+
+    it('a lunge (shoulders moving fast during the throw) does not cancel it', () => {
+      const pos = straight(0.3, -1.0, 45, 1000, 140, 1.0);
+      const base = createTestState();
+      const ls = PoseIndex.LEFT_SHOULDER * POSE_STRIDE;
+      const rs = PoseIndex.RIGHT_SHOULDER * POSE_STRIDE;
+      const { events } = runWith(pos, 2500, (state, t) => {
+        // Both shoulders slide 0.4 sw in 140 ms from the start of the throw, the arm with them.
+        const dx = (Math.min(Math.max(t - 1000, 0), 140) / 140) * 0.4 * (0.1 / (16 / 9));
+        state.pose[ls] = base.pose[ls] + dx;
+        state.pose[rs] = base.pose[rs] + dx;
+        state.pose[PoseIndex.RIGHT_WRIST * POSE_STRIDE] += dx;
+      });
+      expect(released(events)).toHaveLength(1);
+    });
+
+    it('a weak cocking movement just before the throw does not hide the throw in its cooldown', () => {
+      // A 2.8 sw/s back-swing at 1000, then the real throw at 1300 (peak about 7).
+      const cock = straight(0.3, -1.0, 135, 1000, 150, 0.42);
+      const fwd = straight(-0.1, -0.8, 45, 1300, 140, 1.0);
+      const pos: Pos = (t) => (t < 1300 ? cock(t) : fwd(t));
+      const events = runWith(pos, 3000, () => undefined).events;
+      const r = released(events);
+      expect(r.length).toBeGreaterThanOrEqual(1);
+      expect(r[r.length - 1].speed).toBeGreaterThan(5);
+      expect(Math.abs(r[r.length - 1].t - 1440)).toBeLessThan(60);
+    });
+
+    it('a cocking release between 5 and 6 sw/s hides the whip unless the cap is raised', () => {
+      // Cock peaking about 5.5 sw/s at 1140, the whip (about 12 sw/s) 150 ms later.
+      const cock = straight(0.3, -1.0, 135, 1000, 140, 0.9);
+      const endX = 0.3 + Math.cos((135 * Math.PI) / 180) * 0.9;
+      const endY = -1.0 + Math.sin((135 * Math.PI) / 180) * 0.9;
+      const whip = straight(endX, endY, -20, 1290, 70, 1.4);
+      const pos: Pos = (t) => (t < 1290 ? cock(t) : whip(t));
+      const saved = { ...recognizerConfig.throw };
+      try {
+        expect(recognizerConfig.throw.supersedeMaxPeak).toBe(2);
+        const hidden = released(runWith(pos, 3000, () => undefined).events);
+        expect(hidden).toHaveLength(1);
+        expect(hidden[0].speed).toBeGreaterThan(5);
+        expect(hidden[0].speed).toBeLessThan(6);
+        recognizerConfig.throw.supersedeMaxPeak = 3;
+        const seen = released(runWith(pos, 3000, () => undefined).events);
+        expect(seen).toHaveLength(2);
+        expect(seen[1].speed).toBeGreaterThan(10);
+        expect(seen[1].t - seen[0].t).toBeLessThan(300);
+        // The factor is configurable too: a whip must beat the cock by more than 3 times.
+        recognizerConfig.throw.supersedeFactor = 3;
+        expect(released(runWith(pos, 3000, () => undefined).events)).toHaveLength(1);
+      } finally {
+        Object.assign(recognizerConfig.throw, saved);
+      }
+    });
+
+    it('reports how far the wrist travelled and its highest point before the peak', () => {
+      const events = runWith(straight(0.4, 0.6, -30, 1000, 140, 1.2), 2500, () => undefined).events;
+      const r = released(events)[0];
+      expect(r.travel!).toBeGreaterThan(0.5);
+      expect(r.topY!).toBeGreaterThan(0.55);
+    });
+
+    it('leaves a note for a motion that peaked but was too weak', () => {
+      // Peak about 2.4 sw/s: over startSpeed, under minPeak, over the notice fraction.
+      const { events, state } = runWith(
+        straight(0.3, -1, 45, 1000, 140, 0.36),
+        2500,
+        () => undefined,
+      );
+      expect(released(events)).toHaveLength(0);
+      expect(state.rejected!.seq).toBe(1);
+      expect(state.rejected!.kind).toBe('throw');
+      expect(state.rejected!.reason).toBe('slow');
+    });
   });
 });

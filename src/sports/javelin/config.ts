@@ -50,8 +50,12 @@ export const javelinConfig = {
   cadenceFadeMs: 450,
 
   // Throw acceptance
-  /** Wrist speed floor for a throw when standing, sw/s (the recognizer's own minPeak is 2.5). */
-  minThrowSpeed: 3,
+  /**
+   * Wrist speed floor for a throw when standing, sw/s. The recognizer's own minPeak (2.5) is far
+   * lower: raising the javelin arm to cock it moves the wrist at 2 to 6 sw/s (6 for a quick lift from
+   * the hanging position), a real whip at 10 or more, so the floor sits between them.
+   */
+  minThrowSpeed: 6,
   /** Added to the floor at full run speed, sw/s: arm pumping while running must not throw. */
   pumpMargin: 1.5,
   /** Mouse play: the run speed while the button is held, m/s (reached with `accel`). */
@@ -64,8 +68,34 @@ export const javelinConfig = {
   mouseThrowSpeed: 11,
   /** Mouse play: the fixed release angle, degrees. */
   mouseLoftDeg: 36,
-  /** Only a throw with the wrist above the shoulder at the speed peak counts. */
+  /**
+   * Only an overarm throw counts: the wrist above the shoulder at the speed peak, or at some
+   * moment of the 400 ms before it. Side-on, the hand is often only level with the shoulder at the
+   * peak itself.
+   */
   acceptAnyStyle: false,
+  /**
+   * "Bring your hand up past your shoulder" is only said below this run speed, m/s. Running pumps
+   * the arms, and a hard pump is as fast as a weak throw and never rises past the shoulder.
+   */
+  lowHintMaxRunSpeed: 2,
+  /** Highest the wrist must have been above its shoulder just before the peak, sw. Arm pump stays below. */
+  minThrowTopY: 0.1,
+  /** Least distance the wrist covers from the start of the throw to the speed peak, sw. A pump covers less. */
+  minThrowTravel: 0.6,
+  /**
+   * A release whose peak velocity points up more than this many times its sideways part is a lift
+   * of the arm, not a throw, and is refused ("Throw forward, not up"). An overarm throw peaks
+   * moving forward (sideways side-on) or down toward the camera, a lift almost straight up.
+   */
+  maxLiftRatio: 2,
+  /** A rejected throw's hint stays up this long, ms. */
+  noticeMs: 2500,
+  /**
+   * The recognizer's "noticed but not a throw" notes are only said for the throwing arm and above
+   * this wrist speed, sw/s: arm pump while running peaks at 3 to 4 and must stay silent.
+   */
+  noticeMinSpeed: 5,
   /** Latency compensation never steps back further than this, s. */
   maxLatencyS: 1,
   /**
@@ -73,9 +103,9 @@ export const javelinConfig = {
    * shared value alone. Running in place bobs the shoulders and pumps the arms, so the body-speed
    * limit is raised and the arm counts as ready at a higher wrist speed and after a shorter pause.
    */
-  maxBodySpeedOverride: 6,
-  recognizerArmSpeed: 2.2,
-  recognizerArmMs: 50,
+  maxBodySpeedOverride: 9,
+  recognizerArmSpeed: 3,
+  recognizerArmMs: 40,
 
   // Distance model
   /** release speed = baseSpeed + runGain * run/maxRunSpeed + throwGain * armPower, m/s */
@@ -146,6 +176,12 @@ export const javelinRanges: Record<string, TunableRange> = {
   cadenceHoldFactor: { min: 1, max: 3, step: 0.1 },
   cadenceFadeMs: { min: 100, max: 1500, step: 50 },
   minThrowSpeed: { min: 1, max: 8, step: 0.1 },
+  minThrowTopY: { min: -1, max: 1, step: 0.05 },
+  minThrowTravel: { min: 0, max: 2, step: 0.05 },
+  lowHintMaxRunSpeed: { min: 0, max: 10, step: 0.5 },
+  noticeMs: { min: 500, max: 6000, step: 100 },
+  noticeMinSpeed: { min: 1, max: 10, step: 0.1 },
+  maxLiftRatio: { min: 0.5, max: 8, step: 0.1 },
   pumpMargin: { min: 0, max: 5, step: 0.1 },
   mouseRunSpeed: { min: 3, max: 12, step: 0.5 },
   mouseCadence: { min: 1, max: 6, step: 0.1 },

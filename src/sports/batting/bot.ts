@@ -18,8 +18,12 @@ const SKIP_AFTER_MS = 150;
  * during the stance step; at the normal 500 ms that drift (up to 1.5 sw between a low and a high
  * pitch) is fast enough to be read as the swing itself, so the stance is stretched.
  */
-export function botSwingSteps(cfg: BattingConfig, height: number): ScriptStep[] {
-  const steps = twoHandSwing({ power: cfg.botPower, height });
+export function botSwingSteps(
+  cfg: BattingConfig,
+  height: number,
+  direction: -1 | 1 = 1,
+): ScriptStep[] {
+  const steps = twoHandSwing({ power: cfg.botPower, height, direction });
   steps[0] = { ...steps[0]!, dur: cfg.botStanceMs };
   return [...steps, ...idle(100)];
 }
@@ -47,8 +51,11 @@ export function createBattingBot(options: {
   cfg: BattingConfig;
   view: BotView;
   random: () => number;
+  /** Which way the swing goes in the image: toward the plate (1 for a right-hander, -1 for a left-hander). */
+  direction?: -1 | 1;
 }): SportBot {
   const { cfg, view, random } = options;
+  const direction = options.direction ?? 1;
   let swungFor = 0;
   let jitterFor = 0;
   let jitter = 0;
@@ -100,7 +107,7 @@ export function createBattingBot(options: {
       // The bat should meet the ball a little below its centre: that lifts it.
       const batHeight = p.ty - cfg.botBatBelowBall;
       const eventHeight = (batHeight - cfg.shoulderHeightM + cfg.batDrop) / cfg.swToMetres;
-      enqueue(botSwingSteps(cfg, eventHeight - cfg.botHeightOffset));
+      enqueue(botSwingSteps(cfg, eventHeight - cfg.botHeightOffset, direction));
     },
   };
 }

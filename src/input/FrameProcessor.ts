@@ -121,7 +121,7 @@ export class FrameProcessor {
       const first = !this.poseActive;
       if (first) {
         this.poseBank.reset();
-        this.kinematics.reset();
+        this.kinematics.restart();
       }
       state.posePrev.set(pose);
       pose.set(frame.pose);
@@ -143,9 +143,12 @@ export class FrameProcessor {
       this.kinematics.update(state, this.calibration);
       this.poseActive = true;
       state.hasPose = true;
+      // Side-on (batting, javelin) the far shoulder is hidden behind the torso and MediaPipe rates
+      // it low, but the player is still there and still throwing: it only has to be faintly seen.
+      const lv = pose[PoseIndex.LEFT_SHOULDER * POSE_STRIDE + 3];
+      const rv = pose[PoseIndex.RIGHT_SHOULDER * POSE_STRIDE + 3];
       shouldersVisible =
-        pose[PoseIndex.LEFT_SHOULDER * POSE_STRIDE + 3] >= cfg.minVisibility &&
-        pose[PoseIndex.RIGHT_SHOULDER * POSE_STRIDE + 3] >= cfg.minVisibility;
+        Math.max(lv, rv) >= cfg.minVisibility && Math.min(lv, rv) >= cfg.farShoulderVisibility;
     } else {
       this.poseActive = false;
       state.hasPose = false;
