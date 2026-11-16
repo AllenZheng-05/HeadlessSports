@@ -167,6 +167,22 @@ export const pitchingConfig = {
   botNaturalLateral: 0.5,
   /** Event lateral per unit of the overarmThrow `lateral` option. */
   botLateralPerOption: 1,
+
+  // Tutorial (the optional guided practice). No pitch count, no clock, nothing saved.
+  /** The catcher's call timings are multiplied by this in the tutorial (it waits for the player, only shorter). */
+  tutorialGapScale: 0.5,
+  /** A step shows its hint only after this long without progress, ms. */
+  tutorialHintDelayMs: 2500,
+  /** Shoulders and both hands in view for this long, ms. */
+  tutorialSeenMs: 700,
+  /** A pick step accepts the fallback fastball after this many unread picks in a row. */
+  tutorialReadTries: 2,
+  /** The ring counts as steered once it has moved this far from where it first showed, m. */
+  tutorialMoveM: 0.12,
+  /** The ring counts as on the glowing square this far outside the tile edge, m. */
+  tutorialCellMarginM: 0.05,
+  /** Hold the ring on the glowing square this long, ms. */
+  tutorialHoldMs: 1000,
 };
 
 export type PitchingConfig = typeof pitchingConfig;
@@ -232,4 +248,11 @@ export const pitchingRanges: Record<string, TunableRange> = {
   botLoftLow: { min: 30, max: 100, step: 1 },
   botLoftHigh: { min: 70, max: 140, step: 1 },
   botNaturalLateral: { min: 0, max: 1, step: 0.02 },
+  tutorialGapScale: { min: 0.1, max: 1, step: 0.05 },
+  tutorialHintDelayMs: { min: 500, max: 8000, step: 100 },
+  tutorialSeenMs: { min: 100, max: 3000, step: 100 },
+  tutorialReadTries: { min: 1, max: 5, step: 1 },
+  tutorialMoveM: { min: 0.03, max: 0.4, step: 0.01 },
+  tutorialCellMarginM: { min: 0, max: 0.2, step: 0.01 },
+  tutorialHoldMs: { min: 200, max: 3000, step: 100 },
 };

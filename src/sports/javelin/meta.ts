@@ -17,5 +17,6 @@ export const meta: SportMeta = {
     'Swing your dominant arm hard overhead to throw',
     'Throw before the foul line',
   ],
+  hasTutorial: true,
   debugKeys: ['Hold the button to run', 'Let go just before the line to throw'],
 };

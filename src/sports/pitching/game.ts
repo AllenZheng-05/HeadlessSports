@@ -104,6 +104,14 @@ export interface GameState {
   readonly debug: boolean;
   /** Mouse play: no sign step; the pitch is picked with buttons and thrown with press and release. */
   readonly mouse: boolean;
+  /** Tutorial: no balk clock and the round never ends. */
+  readonly tutorial: boolean;
+  /** Tutorial: the pitch is picked for you (a fastball) as soon as the sign opens. */
+  autoSelect: boolean;
+  /** Tutorial: the catcher always calls this pitch (null: a random one, as in a round). */
+  callKind: PitchKind | null;
+  /** Counts a pitch button taken in mouse play. */
+  pickSeq: number;
   readonly random: () => number;
   /** Scratch, so nothing allocates per step. */
   readonly scratch: Point;
@@ -120,6 +128,7 @@ export function createGame(
   firstExtraMs = 0,
   curveShare = 0.45,
   mouse = false,
+  tutorial = false,
 ): GameState {
   const g: GameState = {
     phase: 'call',
@@ -156,6 +165,10 @@ export function createGame(
     doneSeq: 0,
     debug,
     mouse,
+    tutorial,
+    autoSelect: tutorial,
+    callKind: tutorial ? 'fastball' : null,
+    pickSeq: 0,
     random,
     scratch: { x: 0, y: 0 },
   };
@@ -165,7 +178,8 @@ export function createGame(
 
 /** The catcher picks the next pitch and spot (seeded, so a seed always gives the same calls). */
 export function startCall(g: GameState, curveShare: number): void {
-  g.called = g.random() < curveShare ? 'curve' : 'fastball';
+  const roll = g.random();
+  g.called = g.callKind ?? (roll < curveShare ? 'curve' : 'fastball');
   g.target = pickTarget(g.random, g.lastTarget);
   g.lastTarget = g.target;
   g.bubbleOn = false;
@@ -174,6 +188,27 @@ export function startCall(g: GameState, curveShare: number): void {
   g.callSeq++;
   setPhase(g, 'call');
 }
+
+/**
+ * Tutorial: throw the current call away and let the catcher call again (the same rules, a new
+ * spot). Only while a pitch is being set up; false once the ball is on its way.
+ */
+export function restartCall(g: GameState, curveShare: number): boolean {
+  if (g.phase !== 'call' && g.phase !== 'sign' && g.phase !== 'windup') return false;
+  g.reading = 'none';
+  g.holdMs = 0;
+  g.stillTotalMs = 0;
+  g.usedFallback = false;
+  g.balk = false;
+  g.extraMs = 0;
+  g.lockoutMs = 0;
+  startCall(g, curveShare);
+  return true;
+}
+
+/** The aim ring shows from the reveal of the call until the release. */
+export const ringShown = (g: GameState, ready: boolean): boolean =>
+  g.bubbleOn && ready && (g.phase === 'call' || g.phase === 'sign' || g.phase === 'windup');
 
 export const totalIgnored = (g: GameState): number => {
   const i = g.ignored;
@@ -230,6 +265,7 @@ export const canPick = (g: GameState): boolean =>
 export function pickKind(g: GameState, kind: PitchKind): boolean {
   if (!canPick(g)) return false;
   g.kind = kind;
+  g.pickSeq++;
   return true;
 }
 
@@ -275,6 +311,10 @@ export function stepGame(
       return;
     }
     case 'sign': {
+      if (g.autoSelect) {
+        select(g, cfg, 'fastball', false);
+        return;
+      }
       const reading = readHand(hand);
       const still = hand.speed < cfg.signStillSpeed;
       if (reading !== g.reading) {
@@ -298,7 +338,7 @@ export function stepGame(
     case 'windup': {
       if (g.lockoutMs > 0) g.lockoutMs = Math.max(0, g.lockoutMs - ms);
       g.windupMs += ms;
-      if (g.windupMs >= cfg.pitchClockS * 1000) {
+      if (!g.tutorial && g.windupMs >= cfg.pitchClockS * 1000) {
         g.balk = true;
         g.score = BALK_SCORE;
         resolve(g, cfg);

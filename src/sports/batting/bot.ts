@@ -28,6 +28,14 @@ export function botSwingSteps(
   return [...steps, ...idle(100)];
 }
 
+/** Set by the tutorial for the bot to read: what the current step asks of the player. */
+export interface TutorialProbe {
+  /** Hold both hands together, still, like holding a bat. */
+  stance: boolean;
+  /** Swing with no ball in the air (a practice swing). */
+  practice: boolean;
+}
+
 export interface BotView {
   /** The pitch the bot should still swing at, or null (none in the air, already swung, resolved). */
   pitch(): Pitch | null;
@@ -53,8 +61,10 @@ export function createBattingBot(options: {
   random: () => number;
   /** Which way the swing goes in the image: toward the plate (1 for a right-hander, -1 for a left-hander). */
   direction?: -1 | 1;
+  /** Tutorial only: the steps that are not "hit the pitch". */
+  probe?: TutorialProbe;
 }): SportBot {
-  const { cfg, view, random } = options;
+  const { cfg, view, random, probe } = options;
   const direction = options.direction ?? 1;
   let swungFor = 0;
   let jitterFor = 0;
@@ -74,6 +84,11 @@ export function createBattingBot(options: {
             ...armDown('right', 500),
           ]);
         }
+        return;
+      }
+      if (probe !== undefined && (probe.stance || probe.practice)) {
+        if (probe.practice) enqueue(botSwingSteps(cfg, 0, direction));
+        else enqueue([botSwingSteps(cfg, 0, direction)[0]!, ...idle(300)]);
         return;
       }
       const frameT = view.frameT();

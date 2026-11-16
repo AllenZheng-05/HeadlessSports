@@ -2,6 +2,7 @@ import { mkdirSync } from 'node:fs';
 import { expect, test } from '@playwright/test';
 import type { Page } from '@playwright/test';
 import type { GameHook } from '../../src/core/shell/hook';
+import { expectNoHintFor, waitTutorialDone } from './tutorialHelpers';
 import type { BattingProbe } from '../../src/sports/batting/index';
 
 const SHOTS = 'e2e/screenshots';
@@ -9,6 +10,8 @@ mkdirSync(SHOTS, { recursive: true });
 
 type Game = Pick<GameHook, 'phase' | 'error'> & {
   result: { score: number; headline: string; detail?: Record<string, number> } | null;
+  isBest: boolean | null;
+  tutorial: boolean;
 };
 
 function watch(page: Page): string[] {
@@ -61,6 +64,8 @@ async function waitResolved(page: Page, count: number, timeout = 20000): Promise
 /** How far ahead of the ball a click must be sent, learned from clicks that do nothing. */
 interface ClickTiming {
   lead: number;
+  /** Where the pointer rests, in viewport pixels (default the middle). */
+  at?: { x: number; y: number };
 }
 
 /**
@@ -78,7 +83,8 @@ async function calibrateClick(page: Page, timing: ClickTiming): Promise<void> {
     window.addEventListener('mousedown', () => (w.__md = performance.now()), true);
   });
   const size = page.viewportSize()!;
-  await page.mouse.move(size.width / 2, size.height / 2);
+  const at = timing.at ?? { x: size.width / 2, y: size.height / 2 };
+  await page.mouse.move(at.x, at.y);
   const lat: number[] = [];
   for (let i = 0; i < 3; i++) {
     const t0 = await page.evaluate(() => {
@@ -267,3 +273,209 @@ for (const hand of ['right', 'left'] as const) {
     });
   });
 }
+
+// ---- tutorial ----
+
+/**
+ * Record every tutorial step the sport passes through, in the page from the first frame, so a fast
+ * step is not missed. Call before `page.goto`.
+ */
+async function recordSteps(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const w = window as unknown as {
+      __game?: { sport: BattingProbe | null };
+      __steps: number[];
+    };
+    w.__steps = [];
+    setInterval(() => {
+      const sport = w.__game?.sport;
+      if (!sport) return;
+      const step = sport.tutorialStep;
+      if (step >= 0 && step < sport.tutorialSteps && !w.__steps.includes(step)) {
+        w.__steps.push(step);
+      }
+    }, 20);
+  });
+}
+
+const stepsSeen = (page: Page): Promise<number[]> =>
+  page.evaluate(() =>
+    [...(window as unknown as { __steps: number[] }).__steps].sort((a, b) => a - b),
+  );
+
+const tutorialStep = (page: Page): Promise<number> =>
+  page.evaluate(
+    () =>
+      (window as unknown as { __game: { sport: BattingProbe | null } }).__game.sport
+        ?.tutorialStep ?? -1,
+  );
+
+test.describe('batting tutorial', () => {
+  const TUTORIAL = '/?sport=batting&source=synthetic&skipGate=1&tutorial=1&timeScale=3';
+
+  for (const hand of ['right', 'left'] as const) {
+    test(`the synthetic ${hand}-handed batter completes the tutorial and nothing is saved`, async ({
+      page,
+    }) => {
+      test.setTimeout(60_000); // about 21 s alone at timeScale 3 (35 s on a busy machine)
+      const problems = watch(page);
+      await recordSteps(page);
+      await page.goto(`${TUTORIAL}&hand=${hand}`);
+      await waitPhase(page, 'playing');
+      expect(
+        await page.evaluate(() => (window as unknown as { __game: Game }).__game.tutorial),
+      ).toBe(true);
+      await expect(page.locator('.coach')).toBeVisible();
+      await expect(page.locator('.coach-count')).toHaveText(/^Step \d of 6$/);
+      // No timer, no best.
+      await expect(page.locator('.hud-sub')).toBeHidden();
+      // A deadline under the test timeout, so a hang says where it is stuck.
+      await waitTutorialDone(page, `batting synthetic ${hand}`, 50_000);
+      expect(await stepsSeen(page)).toEqual([0, 1, 2, 3, 4, 5]);
+      const hook = await page.evaluate(() => {
+        const g = (window as unknown as { __game: Game }).__game;
+        return { result: g.result, isBest: g.isBest };
+      });
+      expect(hook.result).toBeNull();
+      expect(hook.isBest).toBeNull();
+      await expect(page.locator('.screen-tutorialdone')).toBeVisible();
+      await page.screenshot({ path: `${SHOTS}/batting-tutorial-done-${hand}.png` });
+
+      // Back to menu: the sport still has no score.
+      await page.getByRole('button', { name: 'Back to menu' }).click();
+      await waitPhase(page, 'menu');
+      await expect(page.locator('.sport-card[data-sport="batting"] .sport-best')).toHaveText(
+        'No score yet',
+      );
+      expect(problems).toEqual([]);
+    });
+  }
+
+  test('the timing step throws slowed pitches and the last step normal ones', async ({ page }) => {
+    test.setTimeout(60_000); // about 21 s alone at timeScale 3 (35 s on a busy machine)
+    const problems = watch(page);
+    await page.goto(TUTORIAL);
+    await waitPhase(page, 'playing');
+    const seen = new Map<number, number>();
+    await waitTutorialDone(page, 'batting timing step', 50_000, async () => {
+      const now = await page.evaluate(() => {
+        const g = (window as unknown as { __game: Game & { sport: BattingProbe | null } }).__game;
+        return {
+          step: g.sport?.tutorialStep ?? -1,
+          flight: g.sport?.stage === 'flight' ? g.sport.pitchFlightMs : 0,
+        };
+      });
+      // The last flight seen in a step is the one that counted for it.
+      if (now.flight > 0) seen.set(now.step, now.flight);
+    });
+    await waitPhase(page, 'tutorial-done', 5000);
+    expect(seen.get(4)).toBe(1800);
+    expect(seen.get(5)).toBe(800);
+    expect(problems).toEqual([]);
+  });
+
+  test('Play now after the tutorial starts a normal round; S skips steps', async ({ page }) => {
+    const problems = watch(page);
+    await page.goto('/?sport=batting&source=synthetic&skipGate=1&tutorial=1&timeScale=1');
+    await waitPhase(page, 'playing');
+    await expect(page.locator('.coach')).toBeVisible();
+    for (let i = 0; i < 6; i++) {
+      await page.keyboard.press('s');
+      await page.waitForTimeout(150);
+    }
+    await waitPhase(page, 'tutorial-done', 10000);
+    await page.getByRole('button', { name: 'Play now' }).click();
+    await waitPhase(page, 'playing');
+    const normal = await page.evaluate(() => {
+      const g = (window as unknown as { __game: Game & { sport: BattingProbe | null } }).__game;
+      return { tutorial: g.tutorial, step: g.sport?.tutorialStep ?? -2 };
+    });
+    expect(normal.tutorial).toBe(false);
+    expect(normal.step).toBe(-1);
+    await expect(page.locator('.coach')).toBeHidden();
+    expect(problems).toEqual([]);
+  });
+
+  test('tutorial: the normal hint line stays hidden, camera and mouse', async ({ page }) => {
+    const problems: string[] = [];
+
+    page.on('pageerror', (err) => problems.push(err.message));
+
+    for (const url of [
+      '/?sport=batting&source=synthetic&skipGate=1&tutorial=1&timeScale=1',
+
+      '/?sport=batting&input=debug&skipGate=1&tutorial=1',
+    ]) {
+      await page.goto(url);
+
+      await waitPhase(page, 'playing');
+
+      await expect(page.locator('.coach')).toBeVisible();
+
+      // The coach panel is the one instruction line; the sport's own hint steps aside.
+
+      await expectNoHintFor(page, 3000);
+    }
+
+    expect(problems).toEqual([]);
+  });
+
+  test('mouse tutorial: Skip step and End tutorial buttons work', async ({ page }) => {
+    const problems = watch(page);
+    await page.goto('/?sport=batting&input=debug&skipGate=1&tutorial=1');
+    await waitPhase(page, 'playing');
+    await expect(page.locator('.coach-text')).toHaveText('Watch a pitch come in');
+    await expect(page.locator('.coach-count')).toHaveText('Step 1 of 3');
+    await page.getByRole('button', { name: 'Skip step' }).click();
+    await expect(page.locator('.coach-count')).toHaveText('Step 2 of 3');
+    await page.getByRole('button', { name: 'End tutorial' }).click();
+    await waitPhase(page, 'tutorial-done', 5000);
+    await expect(page.locator('.screen-tutorialdone')).toBeVisible();
+    expect(problems).toEqual([]);
+  });
+
+  test('mouse tutorial: a player finishes it with real clicks', async ({ page }) => {
+    test.setTimeout(90_000); // watch a pitch, then timed clicks on slow and full speed pitches, about 36 s alone
+    const problems = watch(page);
+    await recordSteps(page);
+    // A small viewport keeps the software renderer fast, so a frame is short next to the timing window.
+    await page.setViewportSize({ width: 480, height: 270 });
+    await page.goto('/?sport=batting&input=debug&skipGate=1&tutorial=1');
+    await waitPhase(page, 'playing');
+    // The coach panel is interface, so a press on it is not a swing: rest the pointer on bare scene.
+    const at = await page.evaluate(() => {
+      for (let y = 10; y < window.innerHeight; y += 10) {
+        for (let x = 10; x < window.innerWidth; x += 10) {
+          const el = document.elementFromPoint(x, y);
+          if (el !== null && el.closest('button, a, input, select, textarea, [data-ui]') === null) {
+            return { x, y };
+          }
+        }
+      }
+      return null;
+    });
+    expect(at).not.toBeNull();
+    const timing: ClickTiming = { lead: 150, at: at! };
+    for (let n = 0; n < 40; n++) {
+      const step = await tutorialStep(page);
+      const phase = await page.evaluate(() => (window as unknown as { __game: Game }).__game.phase);
+      if (phase === 'tutorial-done') break;
+      if (step <= 0) {
+        // Step 1 only watches: no click.
+        await page.waitForTimeout(250);
+        continue;
+      }
+      try {
+        await clickAt(page, 0, timing);
+      } catch {
+        // No pitch to aim at yet (a step change or the tutorial ended): look again.
+      }
+      await page.waitForTimeout(300);
+    }
+    await waitPhase(page, 'tutorial-done', 20000);
+    expect(await stepsSeen(page)).toEqual([0, 1, 2]);
+    expect(await result(page)).toBeNull();
+    await page.screenshot({ path: `${SHOTS}/batting-tutorial-mouse-done.png` });
+    expect(problems).toEqual([]);
+  });
+});

@@ -674,10 +674,17 @@ test('how-to card: the Tutorial button is there only for a sport that has a tuto
     expect(names).toEqual(['Start', 'Tutorial', 'Back']);
     if (mode === '&cam=1') await page.screenshot({ path: 'e2e-ui/screenshots/howto-tutorial.png' });
   }
-  for (const id of ['bowling', 'batting', 'archery', 'javelin', 'pitching', 'warmup']) {
+  // The warm-up is real and has no tutorial; stand-in sports 1 to 7 carry no `hasTutorial` flag.
+  for (const id of ['warmup', '1', '2', '3', '4', '5', '6', '7']) {
     await page.goto(`/ui-harness.html?screen=howto&sport=${id}&input=debug`);
     await page.waitForTimeout(300);
     await expect(page.getByRole('button', { name: 'Tutorial' })).toHaveCount(0);
+  }
+  // Every real sport that has a tutorial shows the button.
+  for (const id of ['bowling', 'batting', 'archery', 'javelin', 'pitching']) {
+    await page.goto(`/ui-harness.html?screen=howto&sport=${id}&input=debug`);
+    await page.waitForTimeout(300);
+    await expect(page.getByRole('button', { name: 'Tutorial' })).toHaveCount(1);
   }
   expect(problems).toEqual([]);
 });

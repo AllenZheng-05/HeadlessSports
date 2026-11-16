@@ -106,6 +106,10 @@ export interface GameState {
   refusalSeq: number;
   /** The current flight is a javelin dropped at the line (crossed without throwing). */
   dropped: boolean;
+  /** Tutorial only: throws are not taken (a step that is only about running). */
+  noThrow: boolean;
+  /** Tutorial only: a throw is measured from where it was released, not from the foul line. */
+  standing: boolean;
 }
 
 export function createGame(attempts: number): GameState {
@@ -141,6 +145,8 @@ export function createGame(attempts: number): GameState {
     refusal: '',
     refusalSeq: 0,
     dropped: false,
+    noThrow: false,
+    standing: false,
   };
 }
 
@@ -229,7 +235,7 @@ export function onThrow(
   ev: ThrowInput,
   throwHand: 'left' | 'right',
 ): boolean {
-  if (s.phase !== 'run') return false;
+  if (s.phase !== 'run' || s.noThrow) return false;
   const required = requiredThrowSpeed(s, cfg);
   if (ev.hand !== throwHand) {
     // The other arm pumping gives small releases all the time; only a real overarm throw is said.
@@ -375,7 +381,7 @@ export function stepMouseRun(
 
 function land(s: GameState, cfg: JavelinConfig): void {
   const foul = s.flightFoul;
-  const measured = Math.max(0, s.flight.x - cfg.runwayLength);
+  const measured = Math.max(0, s.flight.x - (s.standing ? s.release.x : cfg.runwayLength));
   const rec: AttemptRecord = {
     foul,
     distance: foul ? 0 : measured,
@@ -409,6 +415,22 @@ function nextAttempt(s: GameState): void {
   s.lastStepMs = -1e9;
   s.idleHint = false;
   s.nextSeq++;
+}
+
+/**
+ * Tutorial only: start a fresh run-up at once (no get-ready beat, no attempt counted), from any
+ * phase. The throw lockout starts now.
+ */
+export function restartAttempt(s: GameState, cfg: JavelinConfig, nowMs: number): void {
+  s.position = 0;
+  s.speed = 0;
+  s.cadence = 0;
+  s.cadenceNow = 0;
+  s.lastStepMs = -1e9;
+  s.dropped = false;
+  s.flightFoul = false;
+  s.nextSeq++;
+  begin(s, cfg, nowMs);
 }
 
 /** Advance the rules by `dt` seconds. */

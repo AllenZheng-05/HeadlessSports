@@ -186,6 +186,39 @@ export const battingConfig = {
   /** Desired bat height below the ball centre (m); a slightly low bat lifts the ball. */
   botBatBelowBall: 0.1,
   botPower: 0.8,
+
+  // ---- tutorial (no timer, no limits; pitches keep coming at a relaxed rhythm) ----
+  /** From the start of the pitching steps to the first pitch coming set. */
+  tutorialFirstPitchMs: 1500,
+  /** Extra time between a result and the next pitch, on top of the normal rhythm. */
+  tutorialGapMs: 500,
+  /** Flight time of the slow practice pitches (release to plate). */
+  tutorialSlowFlightMs: 1800,
+  /** Flight time of the "full speed" pitches in the last step. */
+  tutorialFullFlightMs: 800,
+  /** The last step ends after a hit, or after this many pitches. */
+  tutorialFullPitches: 3,
+  /** The "a little faster" swing needs at least this power (0..1). */
+  tutorialMinPower: 0.4,
+  /** Hands count as together when the wrists are closer than this (sw)... */
+  tutorialStanceGapSw: 0.7,
+  /** ...at a height between these (sw above the shoulder line)... */
+  tutorialStanceMinY: -1.3,
+  tutorialStanceMaxY: 0.9,
+  /** ...and with the faster wrist slower than this (sw/s); the swing's readySpeed is 2. */
+  tutorialStanceMaxSpeed: 2,
+  /**
+   * In the practice steps (no pitch yet) a rejected motion is only explained when its peak speed
+   * reaches this (sw/s), so ordinary arm movement says nothing. Between swing.readySpeed and
+   * swing.minPeak.
+   */
+  tutorialNoticeMinSpeed: 3,
+  /** Hands together and still for this long counts as the stance. */
+  tutorialStanceMs: 700,
+  /** Seen and tracked for this long counts as step 1. */
+  tutorialTrackedMs: 600,
+  /** Instruction feedback (what to do differently) shows after this long on a step. */
+  tutorialHintDelayMs: 3500,
 };
 
 export type BattingConfig = typeof battingConfig;
@@ -219,4 +252,18 @@ export const battingRanges: Record<string, TunableRange> = {
   homerRollMax: { min: 0, max: 20, step: 0.5 },
   botOnsetOffsetMs: { min: 0, max: 2000, step: 10 },
   botJitterMs: { min: 0, max: 150, step: 5 },
+  tutorialFirstPitchMs: { min: 500, max: 5000, step: 100 },
+  tutorialGapMs: { min: 0, max: 4000, step: 100 },
+  tutorialSlowFlightMs: { min: 900, max: 3500, step: 100 },
+  tutorialFullFlightMs: { min: 400, max: 1500, step: 20 },
+  tutorialFullPitches: { min: 1, max: 10, step: 1 },
+  tutorialMinPower: { min: 0, max: 1, step: 0.05 },
+  tutorialStanceGapSw: { min: 0.2, max: 1.4, step: 0.05 },
+  tutorialStanceMinY: { min: -3, max: 0, step: 0.1 },
+  tutorialStanceMaxY: { min: 0, max: 2, step: 0.1 },
+  tutorialStanceMaxSpeed: { min: 0.5, max: 4, step: 0.1 },
+  tutorialNoticeMinSpeed: { min: 2, max: 4, step: 0.1 },
+  tutorialStanceMs: { min: 200, max: 3000, step: 100 },
+  tutorialTrackedMs: { min: 200, max: 3000, step: 100 },
+  tutorialHintDelayMs: { min: 1000, max: 10000, step: 250 },
 };

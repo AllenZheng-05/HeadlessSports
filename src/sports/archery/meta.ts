@@ -17,5 +17,6 @@ export const meta: SportMeta = {
     'Close your other fist next to it, then pull back to draw. Aim with the bow arm.',
     'Open your hand to let the arrow go.',
   ],
+  hasTutorial: true,
   debugKeys: ['Move the mouse to aim', 'Hold the button to draw, let go to shoot'],
 };

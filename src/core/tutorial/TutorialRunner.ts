@@ -4,6 +4,12 @@ export interface TutorialStep {
   /** Instruction text. */
   text: string;
   detail?: string;
+  /**
+   * Text and detail that depend on the state when the step begins: read once, right after
+   * `enter`, and shown instead of `text` and `detail`. Return undefined to keep the static one.
+   */
+  textNow?(): string | undefined;
+  detailNow?(): string | undefined;
   /** Called once when the step becomes current (set up the scene for it). */
   enter?(): void;
   /** Polled every frame: true once the player has done it. */
@@ -124,7 +130,9 @@ export class TutorialRunner {
     this.startMs = nowMs;
     this.lastFeedback = null;
     step.enter?.();
-    this.coach.show(this.current, this.steps.length, step.text, step.detail ?? null);
+    const text = step.textNow?.() ?? step.text;
+    const detail = step.detailNow?.() ?? step.detail ?? null;
+    this.coach.show(this.current, this.steps.length, text, detail);
     this.coach.setFeedback(null);
   }
 

@@ -12,6 +12,16 @@ import type { Release } from './release';
 import { scorecardRows } from './scoring';
 import { BowlingView } from './view';
 import type { CameraMode } from './view';
+import {
+  countPickup,
+  countRelease,
+  countRoll,
+  countThrow,
+  countWindup,
+  createBowlTutorial,
+  createTutorialCounts,
+} from './tutorial';
+import type { BowlTutorial, TutorialProbe } from './tutorial';
 import { buildAlley, rackSpot } from './world';
 
 /** What Playwright and the debugging tools can read from `__game.sport`. */
@@ -29,6 +39,10 @@ export interface BowlingDebug {
   readonly standing: number;
   /** The ball has touched the pins this roll. */
   readonly contacted: boolean;
+  /** Tutorial rounds: the current step (0-based), or -1 in a normal round. */
+  readonly tutorialStep: number;
+  /** Tutorial rounds: the number of steps, or 0 in a normal round. */
+  readonly tutorialSteps: number;
 }
 
 const CAMERA_FOR: Record<BowlPhase, CameraMode> = {
@@ -43,7 +57,12 @@ const CAMERA_FOR: Record<BowlPhase, CameraMode> = {
 export const createBowling: SportFactory = async (ctx: SportContext) => {
   const cfg = bowlingConfig;
   const hand = ctx.calibration?.handedness ?? 'right';
-  const frames = ctx.short ? cfg.shortFrames : cfg.frames;
+  const tut = ctx.tutorial;
+  // A tutorial is a lane session: a whole game's frames, so it never runs out before the steps do.
+  const frames = ctx.short && !tut ? cfg.shortFrames : cfg.frames;
+  const counts = createTutorialCounts();
+  const probe: TutorialProbe = { gate: 0 };
+  let tutorial: BowlTutorial | null = null;
 
   // Rapier ships in this chunk only: it is imported here and nowhere on the title screen.
   const physics = await createRapierBowling(cfg);
@@ -90,6 +109,8 @@ export const createBowling: SportFactory = async (ctx: SportContext) => {
   };
 
   const refreshSub = (): void => {
+    // No frame counter or best in a tutorial: the coach panel is the guide.
+    if (tut) return;
     const n = game.next;
     const frame = Math.min(n.frame + 1, frames);
     const ball = Math.min(n.ball + 1, frame === frames ? 3 : 2);
@@ -112,6 +133,7 @@ export const createBowling: SportFactory = async (ctx: SportContext) => {
 
   const onRolled = (o: RollOutcome): void => {
     pinsDown = o.pins;
+    countRoll(counts, o.kind);
     ctx.hud.setHint(null);
     refreshCard();
     switch (o.kind) {
@@ -153,7 +175,8 @@ export const createBowling: SportFactory = async (ctx: SportContext) => {
           ctx.hud.setHint('Move the mouse to aim the arrows. Hold the button, let go to bowl');
         } else {
           ctx.hud.setHint(null);
-          ctx.hud.setBanner('Close your fist to pick up the ball', 4000);
+          // The coach panel says it in a tutorial.
+          if (!tut) ctx.hud.setBanner('Close your fist to pick up the ball', 4000);
         }
         refreshSub();
         break;
@@ -189,6 +212,7 @@ export const createBowling: SportFactory = async (ctx: SportContext) => {
     {
       phase: onPhase,
       pickedUp: () => {
+        countPickup(counts);
         holding = true;
         view.attachBallTo(mitt);
         setHandCrops(false);
@@ -198,6 +222,7 @@ export const createBowling: SportFactory = async (ctx: SportContext) => {
       released: (release) => {
         holding = false;
         launches++;
+        countRelease(counts, release.hook);
         releases.push(release);
         view.setAim(false, 0, 0);
         animator.play('throw-under', { side: hand, strength: 0.4 + 0.6 * release.power });
@@ -215,7 +240,8 @@ export const createBowling: SportFactory = async (ctx: SportContext) => {
       },
       rolled: onRolled,
       finished: (total, rolls) => {
-        if (finished) return;
+        // A tutorial ends through its own steps and saves nothing.
+        if (finished || tut) return;
         finished = true;
         let pins = 0;
         for (const r of rolls) pins += r;
@@ -251,11 +277,14 @@ export const createBowling: SportFactory = async (ctx: SportContext) => {
           if (!ctx.paused) game.onFistClosed(e.hand);
         }),
         ctx.input.on('ThrowWindup', (e) => {
-          if (!ctx.paused) game.onWindup(e.hand);
+          if (ctx.paused) return;
+          countWindup(counts, game.phase, hand, e.hand);
+          game.onWindup(e.hand);
         }),
         ctx.input.on('ThrowReleased', (e) => {
           // Gestures made while the round is paused (player out of frame) do not count.
-          if (!ctx.paused) game.onThrow(e);
+          if (ctx.paused) return;
+          countThrow(counts, game.phase, hand, e.hand, game.onThrow(e));
         }),
       ];
 
@@ -274,6 +303,32 @@ export const createBowling: SportFactory = async (ctx: SportContext) => {
       game.start();
       ctx.hud.setScore('0');
       shownScore = 0;
+      if (tut) {
+        ctx.hud.setSubScore(null);
+        const input = ctx.input;
+        tutorial = createBowlTutorial({
+          cfg,
+          coach: ctx.coach,
+          game,
+          counts,
+          mouse: mouse !== null,
+          body:
+            mouse !== null
+              ? null
+              : {
+                  tracking: () => input.state.tracking,
+                  problem: () => input.state.problem,
+                  handPresent: () => input.state.hands[hand].present,
+                  rejected: () => input.state.rejected,
+                },
+          probe,
+          onFinished: () => {
+            ctx.audio.play('cheer');
+            ctx.hud.flash('great');
+            ctx.finishTutorial();
+          },
+        });
+      }
     },
 
     fixedUpdate(dt: number): void {
@@ -295,6 +350,7 @@ export const createBowling: SportFactory = async (ctx: SportContext) => {
     },
 
     frame(dt: number, nowMs: number, alpha: number): void {
+      if (tutorial !== null && !ctx.paused) tutorial.update(nowMs);
       const phase = game.phase;
       if (!animator.busy) {
         mirrorUpperBody(ctx.avatar, ctx.input.state, nowMs, phase === 'aim' ? 1.3 : 1);
@@ -343,10 +399,11 @@ export const createBowling: SportFactory = async (ctx: SportContext) => {
     },
 
     createBot(): SportBot {
-      return createBowlingBot(botView, hand, ctx.random, -0.14);
+      return createBowlingBot(botView, hand, ctx.random, -0.14, tut ? probe : undefined);
     },
 
     dispose(): void {
+      tutorial?.dispose();
       for (const off of unsubscribers) off();
       if (mouse) {
         mouse.setPointerFollow(true);
@@ -390,6 +447,12 @@ export const createBowling: SportFactory = async (ctx: SportContext) => {
     },
     get standing(): number {
       return physics.standingCount();
+    },
+    get tutorialStep(): number {
+      return tutorial === null ? -1 : tutorial.step;
+    },
+    get tutorialSteps(): number {
+      return tutorial === null ? 0 : tutorial.stepCount;
     },
   };
   return sport;

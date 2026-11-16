@@ -153,6 +153,28 @@ export const archeryConfig = {
   /** Reticle radius at no draw and at full draw, m on the target plane. */
   reticleMaxM: 1.6,
   reticleMinM: 0.45,
+
+  // Tutorial (optional, never scored, arrows unlimited until the steps are done)
+  /** Arrows the tutorial round holds: far more than the steps ask for, so it never runs out. */
+  tutorialArrows: 99,
+  /** Arrows that must land after the "shoot more" step begins. */
+  tutorialMoreShots: 2,
+  /** Crosswind and hand sway scale in the tutorial: 0 is calm. */
+  tutorialWindScale: 0,
+  tutorialSwayScale: 0,
+  /** The feedback line waits this long after a step appears, ms. */
+  tutorialHintDelayMs: 2500,
+  /** Shoulders and both hands in view this long, ms. */
+  tutorialTrackedMs: 600,
+  /** Bow arm up this long, ms. */
+  tutorialBowMs: 500,
+  /** Draw that counts as a full pull. */
+  tutorialDrawFull: 0.9,
+  /** Aim counts when the full-draw landing point is this close to the centre (m) for this long (ms). */
+  tutorialAimRadiusM: 1,
+  tutorialAimHoldMs: 700,
+  /** "I lost your hand" shows once the hand has been out this long, ms. */
+  tutorialLostMs: 400,
 };
 
 export type ArcheryConfig = typeof archeryConfig;
@@ -213,4 +235,14 @@ export const archeryRanges: Record<string, TunableRange> = {
   camSide: { min: -3, max: 3, step: 0.1 },
   camLookArcher: { min: 0, max: 1, step: 0.05 },
   camPitchDown: { min: 0, max: 0.3, step: 0.01 },
+  tutorialMoreShots: { min: 1, max: 10, step: 1 },
+  tutorialWindScale: { min: 0, max: 1, step: 0.05 },
+  tutorialSwayScale: { min: 0, max: 1, step: 0.05 },
+  tutorialHintDelayMs: { min: 500, max: 8000, step: 100 },
+  tutorialTrackedMs: { min: 100, max: 3000, step: 50 },
+  tutorialBowMs: { min: 100, max: 3000, step: 50 },
+  tutorialDrawFull: { min: 0.3, max: 1, step: 0.05 },
+  tutorialAimRadiusM: { min: 0.2, max: 2, step: 0.05 },
+  tutorialAimHoldMs: { min: 100, max: 3000, step: 50 },
+  tutorialLostMs: { min: 100, max: 2000, step: 50 },
 };

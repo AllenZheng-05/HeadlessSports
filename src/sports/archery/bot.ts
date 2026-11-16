@@ -17,6 +17,11 @@ export interface BotView {
   readonly arrowsShot: number;
 }
 
+/** The tutorial sets this; the bot reads it. While `hold` is true the bot keeps its full draw. */
+export interface TutorialProbe {
+  hold: boolean;
+}
+
 const STUCK_MS = 8000;
 const MAX_ADJUSTMENTS = 3;
 const NOCK_REACH = 1.4;
@@ -123,6 +128,7 @@ export function createArcheryBot(
   cfg: ArcheryConfig,
   drawHand: Side,
   random: () => number,
+  probe?: TutorialProbe,
 ): SportBot {
   const sb = -sideSign(drawHand);
   let stage: Stage = 'start';
@@ -138,6 +144,11 @@ export function createArcheryBot(
   let dropoutDone = false;
 
   const progress = (nowMs: number): boolean => {
+    // Waiting on purpose (the tutorial is explaining the draw) is not being stuck.
+    if (probe?.hold === true) {
+      lastProgressMs = nowMs;
+      return false;
+    }
     const key = `${view.phase}|${view.arrowsShot}|${Math.round(view.draw * 8)}`;
     if (key !== lastKey || lastProgressMs < 0) {
       lastKey = key;
@@ -219,6 +230,14 @@ export function createArcheryBot(
             return;
           }
           const miss = Math.hypot(view.hitX, view.hitY);
+          if (probe?.hold === true) {
+            // Keep the draw and the aim on the target until the tutorial says shoot.
+            if (miss <= tolerance) {
+              enqueue(idle(250));
+              return;
+            }
+            adjustments = Math.min(adjustments, MAX_ADJUSTMENTS - 1);
+          }
           if (miss <= tolerance || adjustments >= MAX_ADJUSTMENTS) {
             enqueue(releaseSteps(drawHand));
             stage = 'released';

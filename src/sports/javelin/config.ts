@@ -158,6 +158,28 @@ export const javelinConfig = {
   /** Bot step rates, steps/s: the fixed rates of the slow and fast variants (?botRun=). */
   botSlowCadence: 2.4,
   botFastCadence: 4.4,
+
+  // Tutorial
+  /** The body is tracked for this long to finish the first step, ms. */
+  tutorialSeeMs: 1000,
+  /** A step's "why not yet" line shows after this long, ms. */
+  tutorialHintDelayMs: 3000,
+  /** Jogging step: step rate that counts, steps/s, held for tutorialJogMs. */
+  tutorialJogCadence: 1.6,
+  tutorialJogMs: 2000,
+  /** Speed step: step rate that counts as fast, steps/s, held for tutorialFastMs. */
+  tutorialFastCadence: 3,
+  tutorialFastMs: 1000,
+  /** Until the run-up step the athlete stops this far short of the foul line, metres. */
+  tutorialHoldBackM: 12,
+  /** A run-up throw counts when the athlete was running at least this fast, m/s. */
+  tutorialMinRunSpeed: 2.5,
+  /** Standing practice throw: a motion of the throwing arm above this speed is explained, sw/s. */
+  tutorialNoticeMinSpeed: 2.5,
+  /** "You crossed the line" stays in the coach panel this long, ms. */
+  tutorialFoulMs: 6000,
+  /** Mouse: running counts once the athlete is this fast, m/s. */
+  tutorialMouseSpeed: 3,
 };
 
 export type JavelinConfig = typeof javelinConfig;
@@ -215,4 +237,15 @@ export const javelinRanges: Record<string, TunableRange> = {
   botThrowLeadS: { min: 0, max: 3, step: 0.05 },
   botCadenceHoldS: { min: 0, max: 2, step: 0.05 },
   botMarginM: { min: 0, max: 5, step: 0.1 },
+  tutorialSeeMs: { min: 200, max: 4000, step: 100 },
+  tutorialHintDelayMs: { min: 500, max: 10000, step: 100 },
+  tutorialJogCadence: { min: 0.5, max: 4, step: 0.1 },
+  tutorialJogMs: { min: 500, max: 6000, step: 100 },
+  tutorialFastCadence: { min: 1.5, max: 5, step: 0.1 },
+  tutorialFastMs: { min: 300, max: 5000, step: 100 },
+  tutorialHoldBackM: { min: 8, max: 25, step: 1 },
+  tutorialMinRunSpeed: { min: 0.5, max: 8, step: 0.5 },
+  tutorialNoticeMinSpeed: { min: 1, max: 8, step: 0.1 },
+  tutorialFoulMs: { min: 1000, max: 15000, step: 500 },
+  tutorialMouseSpeed: { min: 1, max: 8, step: 0.5 },
 };

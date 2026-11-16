@@ -108,6 +108,18 @@ export const bowlingConfig = {
   finishDelayS: 1.2,
   powerMeterS: 1.5,
 
+  // Tutorial
+  /** Feedback for a step shows only after this long on it (ms). */
+  tutorialHintDelayMs: 2500,
+  /** The body must stay tracked this long for the first step (ms). */
+  tutorialTrackedMs: 600,
+  /** The arrows count as lined up once they have swept this far (radians). */
+  tutorialAimSpreadRad: 0.012,
+  /** Or once the bowler has stepped this far sideways (m). */
+  tutorialStepM: 0.12,
+  /** A hook below this (m/s^2) gets the "curve more" hint. */
+  tutorialHookMin: 0.05,
+
   // Camera
   cameraFov: 32,
   cameraBack: 4.8,
@@ -154,4 +166,9 @@ export const bowlingRanges: Record<string, TunableRange> = {
   settleTimeoutS: { min: 1, max: 8, step: 0.1 },
   missResolveS: { min: 0, max: 1, step: 0.05 },
   downTiltDeg: { min: 15, max: 80, step: 1 },
+  tutorialHintDelayMs: { min: 500, max: 8000, step: 100 },
+  tutorialTrackedMs: { min: 200, max: 3000, step: 100 },
+  tutorialAimSpreadRad: { min: 0.002, max: 0.04, step: 0.001 },
+  tutorialStepM: { min: 0.02, max: 0.4, step: 0.01 },
+  tutorialHookMin: { min: 0, max: 0.7, step: 0.01 },
 };

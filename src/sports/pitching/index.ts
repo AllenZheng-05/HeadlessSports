@@ -21,6 +21,7 @@ import {
 } from './aim';
 import type { PitchKind } from './aim';
 import { createPitchingBot } from './bot';
+import type { TutorialProbe } from './bot';
 import { createBubble } from './bubble';
 import { createPitchButtons } from './pitchButtons';
 import { KIND_LABEL, callText, reactionText } from './call';
@@ -28,10 +29,21 @@ import { LiveAim } from './liveAim';
 import { pitchingConfig, pitchingRanges } from './config';
 import { ballAt } from './flight';
 import type { Vec3 } from './flight';
-import { canPick, createGame, onThrow, pickKind, pitchesFor, stepGame, totalIgnored } from './game';
+import {
+  canPick,
+  createGame,
+  onThrow,
+  pickKind,
+  pitchesFor,
+  ringShown,
+  stepGame,
+  totalIgnored,
+} from './game';
 import type { HandInput, Phase, Reading } from './game';
 import { summarize } from './scoring';
 import type { PitchRecord, Tier } from './scoring';
+import { createPitchTutorial } from './tutorial';
+import type { PitchTutorial, RingView, SeenView } from './tutorial';
 import { cellCentre } from './zone';
 import type { Point } from './zone';
 import { MOUND_HEIGHT, buildAimMarker, buildWorld, buildZone, drawX, drawY } from './world';
@@ -83,7 +95,16 @@ export interface PitchingSport extends Sport {
   /** The ball mesh: visibility and world position. */
   readonly ball: { visible: boolean; x: number; y: number; z: number };
   readonly log: readonly string[];
+  /** Tutorial rounds: the current step (0-based), or -1 in a normal round. */
+  readonly tutorialStep: number;
+  /** Tutorial rounds: the number of steps, or 0 in a normal round. */
+  readonly tutorialSteps: number;
+  /** Where a zone cell's centre is on the screen, as 0 to 1 fractions of the window. */
+  cellScreen(cell: number): { x: number; y: number };
 }
+
+/** Tutorial rounds never end, so the pitch count only has to be bigger than any lesson. */
+const TUTORIAL_PITCHES = 1_000_000;
 
 /** Static strings for the bubble's second line, so nothing is built per frame. */
 const READING_SUB: Record<'none' | PitchKind, string> = {
@@ -95,6 +116,8 @@ const LOCKED_SUB: Record<PitchKind, string> = {
   fastball: 'Locked in: fastball. Wind up when ready',
   curve: 'Locked in: curve. Wind up when ready',
 };
+/** Tutorial: a wild pitch is not a mistake worth a harsh word. */
+const WILD_FRIENDLY = 'A bit wide. No harm done';
 const MOUSE_PICK_SUB = 'Pick a pitch, then hold to aim';
 /** Mouse play: the bubble's second line. */
 const MOUSE_SUB: Record<PitchKind, string> = {
@@ -110,14 +133,16 @@ export const createPitching: SportFactory = (ctx: SportContext): PitchingSport =
   const isDebug = ctx.input.source === null;
   const mc = isDebug ? asMouseControl(ctx.input) : null;
   const mouse = mc !== null;
+  const tut = ctx.tutorial;
   const game = createGame(
-    pitchesFor(cfg, ctx.short),
+    tut ? TUTORIAL_PITCHES : pitchesFor(cfg, ctx.short),
     ctx.random,
     isDebug,
-    ctx.short ? cfg.shortGapScale : 1,
-    cfg.firstPitchExtraMs,
+    tut ? cfg.tutorialGapScale : ctx.short ? cfg.shortGapScale : 1,
+    tut ? 0 : cfg.firstPitchExtraMs,
     cfg.curveShare,
     mouse,
+    tut,
   );
   const unregister = ctx.tunables.register('pitching', 'Pitching', cfg, pitchingRanges);
   const animator = new AvatarAnimator(ctx.avatar);
@@ -129,13 +154,19 @@ export const createPitching: SportFactory = (ctx: SportContext): PitchingSport =
 
   // ---- world ----
   const world = buildWorld(scene, cfg);
-  const zone = buildZone(scene, cfg, game.total);
+  // A tutorial clears the dots after every pitch, so one round's worth is plenty.
+  const zone = buildZone(scene, cfg, tut ? cfg.pitches : game.total);
   const marker = buildAimMarker(scene, cfg);
   const bubble = createBubble();
   const liveAim = new LiveAim();
   const liveIn = createLiveInput();
   const liveRelease = createAim();
   const bubbleAnchor = new Vector3();
+  const botProbe: TutorialProbe = { stage: 'normal' };
+  const ringView: RingView = { visible: false, x: 0, y: 0 };
+  const seenView: SeenView = { tracked: false, glove: false, thrower: false };
+  let tutorial: PitchTutorial | null = null;
+  const cellPoint = new Vector3();
   let bubbleMain = '';
   let bubbleSub = '';
   let bubbleTone: 'call' | 'good' | 'bad' = 'call';
@@ -200,6 +231,7 @@ export const createPitching: SportFactory = (ctx: SportContext): PitchingSport =
   const to: Vec3 = { x: 0, y: 0, z: 0 };
   const pos: Vec3 = { x: 0, y: 0, z: 0 };
   const cell: Point = { x: 0, y: 0 };
+  const cell0: Point = { x: 0, y: 0 };
   const ballWorld = ball.position.clone();
   const liveScratch: Point = { x: 0, y: 0 };
   const hin: HandInput = { present: false, known: false, closed: false, speed: 0 };
@@ -261,19 +293,22 @@ export const createPitching: SportFactory = (ctx: SportContext): PitchingSport =
   let kmhShown = 0;
 
   const refreshHud = (): void => {
-    const score = `${runningScore} pts`;
-    if (score !== shownScore) {
-      shownScore = score;
-      ctx.hud.setScore(score);
-    }
-    const n = Math.min(game.index + 1, game.total);
-    const kind =
-      game.phase === 'sign' || game.phase === 'call' ? '' : ` · ${KIND_LABEL[game.kind]}`;
-    const speed = game.phase === 'flight' || game.phase === 'result' ? kmhShown : 0;
-    const sub = `Pitch ${n} of ${game.total}${kind}${speed > 0 ? ` · ${speed} km/h` : ''}`;
-    if (sub !== shownSub) {
-      shownSub = sub;
-      ctx.hud.setSubScore(sub);
+    // A tutorial has no score, no pitch count and no best: the coach panel says what to do.
+    if (!tut) {
+      const score = `${runningScore} pts`;
+      if (score !== shownScore) {
+        shownScore = score;
+        ctx.hud.setScore(score);
+      }
+      const n = Math.min(game.index + 1, game.total);
+      const kind =
+        game.phase === 'sign' || game.phase === 'call' ? '' : ` · ${KIND_LABEL[game.kind]}`;
+      const speed = game.phase === 'flight' || game.phase === 'result' ? kmhShown : 0;
+      const sub = `Pitch ${n} of ${game.total}${kind}${speed > 0 ? ` · ${speed} km/h` : ''}`;
+      if (sub !== shownSub) {
+        shownSub = sub;
+        ctx.hud.setSubScore(sub);
+      }
     }
     // The sign meter: how far the still hold has got, with the live reading.
     let pct = -1;
@@ -330,6 +365,8 @@ export const createPitching: SportFactory = (ctx: SportContext): PitchingSport =
       zone.setLit(-1);
       liveAim.reset();
       lungeGoal = 0;
+      // A tutorial can call again mid-pitch: the hand is read again for the new call.
+      setCrops(true);
       note(`call ${game.called} target=${game.target}`);
     }
     if (game.revealSeq !== seenReveal) {
@@ -374,7 +411,10 @@ export const createPitching: SportFactory = (ctx: SportContext): PitchingSport =
       const r = record();
       bubbleTone = r.balk || !r.score.matched ? 'bad' : 'good';
       bubbleMain = r.balk ? 'Balk' : `${r.score.label} +${r.score.points}`;
-      bubbleSub = reactionText(r.score.matched, r.balk, r.score.tier !== 'wild');
+      bubbleSub =
+        tut && r.score.tier === 'wild'
+          ? WILD_FRIENDLY
+          : reactionText(r.score.matched, r.balk, r.score.tier !== 'wild');
       if (r.balk) {
         ctx.audio.play('bad');
         ctx.hud.flash('bad');
@@ -420,6 +460,7 @@ export const createPitching: SportFactory = (ctx: SportContext): PitchingSport =
     if (game.nextSeq !== seenNext) {
       seenNext = game.nextSeq;
       zone.setLit(-1);
+      if (tut) zone.clearDots();
       heldBall();
       lungeGoal = 0;
       if (animator.busy) animator.stop();
@@ -504,6 +545,12 @@ export const createPitching: SportFactory = (ctx: SportContext): PitchingSport =
     liveVisible = true;
   };
 
+  /** A wrist counts as seen while its pose visibility is high enough. */
+  const wristSeen = (side: Side): boolean => {
+    const idx = side === 'left' ? PoseIndex.LEFT_WRIST : PoseIndex.RIGHT_WRIST;
+    return ctx.input.state.pose[idx * POSE_STRIDE + 3]! >= cfg.gloveMinVisibility;
+  };
+
   const updateLive = (): void => {
     const st = ctx.input.state;
     if (!st.tracking || !st.hasPose) {
@@ -511,8 +558,7 @@ export const createPitching: SportFactory = (ctx: SportContext): PitchingSport =
       return;
     }
     // The glove hand places the ring. It counts as tracked while its wrist is visible.
-    const wristIdx = gloveHand === 'left' ? PoseIndex.LEFT_WRIST : PoseIndex.RIGHT_WRIST;
-    const gloveSeen = st.pose[wristIdx * POSE_STRIDE + 3]! >= cfg.gloveMinVisibility;
+    const gloveSeen = wristSeen(gloveHand);
     trackedLive(cfg, st.arms[gloveHand], st.arms[hand].speed, hand, gloveSeen, liveIn, liveScratch);
     const t = st.t;
     // Before the pitch is picked the indicator follows the hand's own reading, else the call.
@@ -595,8 +641,8 @@ export const createPitching: SportFactory = (ctx: SportContext): PitchingSport =
 
   const driveCallUi = (): void => {
     // The aim marker: from the reveal of the call until the release.
-    const aiming = game.bubbleOn && liveVisible && liveAim.ready && !finished;
-    if (aiming && (game.phase === 'call' || game.phase === 'sign' || game.phase === 'windup')) {
+    const aiming = liveVisible && !finished && ringShown(game, liveAim.ready);
+    if (aiming) {
       marker.show(liveAim.aim.x, liveAim.aim.y);
     } else {
       marker.hide();
@@ -682,6 +728,19 @@ export const createPitching: SportFactory = (ctx: SportContext): PitchingSport =
     get log(): readonly string[] {
       return log;
     },
+    get tutorialStep(): number {
+      return tutorial === null ? -1 : tutorial.step;
+    },
+    get tutorialSteps(): number {
+      return tutorial === null ? 0 : tutorial.stepCount;
+    },
+    cellScreen(cellIndex: number): { x: number; y: number } {
+      cellCentre(cfg, cellIndex, cell0);
+      cellPoint.set(drawX(cfg, cell0.x), drawY(cfg, cell0.y), plateZ);
+      camera.updateMatrixWorld();
+      cellPoint.project(camera);
+      return { x: cellPoint.x * 0.5 + 0.5, y: 0.5 - cellPoint.y * 0.5 };
+    },
 
     start(): void {
       started = true;
@@ -691,7 +750,24 @@ export const createPitching: SportFactory = (ctx: SportContext): PitchingSport =
         mc.selectHand(hand);
       }
       placeCamera();
-      setHint('The catcher is calling the first pitch');
+      if (tut) {
+        ctx.hud.setSubScore(null);
+        tutorial = createPitchTutorial({
+          cfg,
+          game,
+          coach: ctx.coach,
+          hand,
+          mouse,
+          ring: ringView,
+          seen: seenView,
+          probe: botProbe,
+          onFinished: () => {
+            ctx.audio.play('cheer');
+            ctx.hud.flash('great');
+            ctx.finishTutorial();
+          },
+        });
+      } else setHint('The catcher is calling the first pitch');
       refreshHud();
     },
 
@@ -770,13 +846,24 @@ export const createPitching: SportFactory = (ctx: SportContext): PitchingSport =
       driveCallUi();
       if (mouse) buttons.update(game.kind, canPick(game));
       if (!finished) refreshHud();
+      if (tutorial !== null && !ctx.paused) {
+        ringView.visible = marker.visible;
+        ringView.x = liveAim.aim.x;
+        ringView.y = liveAim.aim.y;
+        const st = ctx.input.state;
+        seenView.tracked = st.tracking && st.hasPose;
+        seenView.glove = seenView.tracked && wristSeen(gloveHand);
+        seenView.thrower = seenView.tracked && wristSeen(hand);
+        tutorial.update(nowMs);
+      }
     },
 
     createBot(): SportBot {
-      return createPitchingBot(cfg, game, hand, ctx.random);
+      return createPitchingBot(cfg, game, hand, ctx.random, tut ? botProbe : undefined);
     },
 
     dispose(): void {
+      tutorial?.dispose();
       offThrow();
       unregister();
       buttons.dispose();

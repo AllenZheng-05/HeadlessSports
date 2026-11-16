@@ -17,18 +17,30 @@ import {
   Vector3,
 } from 'three/webgpu';
 import { createBattingBot } from './bot';
+import type { TutorialProbe } from './bot';
 import { battingConfig, battingRanges } from './config';
 import { hitWorldPosition } from './flight';
 import { batHeightM } from './judge';
 import type { Judgement, SwingInput } from './judge';
 import { MouseSwinger } from './mouseSwing';
-import { HintLine, rejectionHint } from './notice';
+import { HintLine, SEEN_LATE_TEXT, practiceRejectionText, rejectionHint } from './notice';
 import { ballPosition } from './pitch';
 import type { Pitch, Vec3 } from './pitch';
 import { applyBattingRecognizer } from './recognizer';
 import { BattingRound } from './round';
 import type { PitchResult, RoundSummary, SwingFate } from './round';
 import { BatterPose, batterX, batterYaw, batterZ } from './stance';
+import {
+  createBattingTutorial,
+  createFeed,
+  createStanceView,
+  noteNotice,
+  noteResult,
+  noteSwingPeak,
+  noteSwingStart,
+  readStance,
+} from './tutorial';
+import type { BattingTutorial, PitchMode } from './tutorial';
 import { buildWorld } from './world';
 import { formatFeet } from './units';
 
@@ -60,6 +72,12 @@ export interface BattingProbe {
   /** The ball mesh: visibility and world position. */
   readonly ball: { visible: boolean; x: number; y: number; z: number };
   readonly pitchIndex: number;
+  /** Tutorial rounds: the current step (0-based), or -1 in a normal round. */
+  readonly tutorialStep: number;
+  /** Tutorial rounds: the number of steps, or 0 in a normal round. */
+  readonly tutorialSteps: number;
+  /** Tutorial rounds: flight time (ms) of the pitch now in play or last thrown, 0 before any. */
+  readonly pitchFlightMs: number;
   /** The last "why nothing happened" hint shown for a swing that was seen but did not count ('' for none). */
   readonly notice: string;
   readonly phase: string;
@@ -81,6 +99,7 @@ export interface BattingProbe {
 export const createBatting: SportFactory = (ctx: SportContext): Sport & BattingProbe => {
   const cfg = battingConfig;
   const unregister = ctx.tunables.register('batting', 'Batting', cfg, battingRanges);
+  const tut = ctx.tutorial;
   const handedness = (): Side => ctx.calibration?.handedness ?? 'right';
   const sg = handedness() === 'right' ? 1 : -1;
   const sourceKind = ctx.input.source?.kind;
@@ -156,6 +175,20 @@ export const createBatting: SportFactory = (ctx: SportContext): Sport & BattingP
   camera.lookAt(lookBase);
   let follow = 0;
 
+  // ---- tutorial ----
+  const feed = createFeed();
+  const probe: TutorialProbe = { stance: false, practice: false };
+  const stanceView = createStanceView();
+  let tutorial: BattingTutorial | null = null;
+  let pitching: PitchMode = 'off';
+  /** The tutorial's pitch flight: slowed while practising, normal speed after, else the usual. */
+  const tutorialFlightMs = (): number =>
+    pitching === 'slow'
+      ? cfg.tutorialSlowFlightMs
+      : pitching === 'full'
+        ? cfg.tutorialFullFlightMs
+        : 0;
+
   // ---- state ----
   let round: BattingRound | null = null;
   let started = false;
@@ -199,7 +232,19 @@ export const createBatting: SportFactory = (ctx: SportContext): Sport & BattingP
     const r = ctx.input.state.rejected;
     if (r === undefined || r.seq === seenRejected) return;
     seenRejected = r.seq;
-    if (ctx.paused || hint.active(nowMs)) return;
+    if (ctx.paused) return;
+    if (tut) {
+      // The coach panel says it: before a pitch is coming too, so a practice swing is explained.
+      if (r.kind !== 'swing') return;
+      // Before a pitch only a real attempt is explained, not ordinary arm movement.
+      const text =
+        round === null
+          ? practiceRejectionText(r, cfg.tutorialNoticeMinSpeed)
+          : rejectionHint(r, round, nowMs);
+      if (text !== null) noteNotice(feed, text, nowMs);
+      return;
+    }
+    if (hint.active(nowMs)) return;
     const text = rejectionHint(r, round, nowMs);
     if (text !== null) hint.say(text, nowMs);
   };
@@ -221,6 +266,8 @@ export const createBatting: SportFactory = (ctx: SportContext): Sport & BattingP
 
   const onReset = (index: number, total: number): void => {
     ctx.hud.setBanner(null);
+    // The tutorial's coach panel is the instruction line.
+    if (tut) return;
     hint.setBase(
       index === 1
         ? mouse === null
@@ -232,6 +279,7 @@ export const createBatting: SportFactory = (ctx: SportContext): Sport & BattingP
 
   const onSet = (p: Pitch): void => {
     pitcherClipPlayed = false;
+    if (tut) return;
     hint.setBase(`Pitch ${p.index} of ${round?.total ?? cfg.pitches}`);
   };
 
@@ -266,6 +314,7 @@ export const createBatting: SportFactory = (ctx: SportContext): Sport & BattingP
 
   const onResolved = (r: PitchResult, s: RoundSummary): void => {
     refreshScore(s);
+    if (tut) noteResult(feed, r);
     const j = r.judgement;
     results.push({
       index: r.pitch.index,
@@ -290,6 +339,9 @@ export const createBatting: SportFactory = (ctx: SportContext): Sport & BattingP
     } else if (r.kind === 'foul') {
       ctx.audio.play('thud', { pitch: 0.9, volume: 0.6 });
       ctx.hud.setBanner(r.label, 1400);
+    } else if (tut) {
+      // Nothing to lose in the tutorial: a miss is only explained, never punished.
+      ctx.hud.setBanner(r.kind === 'strike' ? 'No swing' : r.label, 1400);
     } else {
       ctx.audio.play('bad');
       ctx.hud.flash('bad');
@@ -336,6 +388,10 @@ export const createBatting: SportFactory = (ctx: SportContext): Sport & BattingP
       random: ctx.random,
       handedness,
       realtime,
+      endless: tut,
+      firstPitchDelayMs: tut ? cfg.tutorialFirstPitchMs : undefined,
+      extraGapMs: tut ? cfg.tutorialGapMs : 0,
+      flightMs: tut ? tutorialFlightMs : undefined,
       hooks: {
         reset: onReset,
         set: onSet,
@@ -461,6 +517,34 @@ export const createBatting: SportFactory = (ctx: SportContext): Sport & BattingP
     start(): void {
       started = true;
       ctx.hud.setScore(formatFeet(0));
+      if (tut) {
+        // No best, no timer, nothing to lose: the coach panel gives the instructions.
+        ctx.hud.setSubScore(null);
+        tutorial = createBattingTutorial({
+          cfg,
+          coach: ctx.coach,
+          feed,
+          mouse: mouse !== null,
+          direction: sg > 0 ? 1 : -1,
+          stance: () => {
+            readStance(ctx.input.state, recognizerConfig.swing.wristVisibility, stanceView);
+            return stanceView;
+          },
+          pitchesStarted: () => (round === null ? 0 : round.started),
+          setPitching: (mode) => {
+            pitching = mode;
+            if (mode !== 'off' && round === null) round = makeRound(clock);
+          },
+          probe,
+          onFinished: () => {
+            ctx.audio.play('cheer');
+            ctx.hud.flash('great');
+            round?.stop();
+            ctx.finishTutorial();
+          },
+        });
+        return;
+      }
       ctx.hud.setSubScore(ctx.best === null ? null : `Best ${formatFeet(ctx.best)}`);
       hint.setBase(
         mouse === null
@@ -472,28 +556,36 @@ export const createBatting: SportFactory = (ctx: SportContext): Sport & BattingP
     fixedUpdate(_dt: number, nowMs: number): void {
       clock = nowMs;
       if (!started) return;
-      if (round === null) round = makeRound(nowMs);
-      swinger?.poll(round, nowMs, ctx.paused);
+      // A tutorial starts its pitching with the step that needs it; until then swings are practice.
+      if (round === null && !tut) round = makeRound(nowMs);
+      if (round !== null) swinger?.poll(round, nowMs, ctx.paused);
       for (let i = 0; i < queue.n; i++) {
         if (queue.kind[i] === 0) {
+          if (tut) noteSwingStart(feed, queue.t[i]!);
+          if (round === null) continue;
           const fate: SwingFate = round.onSwingStarted(
             { t: queue.t[i]!, speed: queue.speed[i]!, height: queue.height[i]! },
             nowMs,
           );
-          if (fate === 'late') hint.say('Swing seen too late', nowMs);
+          if (fate === 'late') {
+            if (tut) noteNotice(feed, SEEN_LATE_TEXT, nowMs);
+            else hint.say(SEEN_LATE_TEXT, nowMs);
+          }
         } else {
-          round.onSwingPeak({ speed: queue.speed[i]! }, nowMs);
+          if (tut) noteSwingPeak(feed, queue.t[i]!, queue.speed[i]!);
+          round?.onSwingPeak({ speed: queue.speed[i]! }, nowMs);
         }
       }
       queue.n = 0;
       // After the swing events: a note about a swing the round has just taken is not shown.
       checkRejected(nowMs);
       hint.tick(nowMs);
-      round.update(nowMs);
+      round?.update(nowMs);
     },
 
     frame(dt: number, nowMs: number): void {
       clock = nowMs;
+      if (tutorial !== null && !ctx.paused) tutorial.update(nowMs);
       if (celebrateAtMs > 0 && nowMs >= celebrateAtMs) {
         celebrateAtMs = -1;
         animator.play('celebrate');
@@ -526,6 +618,7 @@ export const createBatting: SportFactory = (ctx: SportContext): Sport & BattingP
         cfg,
         random: ctx.random,
         direction: sg > 0 ? 1 : -1,
+        probe: tut ? probe : undefined,
         view: {
           pitch: () =>
             round !== null && round.phase === 'pitch' && !round.resolved && round.swingT < 0
@@ -538,6 +631,7 @@ export const createBatting: SportFactory = (ctx: SportContext): Sport & BattingP
     },
 
     dispose(): void {
+      tutorial?.dispose();
       restoreRecognizer();
       mouse?.setManualMode(false);
       offStart();
@@ -575,6 +669,15 @@ export const createBatting: SportFactory = (ctx: SportContext): Sport & BattingP
     },
     get ball(): { visible: boolean; x: number; y: number; z: number } {
       return { visible: ball.visible, x: ball.position.x, y: ball.position.y, z: ball.position.z };
+    },
+    get tutorialStep(): number {
+      return tutorial === null ? -1 : tutorial.step;
+    },
+    get tutorialSteps(): number {
+      return tutorial === null ? 0 : tutorial.stepCount;
+    },
+    get pitchFlightMs(): number {
+      return round === null || round.pitch === null ? 0 : round.pitch.flightMs;
     },
     get notice(): string {
       return hint.active(clock) ? hint.notice : '';

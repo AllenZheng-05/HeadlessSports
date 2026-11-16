@@ -9,6 +9,7 @@ import { vertexColorToonMaterial } from '../../render/style/toon';
 import { Mesh, Vector3 } from 'three/webgpu';
 import type { Fog } from 'three/webgpu';
 import { createJavelinBot } from './bot';
+import type { TutorialProbe } from './bot';
 import { javelinConfig, javelinRanges } from './config';
 import { flightPitch } from './distance';
 import { applyJavelinRecognizer } from './recognizer';
@@ -26,6 +27,8 @@ import {
   stepGame,
 } from './game';
 import type { AttemptRecord, Phase } from './game';
+import { createJavelinTutorial, holdBack } from './tutorial';
+import type { JavelinTutorial } from './tutorial';
 import { JAVELIN_TIP, buildJavelinGeometry, buildMarkerGeometry, buildWorld } from './world';
 
 /** What the browser tests and the debugging overlay read from `__game.sport`. */
@@ -45,6 +48,10 @@ export interface JavelinSport extends Sport {
   readonly log: readonly string[];
   /** The last "why nothing happened" hint shown for a refused or missed throw ('' for none). */
   readonly notice: string;
+  /** Tutorial rounds: the current step (0-based), or -1 in a normal round. */
+  readonly tutorialStep: number;
+  /** Tutorial rounds: the number of steps, or 0 in a normal round. */
+  readonly tutorialSteps: number;
 }
 
 /** Pitch of the javelin when held, radians (nose up). */
@@ -80,7 +87,11 @@ function botStyle(): 'legs' | 'jog' {
 export const createJavelin: SportFactory = (ctx: SportContext): JavelinSport => {
   const cfg = javelinConfig;
   const hand: Side = ctx.calibration?.handedness ?? 'right';
-  const game = createGame(attemptsFor(cfg, ctx.short));
+  const tut = ctx.tutorial;
+  // A tutorial has no attempt limit.
+  const game = createGame(tut ? Number.MAX_SAFE_INTEGER : attemptsFor(cfg, ctx.short));
+  const probe: TutorialProbe = { hold: false, standing: false };
+  let tutorial: JavelinTutorial | null = null;
   const animator = new AvatarAnimator(ctx.avatar);
   const unregister = ctx.tunables.register('javelin', 'Javelin', cfg, javelinRanges);
 
@@ -234,6 +245,8 @@ export const createJavelin: SportFactory = (ctx: SportContext): JavelinSport => 
   let seenRejected = ctx.input.state.rejected?.seq ?? 0;
   let hudNow = 0;
   const setHint = (text: string | null): void => {
+    // The coach panel is the instruction line in a tutorial.
+    if (tut) return;
     // The usual hints do not override a notice while it is up; clearing (null) always works.
     // A "noticed but not a throw" note gives way to the throw prompt.
     const yields = noticeYields && text === THROW_PROMPT;
@@ -255,7 +268,31 @@ export const createJavelin: SportFactory = (ctx: SportContext): JavelinSport => 
     const r = ctx.input.state.rejected;
     if (r === undefined || r.seq === seenRejected) return;
     seenRejected = r.seq;
-    if (ctx.paused || !showsRejection(game, cfg, nowMs, r, hand)) return;
+    if (ctx.paused) return;
+    if (tut && game.standing && game.phase === 'run' && !game.noThrow) {
+      // The standing practice throw: the player is not running, so every motion of the throwing
+      // arm that was noticed and refused is explained (not just the clear efforts).
+      if (
+        r.kind === 'throw' &&
+        r.hand === hand &&
+        nowMs >= game.lockoutUntilMs &&
+        r.speed >= cfg.tutorialNoticeMinSpeed
+      ) {
+        showNotice(
+          r.reason === 'lost'
+            ? LOST_TEXT
+            : r.reason === 'short'
+              ? 'Throw smoother'
+              : r.reason === 'steep'
+                ? REFUSAL_TEXT.up!
+                : 'Throw faster',
+          nowMs,
+          true,
+        );
+      }
+      return;
+    }
+    if (!showsRejection(game, cfg, nowMs, r, hand)) return;
     showNotice(
       r.reason === 'lost' ? LOST_TEXT : r.reason === 'short' ? 'Throw smoother' : 'Throw faster',
       nowMs,
@@ -264,23 +301,28 @@ export const createJavelin: SportFactory = (ctx: SportContext): JavelinSport => 
   };
 
   const refreshHud = (): void => {
-    const n = Math.min(game.attempt + 1, game.total);
-    if (n !== shownThrow) {
-      shownThrow = n;
-      ctx.hud.setScore(`Try ${n}/${game.total}`);
-    }
     const running = game.phase === 'run';
-    // Sub-score: the speed while running, the best mark otherwise.
-    const speedTenths = running ? Math.round(game.speed * 10) : -1;
-    const bestCm = running ? -1 : Math.round(game.best * 100);
-    if (speedTenths !== shownSpeed || bestCm !== shownBestCm) {
-      shownSpeed = speedTenths;
-      shownBestCm = bestCm;
-      if (running) ctx.hud.setSubScore(`${(speedTenths / 10).toFixed(1)} m/s`);
-      else if (game.best > 0) ctx.hud.setSubScore(`Best ${game.best.toFixed(2)} m`);
-      else ctx.hud.setSubScore(ctx.best === null ? null : `Record ${ctx.best.toFixed(2)} m`);
+    // A tutorial has no try count and no best: it shows the meters of the step it is on.
+    const lineOn = running && (!tut || tutorial?.showLine === true);
+    const speedOn = running && (!tut || tutorial?.showSpeed === true);
+    if (!tut) {
+      const n = Math.min(game.attempt + 1, game.total);
+      if (n !== shownThrow) {
+        shownThrow = n;
+        ctx.hud.setScore(`Try ${n}/${game.total}`);
+      }
+      // Sub-score: the speed while running, the best mark otherwise.
+      const speedTenths = running ? Math.round(game.speed * 10) : -1;
+      const bestCm = running ? -1 : Math.round(game.best * 100);
+      if (speedTenths !== shownSpeed || bestCm !== shownBestCm) {
+        shownSpeed = speedTenths;
+        shownBestCm = bestCm;
+        if (running) ctx.hud.setSubScore(`${(speedTenths / 10).toFixed(1)} m/s`);
+        else if (game.best > 0) ctx.hud.setSubScore(`Best ${game.best.toFixed(2)} m`);
+        else ctx.hud.setSubScore(ctx.best === null ? null : `Record ${ctx.best.toFixed(2)} m`);
+      }
     }
-    if (running) {
+    if (lineOn) {
       const fill = Math.max(0, Math.min(1, game.position / cfg.runwayLength));
       const pct = Math.round(fill * 100);
       const rem = Math.max(0, Math.ceil(distanceToLine(game, cfg)));
@@ -292,6 +334,14 @@ export const createJavelin: SportFactory = (ctx: SportContext): JavelinSport => 
         lineShown = true;
         ctx.hud.setMeter('line', fill, `Foul line ${rem} m`, tone);
       }
+    } else if (lineShown) {
+      lineShown = false;
+      shownLinePct = -1;
+      shownLineRem = -1;
+      shownLineTone = '';
+      ctx.hud.setMeter('line', null);
+    }
+    if (running) {
       if (mouse) {
         if (distanceToLine(game, cfg) <= cfg.throwZone) setHint('Let go!');
         else if (game.speed < 0.5) setHint('Hold the button to run');
@@ -299,6 +349,8 @@ export const createJavelin: SportFactory = (ctx: SportContext): JavelinSport => 
       } else if (game.idleHint) setHint('Run on the spot: pump your arms and lift your knees');
       else if (distanceToLine(game, cfg) <= cfg.throwZone) setHint(THROW_PROMPT);
       else setHint('Run on the spot: faster is farther');
+    }
+    if (speedOn) {
       // Speed meter: fills with the run speed, so quicker feet are seen at once.
       const sf = Math.max(0, Math.min(1, game.speed / cfg.maxRunSpeed));
       const sPct = Math.round(sf * 50);
@@ -311,14 +363,7 @@ export const createJavelin: SportFactory = (ctx: SportContext): JavelinSport => 
         speedShown = true;
         ctx.hud.setMeter('speed', sf, `Speed ${(sTenths / 10).toFixed(1)} m/s`, sTone);
       }
-    } else if (lineShown) {
-      lineShown = false;
-      shownLinePct = -1;
-      shownLineRem = -1;
-      shownLineTone = '';
-      ctx.hud.setMeter('line', null);
-    }
-    if (!running && speedShown) {
+    } else if (speedShown) {
       speedShown = false;
       shownSpeedPct = -1;
       shownSpeedTenths = -1;
@@ -344,15 +389,17 @@ export const createJavelin: SportFactory = (ctx: SportContext): JavelinSport => 
   const react = (): void => {
     if (game.startSeq !== seenStart) {
       seenStart = game.startSeq;
-      ctx.audio.play('select');
-      ctx.hud.setBanner('Go!', 900);
+      if (!tut) {
+        ctx.audio.play('select');
+        ctx.hud.setBanner('Go!', 900);
+      }
     }
     if (game.releaseSeq !== seenRelease) {
       seenRelease = game.releaseSeq;
       detachJavelin();
       setHint(null);
       if (game.dropped) {
-        ctx.audio.play('bad');
+        if (!tut) ctx.audio.play('bad');
         ctx.hud.setBanner('You crossed the line');
         animator.play('slump');
       } else {
@@ -376,9 +423,12 @@ export const createJavelin: SportFactory = (ctx: SportContext): JavelinSport => 
       stickPitch = -phi;
       stickPhi = phi;
       if (game.lastFoul) {
-        ctx.audio.play('bad');
-        ctx.hud.flash('bad');
-        if (!game.dropped) ctx.hud.setBanner('Foul');
+        // A foul is explained in a tutorial, not punished.
+        if (!tut) {
+          ctx.audio.play('bad');
+          ctx.hud.flash('bad');
+        }
+        if (!game.dropped) ctx.hud.setBanner(tut ? 'You crossed the line' : 'Foul');
         if (!animator.busy || animator.current !== 'slump') animator.play('slump');
         setHint(game.dropped ? 'Throw before the line' : 'Released past the line');
       } else {
@@ -388,7 +438,8 @@ export const createJavelin: SportFactory = (ctx: SportContext): JavelinSport => 
         marker.scale.setScalar(1 + d * 0.02);
         ctx.hud.setBanner(`${d.toFixed(2)} m`);
         ctx.audio.play('good');
-        const isBest = d >= game.best && d > (ctx.best ?? 0);
+        if (tut) ctx.hud.setSubScore(`Last throw ${d.toFixed(2)} m`);
+        const isBest = !tut && d >= game.best && d > (ctx.best ?? 0);
         if (isBest) {
           ctx.audio.play('cheer');
           ctx.hud.flash('great');
@@ -407,7 +458,7 @@ export const createJavelin: SportFactory = (ctx: SportContext): JavelinSport => 
       holdJavelin();
       snapCamera = true;
       animator.stop();
-      ctx.hud.setBanner('Get ready');
+      ctx.hud.setBanner(tut ? null : 'Get ready');
       setHint(mouse ? 'Hold the button to run' : 'Run on the spot to build speed');
     }
     if (game.doneSeq !== seenDone) {
@@ -522,10 +573,39 @@ export const createJavelin: SportFactory = (ctx: SportContext): JavelinSport => 
       return hudNow < noticeUntil ? noticeText : '';
     },
 
+    get tutorialStep(): number {
+      return tutorial === null ? -1 : tutorial.step;
+    },
+
+    get tutorialSteps(): number {
+      return tutorial === null ? 0 : tutorial.stepCount;
+    },
+
     start(): void {
       started = true;
-      ctx.hud.setBanner('Get ready');
-      setHint(mouse ? 'Hold the button to run' : 'Run on the spot to build speed');
+      if (tut) {
+        // The coach panel gives the instructions; no banner, hint, try count or best.
+        ctx.hud.setScore('Practice');
+        ctx.hud.setSubScore(null);
+        tutorial = createJavelinTutorial({
+          cfg,
+          game,
+          hand,
+          coach: ctx.coach,
+          mouse: mouse !== null,
+          body: () => ctx.input.state,
+          notice: () => (hudNow < noticeUntil ? noticeText : ''),
+          probe,
+          onFinished: () => {
+            ctx.audio.play('cheer');
+            ctx.hud.flash('great');
+            ctx.finishTutorial();
+          },
+        });
+      } else {
+        ctx.hud.setBanner('Get ready');
+        setHint(mouse ? 'Hold the button to run' : 'Run on the spot to build speed');
+      }
       refreshHud();
     },
 
@@ -554,11 +634,13 @@ export const createJavelin: SportFactory = (ctx: SportContext): JavelinSport => 
         }
       }
       stepGame(game, cfg, dt, nowMs, ctx.input.state.cadence.amplitude, runTarget);
+      if (tutorial !== null && !tutorial.free) holdBack(game, cfg);
       react();
     },
 
     frame(dt: number, nowMs: number): void {
       hudNow = nowMs;
+      if (tutorial !== null && !ctx.paused) tutorial.update(nowMs);
       const phase = game.phase;
       // Athlete: the rig runs down the runway, the camera follows.
       ctx.avatar.root.position.set(0, 0, -game.position);
@@ -600,10 +682,19 @@ export const createJavelin: SportFactory = (ctx: SportContext): JavelinSport => 
     },
 
     createBot(): SportBot {
-      return createJavelinBot(cfg, game, hand, ctx.random, botVariant(), botStyle());
+      return createJavelinBot(
+        cfg,
+        game,
+        hand,
+        ctx.random,
+        botVariant(),
+        botStyle(),
+        tut ? probe : undefined,
+      );
     },
 
     dispose(): void {
+      tutorial?.dispose();
       onAny();
       if (mouse) {
         mouse.setRunCadence(0);

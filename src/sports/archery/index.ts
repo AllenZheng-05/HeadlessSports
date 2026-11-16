@@ -17,6 +17,9 @@ import {
 import type { Sway } from './aim';
 import { asMouseControl } from '../../input/debug/mouseControl';
 import { createArcheryBot } from './bot';
+import type { TutorialProbe } from './bot';
+import { createArcheryTutorial } from './tutorial';
+import type { ArcheryTutorial } from './tutorial';
 import { MouseDraw } from './mouseDraw';
 import type { DrawState } from './mouseDraw';
 import type { BotView } from './bot';
@@ -47,6 +50,10 @@ export interface ArcherySport extends Sport {
   readonly cameraBlend: number;
   readonly rings: readonly number[];
   readonly handedness: 'left' | 'right';
+  /** Tutorial rounds: the current step (0-based), or -1 in a normal round. */
+  readonly tutorialStep: number;
+  /** Tutorial rounds: the number of steps, or 0 in a normal round. */
+  readonly tutorialSteps: number;
 }
 
 const HINTS: Record<Hint, string> = {
@@ -110,7 +117,11 @@ export const createArchery: SportFactory = (ctx: SportContext): ArcherySport => 
     mouse.setPointerFollow(true);
     mouse.selectHand(bowHand);
   }
-  const round = new ArcheryRound(ctx.short ? cfg.shortArrows : cfg.arrows);
+  // A tutorial has no arrow limit, no wind and no sway: nothing in it can be lost.
+  const tut = ctx.tutorial;
+  const round = new ArcheryRound(
+    tut ? cfg.tutorialArrows : ctx.short ? cfg.shortArrows : cfg.arrows,
+  );
   const base = basePitch(cfg);
   const backZ = -cfg.targetDistance - 1.45;
   const yawF = new DampedValue();
@@ -119,6 +130,7 @@ export const createArchery: SportFactory = (ctx: SportContext): ArcherySport => 
   const fovK = new DampedValue();
   const arrow = new Arrow();
   const hit: Hit = { x: 0, y: 0, t: 0 };
+  const tutHit: Hit = { x: 0, y: 0, t: 0 };
   const sway: Sway = { x: 0, y: 0 };
   const sample: DrawSample = {
     valid: false,
@@ -137,7 +149,8 @@ export const createArchery: SportFactory = (ctx: SportContext): ArcherySport => 
   for (let i = 0; i < 4; i++) phases[i] = ctx.random() * TAU;
   const winds: number[] = [];
   for (let i = 0; i < round.total; i++) {
-    winds.push(i === 0 ? 0 : Math.round((ctx.random() * 2 - 1) * cfg.maxWind * 10) / 10);
+    const w = i === 0 ? 0 : Math.round((ctx.random() * 2 - 1) * cfg.maxWind * 10) / 10;
+    winds.push(tut ? w * cfg.tutorialWindScale : w);
   }
 
   let phase: ArcheryPhase = 'ready';
@@ -164,6 +177,13 @@ export const createArchery: SportFactory = (ctx: SportContext): ArcherySport => 
   let shownHint: string | null = '';
   let meterOn = false;
   let flagWind = 0;
+  // Tutorial: what the steps read.
+  const probe: TutorialProbe = { hold: false };
+  let tutorial: ArcheryTutorial | null = null;
+  let trackedNow = false;
+  let bowUpNow = false;
+  let aimOff = 0;
+  let launched = 0;
 
   const currentWind = (): number => winds[Math.min(round.taken, winds.length - 1)] ?? 0;
 
@@ -188,7 +208,7 @@ export const createArchery: SportFactory = (ctx: SportContext): ArcherySport => 
     }
     const wind = currentWind();
     const left = round.left;
-    if (left !== shownLeft || wind !== shownWind) {
+    if (!tut && (left !== shownLeft || wind !== shownWind)) {
       shownLeft = left;
       shownWind = wind;
       const w =
@@ -244,10 +264,11 @@ export const createArchery: SportFactory = (ctx: SportContext): ArcherySport => 
     } else if (ring >= 7) {
       ctx.hud.flash('good');
       ctx.audio.play('good');
-    } else if (ring === 0) {
+    } else if (ring === 0 && !tut) {
       ctx.hud.flash('bad');
       ctx.audio.play('bad');
     }
+    tutorial?.noteImpact(ring);
     showT = 0;
     setPhase('showing');
   };
@@ -256,6 +277,7 @@ export const createArchery: SportFactory = (ctx: SportContext): ArcherySport => 
     const shot = dm.shot;
     arrow.launch(cfg, base, shot.draw, shot.yaw, shot.pitch, currentWind());
     ctx.audio.play('whoosh', { pitch: 0.8 + shot.draw * 0.5 });
+    launched++;
     animator.play('bow-release', { side: drawHand });
     bow.twang();
     world.setReticle(false, 0, 0, 1);
@@ -357,8 +379,11 @@ export const createArchery: SportFactory = (ctx: SportContext): ArcherySport => 
       // Hold the aim while the bow arm is not usable: never guess.
       yawF.update(frozenYaw, dt, cfg.aimSmoothS);
       pitchF.update(frozenPitch, dt, cfg.aimSmoothS);
+      trackedNow = valid;
+      bowUpNow = bowUp;
       if (machine.phase === 'drawing') {
-        swayOffset(simMs / 1000, swayAmplitude(machine.holdFullS, cfg), phases, sway);
+        const amp = swayAmplitude(machine.holdFullS, cfg) * (tut ? cfg.tutorialSwayScale : 1);
+        swayOffset(simMs / 1000, amp, phases, sway);
       } else {
         sway.x = 0;
         sway.y = 0;
@@ -376,6 +401,11 @@ export const createArchery: SportFactory = (ctx: SportContext): ArcherySport => 
       sample.yaw = aimYaw;
       sample.pitch = aimPitch;
       ev = machine.step(dt, simMs, sample);
+    }
+    if (tut) {
+      // Where a full draw would land for this aim: the aim steps read it.
+      hitOnPlane(cfg, base, 1, aimYaw, aimPitch, 0, tutHit);
+      aimOff = Math.hypot(tutHit.x, tutHit.y - cfg.targetHeight);
     }
 
     if (ev === StepEvent.Nock || ev === StepEvent.AutoNock) {
@@ -450,6 +480,7 @@ export const createArchery: SportFactory = (ctx: SportContext): ArcherySport => 
   };
 
   const frame = (dt: number, nowMs: number, alpha: number): void => {
+    if (tutorial !== null && !ctx.paused) tutorial.update(nowMs);
     if (mouse !== null) {
       if (ctx.paused) pausedSeen = true;
       // The draw hand pulls back from the bow hand in proportion to the draw.
@@ -512,14 +543,40 @@ export const createArchery: SportFactory = (ctx: SportContext): ArcherySport => 
       shownLeft = -1;
       shownWind = Number.NaN;
       shownScore = -1;
+      if (tut) {
+        // The coach panel is the instruction line; no arrows-left count, wind or best.
+        ctx.hud.setSubScore(null);
+        tutorial = createArcheryTutorial({
+          cfg,
+          coach: ctx.coach,
+          mouse: mouse !== null,
+          probe,
+          view: {
+            tracked: () => trackedNow,
+            bowUp: () => bowUpNow,
+            phase: () => phase,
+            draw: () => dm.draw,
+            lost: () => phase === 'drawing' && mouse === null && !machine.tracking,
+            aimOff: () => aimOff,
+            launched: () => launched,
+            impacts: () => round.taken,
+          },
+          onFinished: () => {
+            ctx.audio.play('cheer');
+            ctx.hud.flash('great');
+            ctx.finishTutorial();
+          },
+        });
+      }
       refreshHud();
     },
     fixedUpdate,
     frame,
     createBot(): SportBot {
-      return createArcheryBot(view, cfg, drawHand, ctx.random);
+      return createArcheryBot(view, cfg, drawHand, ctx.random, tut ? probe : undefined);
     },
     dispose(): void {
+      tutorial?.dispose();
       unsubClose();
       unsubOpen();
       unregister();
@@ -564,6 +621,12 @@ export const createArchery: SportFactory = (ctx: SportContext): ArcherySport => 
     },
     get handedness(): 'left' | 'right' {
       return drawHand;
+    },
+    get tutorialStep(): number {
+      return tutorial === null ? -1 : tutorial.step;
+    },
+    get tutorialSteps(): number {
+      return tutorial === null ? 0 : tutorial.stepCount;
     },
   };
 

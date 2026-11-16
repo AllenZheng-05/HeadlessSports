@@ -2,6 +2,7 @@ import { mkdirSync } from 'node:fs';
 import { expect, test } from '@playwright/test';
 import type { Page } from '@playwright/test';
 import type { GameHook } from '../../src/core/shell/hook';
+import { expectNoHintFor, hintHasText, tutorialStuck, waitTutorialDone } from './tutorialHelpers';
 
 const SHOTS = 'e2e/screenshots';
 mkdirSync(SHOTS, { recursive: true });
@@ -97,6 +98,44 @@ async function waitSport(
     await page.waitForTimeout(30);
   }
 }
+
+interface TutorialHook {
+  phase: string;
+  tutorial: boolean;
+  result: unknown;
+  isBest: boolean | null;
+  sport: { tutorialStep: number; tutorialSteps: number; phase: string } | null;
+}
+
+/**
+ * Record every tutorial step the sport passes through, in the page from the first frame, so a fast
+ * step is not missed. Call before `page.goto`.
+ */
+async function recordSteps(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const w = window as unknown as { __game?: TutorialHook; __steps: number[] };
+    w.__steps = [];
+    setInterval(() => {
+      const sport = w.__game?.sport;
+      if (!sport) return;
+      const step = sport.tutorialStep;
+      if (step >= 0 && step < sport.tutorialSteps && !w.__steps.includes(step)) {
+        w.__steps.push(step);
+      }
+    }, 20);
+  });
+}
+
+const stepsSeen = (page: Page): Promise<number[]> =>
+  page.evaluate(() =>
+    [...(window as unknown as { __steps: number[] }).__steps].sort((a, b) => a - b),
+  );
+
+const readTutorial = (page: Page): Promise<{ step: number; phase: string; sport: string }> =>
+  page.evaluate(() => {
+    const g = (window as unknown as { __game: TutorialHook }).__game;
+    return { step: g.sport?.tutorialStep ?? -1, phase: g.phase, sport: g.sport?.phase ?? '' };
+  });
 
 test.describe('bowling', () => {
   test('the synthetic player bowls a short game to the results screen', async ({ page }) => {
@@ -212,6 +251,149 @@ test.describe('bowling', () => {
     expect(g.result?.score ?? 0).toBeGreaterThan(0);
     expect(g.result?.detail?.balls ?? 0).toBeGreaterThanOrEqual(2);
     expect(g.result?.detail?.balls ?? 0).toBe(balls);
+    expect(problems).toEqual([]);
+  });
+
+  // ---- tutorial ----
+
+  test('tutorial: the normal hint line stays hidden, camera and mouse', async ({ page }) => {
+    const problems = watch(page);
+
+    for (const url of [
+      '/?sport=bowling&source=synthetic&skipGate=1&tutorial=1&timeScale=1',
+
+      '/?sport=bowling&input=debug&skipGate=1&tutorial=1',
+    ]) {
+      await page.goto(url);
+
+      await waitPhase(page, 'playing');
+
+      await expect(page.locator('.coach')).toBeVisible();
+
+      await expectNoHintFor(page, 3000);
+    }
+
+    expect(problems).toEqual([]);
+  });
+
+  test('the synthetic bowler completes the tutorial and nothing is saved', async ({ page }) => {
+    test.setTimeout(165_000); // a whole tutorial at 3x speed, about 65 s alone
+    const problems = watch(page);
+    await recordSteps(page);
+    await page.goto('/?sport=bowling&source=synthetic&skipGate=1&tutorial=1&timeScale=3');
+    await waitPhase(page, 'playing');
+    expect(
+      await page.evaluate(() => (window as unknown as { __game: TutorialHook }).__game.tutorial),
+    ).toBe(true);
+    await expect(page.locator('.coach')).toBeVisible();
+    await expect(page.locator('.coach-count')).toHaveText(/^Step \d of 7$/);
+    // No frame counter, no best.
+    await expect(page.locator('.hud-sub')).toBeHidden();
+    // A deadline under the test timeout, so a hang says where it is stuck.
+    await waitTutorialDone(page, 'bowling synthetic', 150_000);
+    expect(await stepsSeen(page)).toEqual([0, 1, 2, 3, 4, 5, 6]);
+    await page.screenshot({ path: `${SHOTS}/bowling-tutorial-done.png` });
+    const hook = await page.evaluate(() => {
+      const g = (window as unknown as { __game: TutorialHook }).__game;
+      return { result: g.result, isBest: g.isBest };
+    });
+    expect(hook.result).toBeNull();
+    expect(hook.isBest).toBeNull();
+    await expect(page.locator('.screen-tutorialdone')).toBeVisible();
+    await expect(page.locator('.best-badge')).toHaveCount(0);
+    await page.getByRole('button', { name: 'Back to menu' }).click();
+    await waitPhase(page, 'menu');
+    await expect(page.locator('.sport-card[data-sport="bowling"] .sport-best')).toHaveText(
+      'No score yet',
+    );
+    expect(problems).toEqual([]);
+  });
+
+  test('Play now after the tutorial starts a normal round; S skips steps', async ({ page }) => {
+    const problems = watch(page);
+    await page.goto('/?sport=bowling&source=synthetic&skipGate=1&tutorial=1&timeScale=1');
+    await waitPhase(page, 'playing');
+    await expect(page.locator('.coach')).toBeVisible();
+    for (let i = 0; i < 7; i++) {
+      await page.keyboard.press('s');
+      await page.waitForTimeout(150);
+    }
+    await waitPhase(page, 'tutorial-done', 10000);
+    await page.getByRole('button', { name: 'Play now' }).click();
+    await waitPhase(page, 'playing');
+    const normal = await page.evaluate(() => {
+      const g = (window as unknown as { __game: TutorialHook }).__game;
+      return { tutorial: g.tutorial, step: g.sport?.tutorialStep ?? -2 };
+    });
+    expect(normal.tutorial).toBe(false);
+    expect(normal.step).toBe(-1);
+    await expect(page.locator('.coach')).toBeHidden();
+    await expect(page.locator('.hud-sub')).toContainText('Frame 1');
+    expect(problems).toEqual([]);
+  });
+
+  test('mouse tutorial: Skip step and End tutorial buttons work', async ({ page }) => {
+    const problems = watch(page);
+    await page.goto('/?sport=bowling&input=debug&skipGate=1&tutorial=1');
+    await waitPhase(page, 'playing');
+    await expect(page.locator('.coach-text')).toHaveText('Move the mouse to line up the arrows');
+    await expect(page.locator('.coach-count')).toHaveText('Step 1 of 5');
+    // The normal hint line (set by the pickup phase) steps aside for the coach panel.
+    await expectNoHintFor(page, 1500);
+    expect(await hintHasText(page)).toBe(true);
+    // Left alone, the panel says why nothing counted.
+    await expect(page.locator('.coach-feedback')).toBeVisible({ timeout: 6000 });
+    expect(await page.locator('.coach-feedback').textContent()).toBe(
+      'Move the pointer across the lane',
+    );
+    await page.getByRole('button', { name: 'Skip step' }).click();
+    await expect(page.locator('.coach-count')).toHaveText('Step 2 of 5');
+    await page.getByRole('button', { name: 'End tutorial' }).click();
+    await waitPhase(page, 'tutorial-done', 5000);
+    await expect(page.locator('.screen-tutorialdone')).toBeVisible();
+    expect(problems).toEqual([]);
+  });
+
+  test('mouse tutorial: a player can finish it with real mouse events', async ({ page }) => {
+    test.setTimeout(250_000); // real-time balls through every step, about 100 s alone
+    const problems = watch(page);
+    await recordSteps(page);
+    await page.goto('/?sport=bowling&input=debug&skipGate=1&tutorial=1');
+    await waitPhase(page, 'playing');
+    await waitSport(page, (s) => s.phase === 'pickup');
+    const vp = page.viewportSize() ?? { width: 1280, height: 720 };
+    const at = (fx: number): [number, number] => [vp.width * fx, vp.height * 0.6];
+    // Step 1: sweep the arrows across the lane.
+    await page.mouse.move(...at(0.5));
+    await page.waitForTimeout(300);
+    await page.mouse.move(...at(0.45), { steps: 6 });
+    await page.waitForTimeout(300);
+    await page.mouse.move(...at(0.55), { steps: 6 });
+    await page.waitForTimeout(300);
+    await page.mouse.move(...at(0.5), { steps: 6 });
+    // Then ball after ball: press and hold, let go, wait for the pins.
+    const until = Date.now() + 200_000;
+    for (;;) {
+      const now = await readTutorial(page);
+      if (now.phase === 'tutorial-done') break;
+      if (Date.now() >= until) throw await tutorialStuck(page, 'bowling mouse', 200_000);
+      if (now.sport === 'pickup') {
+        await page.mouse.down();
+        await waitSport(page, (s) => s.phase === 'aim', 3000);
+        await page.waitForTimeout(500);
+        await page.mouse.up();
+        await waitSport(page, (s) => s.phase !== 'aim', 3000);
+      } else {
+        await page.waitForTimeout(250);
+      }
+    }
+    await waitPhase(page, 'tutorial-done', 20000);
+    expect(await stepsSeen(page)).toEqual([0, 1, 2, 3, 4]);
+    const result = await page.evaluate(
+      () => (window as unknown as { __game: TutorialHook }).__game.result,
+    );
+    expect(result).toBeNull();
+    await page.screenshot({ path: `${SHOTS}/bowling-tutorial-mouse-done.png` });
     expect(problems).toEqual([]);
   });
 

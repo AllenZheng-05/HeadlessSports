@@ -1,6 +1,7 @@
 import { mkdirSync } from 'node:fs';
 import { expect, test } from '@playwright/test';
 import type { Page } from '@playwright/test';
+import { expectNoHintFor, waitTutorialDone } from './tutorialHelpers';
 
 const SHOTS = 'e2e/screenshots';
 mkdirSync(SHOTS, { recursive: true });
@@ -17,6 +18,8 @@ interface JavelinRecord {
 interface JavelinHook {
   phase: string;
   error: string | null;
+  tutorial: boolean;
+  isBest: boolean | null;
   result: {
     score: number;
     headline: string;
@@ -33,6 +36,8 @@ interface JavelinHook {
     records: JavelinRecord[];
     ignoredThrows: number;
     log: string[];
+    tutorialStep: number;
+    tutorialSteps: number;
   } | null;
   drawCalls: number;
 }
@@ -279,6 +284,180 @@ test.describe('javelin', () => {
     expect(recs[0]!.foul).toBe(false);
     expect(recs[0]!.runSpeed).toBeGreaterThan(2.5);
     expect(recs[0]!.distance).toBeGreaterThan(20);
+    expect(problems).toEqual([]);
+  });
+
+  // ---- tutorial ----
+
+  /**
+   * Record every tutorial step the sport passes through, in the page from the first frame, so a
+   * fast step is not missed. Call before `page.goto`.
+   */
+  async function recordSteps(page: Page): Promise<void> {
+    await page.addInitScript(() => {
+      const w = window as unknown as { __game?: JavelinHook; __steps: number[] };
+      w.__steps = [];
+      setInterval(() => {
+        const sport = w.__game?.sport;
+        if (!sport) return;
+        const step = sport.tutorialStep;
+        if (step >= 0 && step < sport.tutorialSteps && !w.__steps.includes(step)) {
+          w.__steps.push(step);
+        }
+      }, 20);
+    });
+  }
+  const stepsSeen = (page: Page): Promise<number[]> =>
+    page.evaluate(() =>
+      [...(window as unknown as { __steps: number[] }).__steps].sort((a, b) => a - b),
+    );
+  const readStep = (page: Page): Promise<number> =>
+    page.evaluate(
+      () => (window as unknown as { __game: JavelinHook }).__game.sport?.tutorialStep ?? -1,
+    );
+  const waitStep = (page: Page, step: number, timeout: number): Promise<unknown> =>
+    page.waitForFunction(
+      (n) => ((window as unknown as { __game: JavelinHook }).__game.sport?.tutorialStep ?? -1) >= n,
+      step,
+      { timeout },
+    );
+
+  test('tutorial: the normal hint line stays hidden, camera and mouse', async ({ page }) => {
+    const problems: string[] = [];
+
+    page.on('pageerror', (err) => problems.push(err.message));
+
+    for (const url of [
+      '/?sport=javelin&source=synthetic&skipGate=1&tutorial=1&timeScale=1',
+
+      '/?sport=javelin&input=debug&skipGate=1&tutorial=1',
+    ]) {
+      await page.goto(url);
+
+      await waitPhase(page, 'playing');
+
+      await expect(page.locator('.coach')).toBeVisible();
+
+      // The coach panel is the one instruction line; the sport's own hint steps aside.
+
+      await expectNoHintFor(page, 3000);
+    }
+
+    expect(problems).toEqual([]);
+  });
+
+  test('the synthetic athlete completes the tutorial and nothing is saved', async ({ page }) => {
+    test.setTimeout(180_000); // about 2.5x the 66 s whole run (timeScale 3, machine busy)
+    const problems = watch(page);
+    await recordSteps(page);
+    await page.goto('/?sport=javelin&source=synthetic&skipGate=1&tutorial=1&timeScale=3');
+    await waitPhase(page, 'playing');
+    expect(
+      await page.evaluate(() => (window as unknown as { __game: JavelinHook }).__game.tutorial),
+    ).toBe(true);
+    await expect(page.locator('.coach')).toBeVisible();
+    await expect(page.locator('.coach-count')).toHaveText(/^Step \d of 6$/);
+    // No try count, no best.
+    await expect(page.locator('.hud-score')).toHaveText('Practice');
+    await expect(page.locator('.hud-sub')).not.toContainText('Best');
+
+    let shot = false;
+    // A deadline well under the 180 s test timeout, so a hang says where it is stuck.
+    await waitTutorialDone(page, 'javelin synthetic', 150_000, async () => {
+      if (!shot && (await readStep(page)) === 4) {
+        shot = true;
+        await page.screenshot({ path: `${SHOTS}/javelin-tutorial-play.png` });
+      }
+    });
+    await waitPhase(page, 'tutorial-done', 5000);
+    expect(await stepsSeen(page)).toEqual([0, 1, 2, 3, 4, 5]);
+    await page.screenshot({ path: `${SHOTS}/javelin-tutorial-done.png` });
+
+    const hook = await page.evaluate(() => {
+      const g = (window as unknown as { __game: JavelinHook }).__game;
+      return { result: g.result, isBest: g.isBest };
+    });
+    expect(hook.result).toBeNull();
+    expect(hook.isBest).toBeNull();
+    await expect(page.locator('.screen-tutorialdone')).toBeVisible();
+    await expect(page.locator('.screen-tutorialdone .results-headline')).toHaveText(
+      'Tutorial done',
+    );
+    await expect(page.locator('.best-badge')).toHaveCount(0);
+
+    // Back to menu: the sport still has no score.
+    await page.getByRole('button', { name: 'Back to menu' }).click();
+    await waitPhase(page, 'menu');
+    await expect(page.locator('.sport-card[data-sport="javelin"] .sport-best')).toHaveText(
+      'No score yet',
+    );
+    expect(problems).toEqual([]);
+  });
+
+  test('Play now after the tutorial starts a normal round; S skips steps', async ({ page }) => {
+    const problems = watch(page);
+    await page.goto('/?sport=javelin&source=synthetic&skipGate=1&tutorial=1&timeScale=1');
+    await waitPhase(page, 'playing');
+    await expect(page.locator('.coach')).toBeVisible();
+    for (let i = 0; i < 6; i++) {
+      await page.keyboard.press('s');
+      await page.waitForTimeout(150);
+    }
+    await waitPhase(page, 'tutorial-done', 10000);
+    await page.getByRole('button', { name: 'Play now' }).click();
+    await waitPhase(page, 'playing');
+    const normal = await page.evaluate(() => {
+      const g = (window as unknown as { __game: JavelinHook }).__game;
+      return { tutorial: g.tutorial, step: g.sport?.tutorialStep ?? -2 };
+    });
+    expect(normal.tutorial).toBe(false);
+    expect(normal.step).toBe(-1);
+    await expect(page.locator('.coach')).toBeHidden();
+    await expect(page.locator('.hud-score')).toHaveText('Try 1/3');
+    expect(problems).toEqual([]);
+  });
+
+  test('mouse tutorial: Skip step and End tutorial buttons work', async ({ page }) => {
+    const problems = watch(page);
+    await page.goto('/?sport=javelin&input=debug&skipGate=1&tutorial=1');
+    await waitPhase(page, 'playing');
+    await expect(page.locator('.coach-text')).toHaveText('Press and hold the button to run');
+    // Nothing held: after a pause the panel says what to do.
+    await expect(page.locator('.coach-feedback')).toBeVisible({ timeout: 8000 });
+    await expect(page.locator('.coach-feedback')).toHaveText('Press and hold the mouse button');
+    await page.getByRole('button', { name: 'Skip step' }).click();
+    await expect(page.locator('.coach-count')).toHaveText('Step 2 of 3');
+    await page.getByRole('button', { name: 'End tutorial' }).click();
+    await waitPhase(page, 'tutorial-done', 5000);
+    await expect(page.locator('.screen-tutorialdone')).toBeVisible();
+    expect(problems).toEqual([]);
+  });
+
+  test('mouse tutorial: a player can finish it with hold and release', async ({ page }) => {
+    test.setTimeout(180_000); // real mouse holds through every step, 72 s measured under load
+    const problems = watch(page);
+    await recordSteps(page);
+    await page.goto('/?sport=javelin&input=debug&skipGate=1&tutorial=1');
+    await waitPhase(page, 'playing');
+    await page.mouse.move(600, 400);
+
+    // Step 1: hold to run.
+    await waitSportPhase(page, 'run', 8000);
+    await page.mouse.down();
+    await waitStep(page, 1, 15000);
+    // Step 2: keep running, let go before the line.
+    await lineGapBelow(page, 4);
+    await page.mouse.up();
+    await waitStep(page, 2, 20000);
+    // Step 3: once more.
+    await waitSportPhase(page, 'run', 8000);
+    await page.mouse.down();
+    await lineGapBelow(page, 4);
+    await page.mouse.up();
+    await waitPhase(page, 'tutorial-done', 30000);
+    expect(await stepsSeen(page)).toEqual([0, 1, 2]);
+    expect(await gameResult(page)).toBeNull();
+    await page.screenshot({ path: `${SHOTS}/javelin-tutorial-mouse-done.png` });
     expect(problems).toEqual([]);
   });
 });

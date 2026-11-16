@@ -19,4 +19,5 @@ export const meta: SportMeta = {
     'Higher hands lift the ball',
   ],
   debugKeys: ['Click to swing as the ball reaches the plate'],
+  hasTutorial: true,
 };

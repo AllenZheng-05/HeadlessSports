@@ -21,4 +21,5 @@ export const meta: SportMeta = {
     'Click Fastball or Curveball (the catcher calls one for bonus points)',
     'Press and hold on the field to aim the ring, let go to throw',
   ],
+  hasTutorial: true,
 };

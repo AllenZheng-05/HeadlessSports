@@ -21,6 +21,16 @@ export function coastDistance(v: number, t: number, hold: number, decel: number)
 }
 
 /**
+ * What the tutorial tells the bot about the step it is in (a normal round has no probe).
+ * `hold`: keep jogging and never throw (the running steps). `standing`: throw at once, without a
+ * run-up (the practice throw).
+ */
+export interface TutorialProbe {
+  hold: boolean;
+  standing: boolean;
+}
+
+/**
  * The closed-loop javelin player. In `ready` it waits for the run to start by itself. In `run` it
  * runs in short bursts, re-reading the athlete's position between them, and throws when the
  * distance left to the line is what the athlete will still cover while the throw winds up and the
@@ -40,6 +50,7 @@ export function createJavelinBot(
   random: () => number,
   variant: 'slow' | 'fast' | null = null,
   style: 'legs' | 'jog' = 'legs',
+  probe?: TutorialProbe,
 ): SportBot {
   const power = 0.85 + 0.15 * random();
   const loftDeg = 95 + 15 * random();
@@ -49,6 +60,10 @@ export function createJavelinBot(
     next(enqueue): void {
       switch (state.phase) {
         case 'run': {
+          if (probe?.standing === true && !probe.hold) {
+            enqueue(overarmThrow(hand, { power, loftDeg }));
+            return;
+          }
           const sps =
             variant === 'slow'
               ? cfg.botSlowCadence
@@ -60,7 +75,7 @@ export function createJavelinBot(
           const need =
             coastDistance(v, cfg.botThrowLeadS, cfg.botCadenceHoldS, cfg.decel) + cfg.botMarginM;
           const slack = remaining - need;
-          const burst = Math.min(4, Math.floor((slack / v) * sps));
+          const burst = probe?.hold === true ? 4 : Math.min(4, Math.floor((slack / v) * sps));
           if (burst < 1) {
             enqueue(overarmThrow(hand, { power, loftDeg }));
             return;

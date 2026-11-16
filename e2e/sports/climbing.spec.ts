@@ -1,6 +1,7 @@
 import { mkdirSync } from 'node:fs';
 import { expect, test } from '@playwright/test';
 import type { Page } from '@playwright/test';
+import { expectNoHintFor, tutorialStuck } from './tutorialHelpers';
 
 const SHOTS = 'e2e/screenshots';
 mkdirSync(SHOTS, { recursive: true });
@@ -322,6 +323,30 @@ test.describe('rock climbing', () => {
       () => (window as unknown as { __game: ClimbingHook }).__game.sport?.tutorialStep ?? -1,
     );
 
+  test('tutorial: the normal hint line stays hidden, camera and mouse', async ({ page }) => {
+    const problems: string[] = [];
+
+    page.on('pageerror', (err) => problems.push(err.message));
+
+    for (const url of [
+      '/?sport=climbing&source=synthetic&skipGate=1&tutorial=1&timeScale=1',
+
+      '/?sport=climbing&input=debug&skipGate=1&tutorial=1',
+    ]) {
+      await page.goto(url);
+
+      await waitPhase(page, 'playing');
+
+      await expect(page.locator('.coach')).toBeVisible();
+
+      // The coach panel is the one instruction line; the sport's own hint steps aside.
+
+      await expectNoHintFor(page, 3000);
+    }
+
+    expect(problems).toEqual([]);
+  });
+
   test('the synthetic climber completes the tutorial and nothing is saved', async ({ page }) => {
     const problems = watch(page);
     await recordSteps(page);
@@ -338,11 +363,14 @@ test.describe('rock climbing', () => {
     // Follow the steps by polling until the done screen shows.
     let overlap: string | null = null;
     let shot = false;
-    for (let i = 0; i < 1200; i++) {
+    // A deadline under the 180 s test timeout, so a hang says where it is stuck.
+    const until = Date.now() + 150_000;
+    for (;;) {
       const phase = await page.evaluate(
         () => (window as unknown as { __game: ClimbingHook }).__game.phase,
       );
       if (phase === 'tutorial-done') break;
+      if (Date.now() >= until) throw await tutorialStuck(page, 'climbing synthetic', 150_000);
       const step = await readStep(page);
       // The panel never covers the score, the stamina meter or the top right controls.
       const hit = await page.evaluate(() => {

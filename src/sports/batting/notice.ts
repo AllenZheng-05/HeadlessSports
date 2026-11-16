@@ -8,6 +8,29 @@ export const REJECTION_TEXT = {
   slow: 'Swing faster',
 } as const;
 
+/** Said when a swing began after its pitch had already arrived. */
+export const SEEN_LATE_TEXT = 'Swing seen too late';
+
+/** The words for a refused motion's reason (a short motion counts as slow). */
+export function rejectionText(reason: RejectedMotion['reason']): string {
+  return reason === 'lost'
+    ? REJECTION_TEXT.lost
+    : reason === 'steep'
+      ? REJECTION_TEXT.steep
+      : REJECTION_TEXT.slow;
+}
+
+/**
+ * The words for a rejected motion in the tutorial's practice steps (no pitch yet): only a real
+ * attempt (peak speed at or above `minSpeed`) is explained, ordinary arm movement says nothing.
+ */
+export function practiceRejectionText(
+  r: Pick<RejectedMotion, 'reason' | 'speed'>,
+  minSpeed: number,
+): string | null {
+  return r.speed >= minSpeed ? rejectionText(r.reason) : null;
+}
+
 /**
  * The hint for a rejected arm motion, or null when nothing should be said: it was not a swing, no
  * pitch is coming (before the wind-up the arms are just moving about), or the round has taken a
@@ -22,11 +45,7 @@ export function rejectionHint(
   if (r.kind !== 'swing' || round === null || round.phase !== 'pitch') return null;
   const p = round.pitch;
   if (p === null || round.resolved || nowMs < p.windupStartMs || round.swingT >= 0) return null;
-  return r.reason === 'lost'
-    ? REJECTION_TEXT.lost
-    : r.reason === 'steep'
-      ? REJECTION_TEXT.steep
-      : REJECTION_TEXT.slow;
+  return rejectionText(r.reason);
 }
 
 /**

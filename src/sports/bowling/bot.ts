@@ -4,6 +4,8 @@ import type { ScriptStep } from '../../tracking/synthetic/script';
 import { closeFist, idle, openFist, underarmSwing } from '../../tracking/synthetic/scripts/moves';
 import type { BowlPhase } from './game';
 
+import type { TutorialProbe } from './tutorial';
+
 export interface BotView {
   readonly phase: BowlPhase;
   /** Counts up on every pick-up and every launched ball, so the bot can tell a miss from a new turn. */
@@ -20,15 +22,24 @@ export function createBowlingBot(
   hand: Side,
   random: () => number,
   aimBias = 0,
+  probe?: TutorialProbe,
 ): SportBot {
   let pickupTries = 0;
   let swingTries = 0;
   let launchesAtSwing = -1;
+  let wiggled = false;
   return {
     next(enqueue: (steps: ScriptStep[]) => void): void {
       const steps: ScriptStep[] = [];
+      // Without a tutorial the bot does everything; with one it waits for the step that asks.
+      const gate = probe === undefined ? 3 : probe.gate;
+      if (view.phase !== 'aim') wiggled = false;
       switch (view.phase) {
         case 'pickup': {
+          if (gate < 1) {
+            steps.push(...idle(200));
+            break;
+          }
           swingTries = 0;
           if (pickupTries > 0) steps.push(...openFist(hand, 200), ...idle(200));
           pickupTries++;
@@ -36,6 +47,23 @@ export function createBowlingBot(
           break;
         }
         case 'aim': {
+          if (gate < 3) {
+            // Line up the arrows when asked: slide the hanging hand one way, then the other.
+            const sg0 = hand === 'right' ? 1 : -1;
+            if (gate === 2 && !wiggled) {
+              wiggled = true;
+              const wrist = (x: number): ScriptStep => ({
+                dur: 1000,
+                to:
+                  hand === 'right'
+                    ? { rightWristX: x, rightWristY: -1.4 }
+                    : { leftWristX: x, leftWristY: -1.4 },
+                label: 'aim',
+              });
+              steps.push(wrist(sg0 * 0.12 - 0.5), wrist(sg0 * 0.12 + 0.5), ...idle(300));
+            } else steps.push(...idle(200));
+            break;
+          }
           pickupTries = 0;
           if (launchesAtSwing === view.launches) swingTries++;
           else swingTries = 0;

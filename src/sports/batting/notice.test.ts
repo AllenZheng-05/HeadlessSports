@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { mulberry32 } from '../../core/random';
 import { recognizerConfig } from '../../input/recognizers/config';
 import { battingConfig } from './config';
-import { HintLine, REJECTION_TEXT, rejectionHint } from './notice';
+import { HintLine, REJECTION_TEXT, practiceRejectionText, rejectionHint } from './notice';
 import { applyBattingRecognizer } from './recognizer';
 import { BattingRound } from './round';
 
@@ -114,5 +114,29 @@ describe('applyBattingRecognizer', () => {
     expect(recognizerConfig.swing.forward).toBe(-1);
     restoreL();
     expect(recognizerConfig.swing.forward).toBe(before);
+  });
+});
+
+describe('practiceRejectionText: practice steps only explain a real attempt', () => {
+  const floor = cfg.tutorialNoticeMinSpeed;
+
+  it('has a floor between the swing ready speed and its minimum peak', () => {
+    expect(floor).toBeGreaterThan(recognizerConfig.swing.readySpeed);
+    expect(floor).toBeLessThan(recognizerConfig.swing.minPeak);
+  });
+
+  it('says nothing for slow arm movement, whatever the reason', () => {
+    for (const reason of ['slow', 'short', 'steep', 'lost'] as const) {
+      expect(practiceRejectionText({ reason, speed: floor - 0.1 }, floor)).toBeNull();
+    }
+  });
+
+  it('explains a motion at or above the floor', () => {
+    expect(practiceRejectionText({ reason: 'slow', speed: floor }, floor)).toBe(
+      REJECTION_TEXT.slow,
+    );
+    expect(practiceRejectionText({ reason: 'steep', speed: floor + 1 }, floor)).toBe(
+      REJECTION_TEXT.steep,
+    );
   });
 });

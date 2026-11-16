@@ -11,6 +11,7 @@ export const meta: SportMeta = {
   stance: 'full-body',
   seatedOk: false,
   needsSpace: true,
+  hasTutorial: true,
   score: { label: 'Score', unit: 'pts', decimals: 0, higherIsBetter: true },
   howTo: [
     'Close your fist to pick up the ball.',

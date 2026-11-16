@@ -41,6 +41,50 @@ describe('TutorialRunner', () => {
     expect(r.index).toBe(0);
   });
 
+  it('textNow and detailNow are read once, after enter, and replace the static text', () => {
+    const { coach } = fakeCoach();
+    let state = 'a';
+    const textNow = vi.fn(() => `now ${state}`);
+    const r = new TutorialRunner(
+      coach,
+      [
+        step({
+          text: 'Static',
+          detail: 'Static detail',
+          enter: () => {
+            state = 'b';
+          },
+          textNow,
+          detailNow: () => `detail ${state}`,
+        }),
+        step({ text: 'Plain', detail: 'Plain detail', textNow: () => undefined }),
+      ],
+      () => undefined,
+    );
+    r.update(0);
+    r.update(16);
+    expect(coach.show).toHaveBeenCalledTimes(1);
+    expect(coach.show).toHaveBeenCalledWith(0, 2, 'now b', 'detail b');
+    expect(textNow).toHaveBeenCalledTimes(1);
+    // Returning undefined keeps the static text.
+    r.update(20);
+    // Skip to the second step.
+    const skipper = fakeCoach();
+    const r2 = new TutorialRunner(
+      skipper.coach,
+      [
+        step({ text: 'X' }),
+        step({ text: 'Plain', detail: 'Plain detail', textNow: () => undefined }),
+      ],
+      () => undefined,
+    );
+    r2.update(0);
+    skipper.pressSkip();
+    r2.update(10);
+    r2.update(20);
+    expect(skipper.coach.show).toHaveBeenLastCalledWith(1, 2, 'Plain', 'Plain detail');
+  });
+
   it('calls enter once when a step becomes current', () => {
     const { coach } = fakeCoach();
     const enter = vi.fn();

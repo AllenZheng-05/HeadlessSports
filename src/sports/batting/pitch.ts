@@ -56,7 +56,8 @@ export function bandHeight(band: number, cfg: BattingConfig): number {
 /**
  * Plan a pitch whose wind-up starts at `windupStartMs`. The release and arrival times follow
  * immediately, so the arrival is known before the ball leaves the pitcher's hand.
- * `setStartMs` (default: the wind-up start) is when the pitcher comes set. Uses two draws from
+ * `setStartMs` (default: the wind-up start) is when the pitcher comes set. `flightOverrideMs` (the
+ * tutorial's slowed pitches) replaces the difficulty's flight time when above 0. Uses two draws from
  * `random`: the height band and the lateral wobble.
  */
 export function planPitch(
@@ -65,9 +66,10 @@ export function planPitch(
   random: () => number,
   cfg: BattingConfig,
   setStartMs: number = windupStartMs,
+  flightOverrideMs = 0,
 ): Pitch {
   const difficulty = difficultyFor(index, cfg);
-  const flightMs = flightMsFor(difficulty, cfg);
+  const flightMs = flightOverrideMs > 0 ? flightOverrideMs : flightMsFor(difficulty, cfg);
   const band = Math.min(2, Math.floor(random() * 3));
   const wobble = (random() * 2 - 1) * cfg.lateralWobble;
   const releaseMs = windupStartMs + cfg.windupMs;

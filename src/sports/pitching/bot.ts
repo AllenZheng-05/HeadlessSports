@@ -10,6 +10,17 @@ import type { GameState } from './game';
 import { cellCentre } from './zone';
 
 /**
+ * What the tutorial tells the bot it is teaching. `steer`, `hold` and `throw` are the glove-only
+ * steps (the pitch is picked for the player there); every other stage plays the round as normal.
+ */
+export type BotStage = 'normal' | 'steer' | 'hold' | 'throw';
+
+/** The tutorial sets it, the bot reads it. */
+export interface TutorialProbe {
+  stage: BotStage;
+}
+
+/**
  * The `overarmThrow` options for a plain, unsteered throw: mid height and the natural line, so the
  * throwing arm adds no steering and the glove decides where the pitch goes.
  */
@@ -60,9 +71,36 @@ export function createPitchingBot(
   game: GameState,
   hand: Side,
   random: () => number,
+  probe?: TutorialProbe,
 ): SportBot {
+  /** The glove wrist for a cell, with a fastball's ring (the tutorial's glove steps pick it for you). */
+  const reach = (cell: number, ms: number): ScriptStep[] => {
+    const g = botGloveTarget(cfg, hand, cell, 'fastball');
+    return gloveReach(gloveSide(hand), g.x, g.y, ms);
+  };
   return {
     next(enqueue): void {
+      const stage = probe?.stage ?? 'normal';
+      if (stage === 'steer') {
+        // Sweep the glove across the zone: the top left tile, then the bottom right one.
+        enqueue([...reach(0, 700), ...idle(250), ...reach(8, 700), ...idle(250)]);
+        return;
+      }
+      if (stage === 'hold') {
+        enqueue([...reach(game.target, 700), ...idle(400)]);
+        return;
+      }
+      if (stage === 'throw') {
+        if (game.phase === 'windup') {
+          const power = cfg.botPowerLow + (cfg.botPowerHigh - cfg.botPowerLow) * random();
+          enqueue([
+            ...reach(game.target, 700),
+            ...idle(300),
+            ...overarmThrow(hand, botThrowOptions(cfg, hand, power)),
+          ]);
+        } else enqueue(idle(150));
+        return;
+      }
       switch (game.phase) {
         case 'sign': {
           const choice: PitchKind = game.called;

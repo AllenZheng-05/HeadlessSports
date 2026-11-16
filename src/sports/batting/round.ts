@@ -128,6 +128,8 @@ export class BattingRound {
   private resetFired = false;
   private windupFired = false;
   private readonly gapScale: number;
+  private readonly extraGapMs: number;
+  private readonly flightOverride: (() => number) | null;
   private lastClock = -1;
   // Swing handling.
   private swing: SwingInput | null = null;
@@ -149,16 +151,32 @@ export class BattingRound {
     hooks?: RoundHooks;
     /** True for the camera and debug input: a long gap between updates is a pause, not game time. */
     realtime?: boolean;
+    /** Tutorial: the round never ends (no pitch limit). */
+    endless?: boolean;
+    /** Tutorial: replaces the config's first delay. */
+    firstPitchDelayMs?: number;
+    /** Tutorial: added to the gap between a result and the next pitch. */
+    extraGapMs?: number;
+    /** Tutorial: flight time for the pitch about to be planned; 0 for the normal one. */
+    flightMs?: () => number;
   }) {
     this.cfg = options.cfg;
-    this.total = options.short ? options.cfg.shortPitches : options.cfg.pitches;
+    this.total = options.endless
+      ? Number.POSITIVE_INFINITY
+      : options.short
+        ? options.cfg.shortPitches
+        : options.cfg.pitches;
+    this.extraGapMs = options.extraGapMs ?? 0;
+    this.flightOverride = options.flightMs ?? null;
     this.random = options.random;
     this.hand = options.handedness;
     this.hooks = options.hooks ?? {};
     this.realtime = options.realtime ?? false;
     this.gapScale = options.short ? options.cfg.shortGapScale : 1;
     this.resetAtMs = options.startMs;
-    this.nextPitchAtMs = options.startMs + options.cfg.firstPitchDelayMs * this.gapScale;
+    this.nextPitchAtMs =
+      options.startMs +
+      (options.firstPitchDelayMs ?? options.cfg.firstPitchDelayMs) * this.gapScale;
   }
 
   /** Game ms the pitcher comes set for the next pitch (valid while idle). */
@@ -265,6 +283,7 @@ export class BattingRound {
       this.random,
       cfg,
       this.nextPitchAtMs,
+      this.flightOverride === null ? 0 : this.flightOverride(),
     );
     this.pitch = p;
     this.windupFired = false;
@@ -363,7 +382,7 @@ export class BattingRound {
       this.phase = 'idle';
       this.resetAtMs = clock + pause;
       this.resetFired = false;
-      this.nextPitchAtMs = this.resetAtMs + cfg.resetMs * scale;
+      this.nextPitchAtMs = this.resetAtMs + cfg.resetMs * scale + this.extraGapMs;
     }
   }
 
